@@ -77,7 +77,6 @@ class LinDistModel(LinDistBase):
 
 
 if __name__ == "__main__":
-
     # Prepare the case data
     case = opf.DistOPFCase(data_path="ieee123_30der")
     # Initialize the LinDistModel

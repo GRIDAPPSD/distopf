@@ -35,7 +35,6 @@ class LinDistModelCapacitorRegulatorMI(opf.LinDistModelCapMI):
         return a_eq, b_eq
 
     def cvxpy_regulator_mi_constraints(self):
-
         n_u_reg = (
             len(self.reg_buses["a"])
             + len(self.reg_buses["b"])

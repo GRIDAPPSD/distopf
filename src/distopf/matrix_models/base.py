@@ -817,7 +817,6 @@ class LinDistBase(BaseModel):
         cap_data: Optional[pd.DataFrame] = None,
         reg_data: Optional[pd.DataFrame] = None,
     ):
-
         # TODO: update is untested!
         warnings.warn("update method is untested!")
         if bus_data is not None:

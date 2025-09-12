@@ -1,5 +1,6 @@
 from distopf.cim_importer import load_cim_model
 import distopf as opf
+
 ieee123 = opf.CASES_DIR / "cim/IEEE123_PV.xml"
 case_data = load_cim_model(ieee123)
 model = opf.LinDistModel(**case_data)

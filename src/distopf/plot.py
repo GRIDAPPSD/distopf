@@ -317,7 +317,6 @@ def plot_ders(ders: pd.DataFrame) -> go.Figure:
 
 
 def plot_polar(p: pd.DataFrame, q: pd.DataFrame) -> go.Figure:
-
     p = p.melt(
         ignore_index=False,
         var_name="phase",
@@ -606,9 +605,9 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
                 q_cap = cap_data.loc[
                     cap_data.id == bus_row.id, ["qa", "qb", "qc"]
                 ].to_numpy()[0]
-                text[
-                    i
-                ] += f"<br>    Q-Cap:  {q_cap[0]:.3f}  {q_cap[1]:.3f}  {q_cap[2]:.3f}"
+                text[i] += (
+                    f"<br>    Q-Cap:  {q_cap[0]:.3f}  {q_cap[1]:.3f}  {q_cap[2]:.3f}"
+                )
 
         if bus_row.id in gen_data.id.to_numpy():
             p_gen = gen_data.loc[
