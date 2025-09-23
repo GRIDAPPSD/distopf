@@ -1,9 +1,9 @@
 # DistOPF
 
-This DistOPF provides an open-source, three-phase, asymmetric, optimal power flow (OPF) tool for distribution
+DistOPF provides an open-source, multi-phase, unbalanced, optimal power flow (OPF) tool for distribution
 systems to aid students and researchers. The tool aids users by providing:
 
-- Asymmetrical 3-Phase OPF model generators usable with common Python solver packages such as CVXPY and SciPy;
+- Unbalanced multi-Phase OPF model generators usable with common Python solver packages such as CVXPY and SciPy;
 
 - A platform for creating and benchmarking new algorithms on a set of standard test systems;
 
@@ -12,9 +12,6 @@ systems to aid students and researchers. The tool aids users by providing:
 - Model validation with OpenDSS;
 
 - Functions for visualizing results.
-
-Currently, no Python package is designed for optimal power flow for distribution systems with asymmetric phases. The
-Python package, PandaPower provides tools for simulating distribution systems but requires all lines to be three-phase.
 
 
 The tool is composed of four major parts, 1) model input system, 2) optimization model formulation, 3) OPF solver
@@ -25,8 +22,8 @@ Regulators, capacitor banks, and generators each have their own CSV. To aid in m
 also be created using OpenDSS and converted to the tabular format. The tool provides classes and functions to make it
 easy to formulate and solve the power system for new users while being flexible for advanced users to create new models
 and algorithms.
-The tool has been used to solve a variety of problems including, conservative voltage reduction, power loss
-minimization, solar curtailment minimization, where either generator real or reactive power injections are controlled.
+The tool has been used to solve a variety of problems including, conservation voltage reduction, power loss
+minimization, and generation curtailment minimization, where either generator real or reactive power injections are controlled.
 
 # Installation
 
@@ -37,16 +34,16 @@ pip install distopf
 ## Developer Installation
 To install the latest version from github:
  
-1. From the directory you want to keep your distopf files, run:
+1. From the directory you want to keep your DistOPF files, run:
 
 `git clone https://github.com/nathantgray/distopf.git`
 
 3. Create or activate the python environment you want to use.
-4. From the directory where the distopf package is stored, run:
+4. From the directory where the DistOPF package is stored, run:
 
 `pip install -e .`
 
-This installs your local distopf package the python environment you activated. The `-e` option enables editable 
+This installs your local DistOPF package the python environment you activated. The `-e` option enables editable 
 mode, which allows you to directly edit the package and see changes immediately reflected in your environment 
 without reinstalling. 
 
@@ -57,7 +54,7 @@ without reinstalling.
 ```python
 import distopf as opf
 case = opf.DistOPFCase(data_path="ieee123")
-case.run_pf()  # run an unsconstrained power flow
+case.run_pf()  # run an unconstrained power flow
 case.plot_network().show(renderer="browser")
 ```
 ### DER Curtailment Minimization
@@ -133,8 +130,8 @@ case = opf.DistOPFCase(
 - v_ln_base: base line-to-neutral voltage (V)
 - s_base: base power (VA)
 - v_min, v_max: voltage magnitude limits (p.u.)
-- cvr_p, cvr_q: conservative voltage reduction parameters; alternative to ZIP model for voltage dependant loads. (set to
-  0 for no voltage dependence) (see. [?])
+- cvr_p, cvr_q: conservation voltage reduction parameters; alternative to ZIP model for voltage dependant loads. (set to
+  0 for no voltage dependence)
 - phases: phases at bus (e.g. "abc", "a", "ab", etc.)
 
 ### gen_data.csv
@@ -163,28 +160,73 @@ case = opf.DistOPFCase(
 - name: regulator name 
 - tap_a, tap_b, tap_c: tap position (p.u.) -16 to +16; 0 is no tap change
 
-## DistOPFCase Optimization Options
-
-
-control_variable: str
-  - Control variable for optimization. Options (case-insensitive):
-      - None or "": Power flow only with no optimization. `objective_function` options will be ignored.
-      - "P": Active power injections from generators. Active power outputs set in gen_data.csv will be ignored
-           and reactive power outputs set in gen_data static.
-      - "Q": Reactive power injections from generators.
-           Active power outputs set in gen_data.csv are constant and reactive power outputs set in
-           gen_data.csv will be ignored.
-
-objective_function: str or Callable
-  - Objective function for optimization. Options (case-insensitive):
-      - "gen_max": Maximize output of generators. Uses scipy.optimize.linprog.
-      - "load_min": Minimize total substation active power load. Uses scipy.optimize.linprog.
-      - "loss_min": Minimize total line active power losses. Quadratic. Uses CVXPY.
-      - "curtail_min": Minimize DER/Generator curtailment. Quadratic. Uses CVXPY.
-      - "target_p_3ph": Substation load tracks active power target on each phase. Quadratic. Uses CVXPY.
-      - "target_q_3ph": Substation load tracks reactive power target on each phase. Quadratic. Uses CVXPY.
-      - "target_p_total": Substation load tracks total active power. Quadratic. Uses CVXPY.
-      - "target_q_total": Substation load tracks total reactive power. Quadratic. Uses CVXPY.
+## DistOPFCase Options
+```
+    Use this class to create a distOPF case, run it, and save and plot results.
+    Parameters
+    ----------
+    config: str or dict
+        Path to JSON config or dictionary with parameters to create case. Alternative to using **config.
+    data_path: str or pathlib.Path
+        Path to the directory containing the data CSVs or path to OpenDSS model. Will also accept names of
+        cases include in package e.g. "ieee13", "ieee34", "ieee123".
+    output_dir: str or pathlib.Path
+        (default: "output") Directory to save results.
+    branch_data : pd.DataFrame or None
+        DataFrame containing branch data (r and x values, limits). Overrides data found from data_path.
+    bus_data : pd.DataFrame or None
+        DataFrame containing bus data (loads, voltages, limits). Overrides data found from data_path.
+    gen_data : pd.DataFrame or None
+        DataFrame containing generator/DER data. Overrides data found from data_path.
+    cap_data : pd.DataFrame or None
+        DataFrame containing capacitor data. Overrides data found from data_path.
+    reg_data : pd.DataFrame or None
+        DataFrame containing regulator data. Overrides data found from data_path.
+    v_swing: Number or size-3 array
+        Override substation voltage. Scalar or 3-phase array. Per Unit.
+    v_min: Number
+        Override all voltage minimum limits. Per Unit.
+    v_max: Number
+        Override all voltage maximum limits. Per Unit.
+    gen_mult: Number
+        Scale all generator outputs and ratings. Per Unit.
+    load_mult:
+        Scale all loads.
+    cvr_p:
+        CVR factor for voltage dependent loads. Active power component. cvr_p = (dP/P)/(dV/V)
+        To convert from ZIP parameters, kz, ki, kp: cvr_p = 2kz + 1ki
+    cvr_q:
+        CVR factor for voltage dependent loads. Reactive power component.cvr_q = (dQ/Q)/(dV/V)
+        To convert from ZIP parameters, kz, ki, kp: cvr_q = 2kz + 1ki
+    control_variable: str
+        Control variable for optimization. Options (case-insensitive):
+            None: Power flow only with no optimization. `objective_function` options will be ignored.
+            "P": Active power injections from generators. Active power outputs set in gen_data.csv will be ignored
+                 and reactive power outputs set in gen_data static.
+            "Q": Reactive power injections from generators.
+                 Active power outputs set in gen_data.csv are constant and reactive power outputs set in
+                 gen_data.csv will be ignored.
+    objective_function: str or Callable
+        Objective function for optimization. Options (case-insensitive):
+            "gen_max": Maximize output of generators. Uses scipy.optimize.linprog.
+            "load_min": Minimize total substation active power load. Uses scipy.optimize.linprog.
+            "loss_min": Minimize total line active power losses. Quadratic. Uses CVXPY.
+            "curtail_min": Minimize DER/Generator curtailment. Quadratic. Uses CVXPY.
+            "target_p_3ph": Substation load tracks active power target on each phase. Quadratic. Uses CVXPY.
+            "target_q_3ph": Substation load tracks reactive power target on each phase. Quadratic. Uses CVXPY.
+            "target_p_total": Substation load tracks total active power. Quadratic. Uses CVXPY.
+            "target_q_total": Substation load tracks total reactive power. Quadratic. Uses CVXPY.
+    show_plots: bool
+        (default False) If true, renders plots in browser
+    save_results: bool
+        (default False) If true, saves result data to CSVs in output_dir
+    save_plots: bool
+        (default False) If true, saves interactive plots as html to output folder
+    save_inputs: bool
+        (default False) If true, saves model CSV and other input parameters.
+        NOTE CSVs include any modifications made by other parameters such as gen_mult, load_mult, v_max, v_min, or
+        v_swing.
+```
 
 # OpenDSS Interface
 You may also run using an OpenDSS model file as input.
@@ -195,5 +237,6 @@ case = opf.DistOPFCase(
     data_path="path/to/your_model_directory/model.dss",
 )
 ```
+
 # Citing this tool
 Paper coming soon.
