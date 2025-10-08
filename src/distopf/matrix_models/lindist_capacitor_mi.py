@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from numpy import sqrt, zeros
 from scipy.sparse import csr_array, lil_array, vstack
-from distopf.base import LinDistBase
+from distopf.matrix_models.base import LinDistBase
 from distopf.utils.utils import get
 
 

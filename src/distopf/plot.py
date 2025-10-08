@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from distopf.base import LinDistBase
+from distopf.matrix_models.base import LinDistBase
 
 
 def plot_voltages(v: pd.DataFrame = None) -> go.Figure:

@@ -9,7 +9,7 @@ import json
 import pandas as pd
 import numpy as np
 
-from distopf.base import LinDistBase
+from distopf.matrix_models.base import LinDistBase
 from distopf import (
     DSSToCSVConverter,
     CASES_DIR,
@@ -17,12 +17,18 @@ from distopf import (
     LinDistModelCapMI,
     LinDistModelCapacitorRegulatorMI,
 )
-from distopf.lindist_p_gen import LinDistModelPGen
-from distopf.lindist_q_gen import LinDistModelQGen
-from distopf.lindist import LinDistModel
-from distopf.lindist_capacitor_mi import LinDistModelCapMI
-from distopf.lindist_capacitor_regulator_mi import LinDistModelCapacitorRegulatorMI
+from distopf.matrix_models.lindist_p_gen import LinDistModelPGen
+from distopf.matrix_models.lindist_q_gen import LinDistModelQGen
+from distopf.matrix_models.lindist import LinDistModel
+from distopf.matrix_models.lindist_capacitor_mi import LinDistModelCapMI
+from distopf.matrix_models.lindist_capacitor_regulator_mi import (
+    LinDistModelCapacitorRegulatorMI,
+)
 from distopf.matrix_models.solvers import (
+    lp_solve,
+    cvxpy_solve,
+)
+from distopf.matrix_models.objectives import (
     cp_obj_none,
     cp_obj_loss,
     cp_obj_curtail,
@@ -30,10 +36,8 @@ from distopf.matrix_models.solvers import (
     cp_obj_target_p_total,
     cp_obj_target_q_3ph,
     cp_obj_target_q_total,
-    cvxpy_solve,
     gradient_load_min,
     gradient_curtail,
-    lp_solve,
 )
 from distopf.plot import plot_network, plot_voltages, plot_power_flows, plot_gens
 from distopf.utils.utils import (

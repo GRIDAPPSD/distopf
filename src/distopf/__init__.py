@@ -8,7 +8,8 @@ from distopf.matrix_models.lindist import LinDistModel
 from distopf.matrix_models.solvers import (
     cvxpy_mi_solve,
     cvxpy_solve,
-    lp_solve,
+    lp_solve,)
+from distopf.matrix_models.objectives import (
     gradient_load_min,
     gradient_curtail,
     cp_obj_loss,
@@ -49,3 +50,4 @@ CONSTANT_P = "Q"
 CONSTANT_Q = "P"
 CONTROL_PQ = "PQ"
 # fmt: on
+

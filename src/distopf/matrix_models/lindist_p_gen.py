@@ -3,7 +3,7 @@ from functools import cache
 import numpy as np
 import pandas as pd
 import distopf as opf
-from distopf.base import LinDistBase
+from distopf.matrix_models.base import LinDistBase
 from distopf.utils.utils import get
 
 
