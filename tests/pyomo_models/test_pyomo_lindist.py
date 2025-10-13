@@ -2,7 +2,7 @@ import pytest
 import pandas as pd
 import pyomo.environ as pyo
 import distopf as opf
-from distopf.pyomo_models.pyomo_lindist import (
+from distopf.pyomo_models.lindist_single import (
     Case,
     create_lindist_model,
     add_voltage_bounds,
