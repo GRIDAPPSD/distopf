@@ -2,8 +2,6 @@ import pandas as pd
 from typing import Optional
 
 
-
-
 def get(s: pd.Series, i, default=None):
     """
     Get value at index i from a Series. Return default if it does not exist.
@@ -148,7 +146,7 @@ def handle_pv_loadshape_input(
     return pv_loadshape
 
 
-def handle_bat_input(bat_data: Optional[pd.DataFrame]) -> pd.DataFrame:
+def handle_bat_input_depricated(bat_data: Optional[pd.DataFrame]) -> pd.DataFrame:
     if bat_data is None:
         return pd.DataFrame(
             columns=[
@@ -184,6 +182,28 @@ def handle_bat_input(bat_data: Optional[pd.DataFrame]) -> pd.DataFrame:
         bat_data["b0_b"] = bat_data.bmin_a
     if "b0_c" not in bat_data.columns:
         bat_data["b0_c"] = bat_data.bmin_a
+    bat = bat_data.sort_values(by="id", ignore_index=True)
+    bat.index = bat.id.to_numpy() - 1
+    return bat
+
+
+def handle_bat_input(bat_data: Optional[pd.DataFrame]) -> pd.DataFrame:
+    if bat_data is None:
+        return pd.DataFrame(
+            columns=[
+                "id",
+                "name",
+                "s_max",
+                "phases",
+                "energy_capacity",
+                "min_soc",
+                "max_soc",
+                "start_soc",
+                "charge_efficiency",
+                "discharge_efficiency",
+                "control_variable",
+            ]
+        )
     bat = bat_data.sort_values(by="id", ignore_index=True)
     bat.index = bat.id.to_numpy() - 1
     return bat

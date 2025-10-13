@@ -25,7 +25,7 @@ def _create_phase_tuples(df: pd.DataFrame, id_col: str = "id") -> List[Tuple[str
 
 def _create_sets(m: pyo.ConcreteModel, case: Case, time_periods: List) -> None:
     """Create all Pyomo sets"""
-    m.time_set = pyo.Set(initialize=time_periods)
+    m.time_set = pyo.RangeSet(case.start_step, case.start_step + case.n_steps - 1)
     m.bus_set = pyo.Set(initialize=case.bus_data.id.tolist())
     m.swing_bus_set = pyo.Set(
         initialize=case.bus_data[case.bus_data.bus_type == "SWING"].id.tolist()
@@ -49,6 +49,10 @@ def _create_sets(m: pyo.ConcreteModel, case: Case, time_periods: List) -> None:
     m.reg_phase_set = pyo.Set(
         initialize=_create_phase_tuples(case.reg_data, "tb"), dimen=2
     )
+    m.bat_phase_set = pyo.Set(
+        initialize=_create_phase_tuples(case.bat_data, "id"), dimen=2
+    )
+    m.bat_set = pyo.Set(initialize=case.bus_data.id.tolist())
 
 
 def _create_rx_parameters(m: pyo.ConcreteModel, case: Case) -> None:
@@ -259,6 +263,42 @@ def _create_v_limit_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         default=1.05**2,
         doc="Maximum voltage magnitude squared",
     )
+
+
+def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
+    p_bat_data, q_bat_data = {}, {}
+    s_rated_data, q_bat_min_data, q_bat_max_data = {}, {}, {}
+    bat_control_data = {}
+    energy_capacity_data = {}
+    min_soc_data, max_soc_data = {}, {}
+    start_soc_data = {}
+    charge_efficiency_data = {}
+    discharge_efficiency_data = {}
+    annual_cycle_limit, control_variable = {}, {}
+
+    for _, row in case.bat_data.iterrows():
+        for phase in row.phases:
+            if (row.id, phase) not in m.bat_phase_set:
+                continue
+            n_phases = len(row.phases)
+            # Generation limits
+            s_rated = getattr(row, f"s_max", 1000.0)
+            q_max = getattr(row, f"q_max", s_rated)
+            q_min = getattr(row, f"q_min", -s_rated)
+            s_rated_data[(row.id, phase)] = s_rated / n_phases
+            q_bat_min_data[(row.id, phase)] = q_min / n_phases
+            q_bat_max_data[(row.id, phase)] = q_max / n_phases
+
+            # Control variable type
+            control_var = getattr(row, "control_variable", "P")
+            bat_control_data[(row.id, phase)] = CONTROL_VARIABLE_MAP[control_var]
+
+            # Nominal generation values
+            p_gen = getattr(row, f"p", 0.0)
+            q_gen = getattr(row, f"q", 0.0)
+            for t in m.time_set:
+                p_bat_data[(row.id, phase, t)] = p_gen / n_phases
+                q_bat_data[(row.id, phase, t)] = q_gen / n_phases
 
 
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:

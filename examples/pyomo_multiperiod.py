@@ -75,7 +75,6 @@ if results.solver.status == pyo.SolverStatus.ok:
     print(f"Objective value: {pyo.value(model.objective)}")
     # data = get_all_results(model, case)
     v = get_mp_voltages(model.v)
-    v2 = get_mp_values(model.v)
     p_flow = get_mp_values(model.p_flow)
     q_flow = get_mp_values(model.q_flow)
     p_gen = get_mp_values(model.p_gen)

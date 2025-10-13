@@ -10,6 +10,8 @@ from distopf.utils.utils import (
     handle_gen_input,
     handle_cap_input,
     handle_reg_input,
+    handle_bat_input,
+    handle_loadshape_input,
 )
 
 
@@ -21,12 +23,28 @@ class Case:
         gen_data: Optional[pd.DataFrame] = None,
         cap_data: Optional[pd.DataFrame] = None,
         reg_data: Optional[pd.DataFrame] = None,
+        bat_data: Optional[pd.DataFrame] = None,
+        schedules: Optional[pd.DataFrame] = None,
+        start_step: int = 0,
+        n_steps: int = 1,
+        delta_t: float = 1,  # hours per step
     ):
         self.branch_data = handle_branch_input(branch_data)
         self.bus_data = handle_bus_input(bus_data)
         self.gen_data = handle_gen_input(gen_data)
         self.cap_data = handle_cap_input(cap_data)
         self.reg_data = handle_reg_input(reg_data)
+        self.bat_data = handle_bat_input(bat_data)
+        self.schedules = handle_loadshape_input(schedules)
+        self.start_step = start_step
+        self.n_steps = n_steps
+        self.delta_t = delta_t  # hours per step
+        self._validate_case()
+    
+    def _validate_case(self):
+        # TODO: add validation logic here
+        # test phase consistency across all devices
+        pass
 
 
 def create_case(data_path: Path, model_type: Optional[str] = None) -> Case:
