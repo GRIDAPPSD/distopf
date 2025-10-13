@@ -582,33 +582,111 @@ def _make_edge_traces(branch_data, show_phases, show_reactive_power):
     return edge_traces
 
 
+# def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
+#     text = [f"Bus: '{name}'      A   ||   B   ||   C" for name in bus_data["name"]]
+#     for i, bus_row in enumerate(bus_data.itertuples()):
+#         # if _v is not None:
+#         va = bus_row.v_a
+#         vb = bus_row.v_b
+#         vc = bus_row.v_c
+#         text[i] = text[i] + f"<br>    |V|:      {va:.3f}  {vb:.3f}  {vc:.3f}"
+
+#         pla = bus_row.pl_a
+#         plb = bus_row.pl_b
+#         plc = bus_row.pl_c
+#         qla = bus_row.ql_a
+#         qlb = bus_row.ql_b
+#         qlc = bus_row.ql_c
+#         text[i] += f"<br>    P-Load: {pla:.3f}  {plb:.3f}  {plc:.3f}"
+#         text[i] += f"<br>    Q-Load: {qla:.3f}  {qlb:.3f}  {qlc:.3f}"
+
+#         if cap_data is not None:
+#             if bus_row.id in cap_data.id.to_numpy():
+#                 q_cap = cap_data.loc[
+#                     cap_data.id == bus_row.id, ["qa", "qb", "qc"]
+#                 ].to_numpy()[0]
+#                 text[i] += (
+#                     f"<br>    Q-Cap:  {q_cap[0]:.3f}  {q_cap[1]:.3f}  {q_cap[2]:.3f}"
+#                 )
+
+#         if bus_row.id in gen_data.id.to_numpy():
+#             p_gen = gen_data.loc[
+#                 gen_data.id == bus_row.id, ["pa", "pb", "pc"]
+#             ].to_numpy()[0]
+#             q_gen = gen_data.loc[
+#                 gen_data.id == bus_row.id, ["qa", "qb", "qc"]
+#             ].to_numpy()[0]
+#             text[i] += f"<br>    P-Gen:  {p_gen[0]:.3f}  {p_gen[1]:.3f}  {p_gen[2]:.3f}"
+#             text[i] += f"<br>    Q-Gen:  {q_gen[0]:.3f}  {q_gen[1]:.3f}  {q_gen[2]:.3f}"
+#         edge = branch_data.loc[branch_data.tb == bus_row.id, :]
+#         if len(edge) == 0:
+#             continue
+#         to_name = bus_row.name
+#         fb = edge.fb.to_numpy()[0]
+#         from_name = bus_data.loc[bus_data.id == fb, "name"].to_numpy()[0]
+#         sa, sb, sc = (
+#             edge.s_a.to_numpy()[0],
+#             edge.s_b.to_numpy()[0],
+#             edge.s_c.to_numpy()[0],
+#         )
+#         new_text = (
+#             f"<br>Branch {from_name}→{to_name}"
+#             f"<br>    P flow:  {np.real(sa):.3f}  {np.real(sb):.3f}  {np.real(sc):.3f}"
+#             f"<br>    Q flow:  {np.imag(sa):.3f}  {np.imag(sb):.3f}  {np.imag(sc):.3f}"
+#         )
+#         text[i] += new_text
+#     return text
+
+
 def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
-    text = [f"Bus: '{name}'      A   ||   B   ||   C" for name in bus_data["name"]]
+    text = []
     for i, bus_row in enumerate(bus_data.itertuples()):
-        # if _v is not None:
-        va = bus_row.v_a
-        vb = bus_row.v_b
-        vc = bus_row.v_c
-        text[i] = text[i] + f"<br>    |V|:      {va:.3f}  {vb:.3f}  {vc:.3f}"
+        bus_phases = bus_row.phases.lower()  # e.g. "abc", "ac", "ab", etc.
 
-        pla = bus_row.pl_a
-        plb = bus_row.pl_b
-        plc = bus_row.pl_c
-        qla = bus_row.ql_a
-        qlb = bus_row.ql_b
-        qlc = bus_row.ql_c
-        text[i] += f"<br>    P-Load: {pla:.3f}  {plb:.3f}  {plc:.3f}"
-        text[i] += f"<br>    Q-Load: {qla:.3f}  {qlb:.3f}  {qlc:.3f}"
+        # Helper function to format value or dash with better alignment
+        def format_phase_value(value, phase):
+            if phase in bus_phases:
+                return f"{value:>7.3f}"  # Increased width for better alignment
+            else:
+                return "  ---  "  # Centered dashes with proper spacing
 
-        if cap_data is not None:
-            if bus_row.id in cap_data.id.to_numpy():
-                q_cap = cap_data.loc[
-                    cap_data.id == bus_row.id, ["qa", "qb", "qc"]
-                ].to_numpy()[0]
-                text[i] += (
-                    f"<br>    Q-Cap:  {q_cap[0]:.3f}  {q_cap[1]:.3f}  {q_cap[2]:.3f}"
-                )
+        # Start with bus header
+        hover_text = ""
+        hover_text = f"<b>  Bus: {bus_row.name:<5}        (p.u.)</b><br>"
+        # Create a formatted table-like structure using spaces and HTML
+        hover_text += f"<b>              A       B       C</b><br>"  # Adjusted spacing
+        # hover_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br>"
 
+        # Voltage data
+        va, vb, vc = bus_row.v_a, bus_row.v_b, bus_row.v_c
+        va_str = format_phase_value(va, "a")
+        vb_str = format_phase_value(vb, "b")
+        vc_str = format_phase_value(vc, "c")
+        hover_text += f"⚡ V Mag   {va_str} {vb_str} {vc_str}<br>"
+
+        # Load data
+        pla, plb, plc = bus_row.pl_a, bus_row.pl_b, bus_row.pl_c
+        qla, qlb, qlc = bus_row.ql_a, bus_row.ql_b, bus_row.ql_c
+        pla_str = format_phase_value(pla, "a")
+        plb_str = format_phase_value(plb, "b")
+        plc_str = format_phase_value(plc, "c")
+        qla_str = format_phase_value(qla, "a")
+        qlb_str = format_phase_value(qlb, "b")
+        qlc_str = format_phase_value(qlc, "c")
+        hover_text += f"💡 P Load  {pla_str} {plb_str} {plc_str}<br>"
+        hover_text += f"💡 Q Load  {qla_str} {qlb_str} {qlc_str}<br>"
+
+        # Capacitor data (if present)
+        if cap_data is not None and bus_row.id in cap_data.id.to_numpy():
+            q_cap = cap_data.loc[
+                cap_data.id == bus_row.id, ["qa", "qb", "qc"]
+            ].to_numpy()[0]
+            qcap_a_str = format_phase_value(q_cap[0], "a")
+            qcap_b_str = format_phase_value(q_cap[1], "b")
+            qcap_c_str = format_phase_value(q_cap[2], "c")
+            hover_text += f"🔃 Q Cap   {qcap_a_str} {qcap_b_str} {qcap_c_str}<br>"
+
+        # Generator data (if present)
         if bus_row.id in gen_data.id.to_numpy():
             p_gen = gen_data.loc[
                 gen_data.id == bus_row.id, ["pa", "pb", "pc"]
@@ -616,25 +694,39 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
             q_gen = gen_data.loc[
                 gen_data.id == bus_row.id, ["qa", "qb", "qc"]
             ].to_numpy()[0]
-            text[i] += f"<br>    P-Gen:  {p_gen[0]:.3f}  {p_gen[1]:.3f}  {p_gen[2]:.3f}"
-            text[i] += f"<br>    Q-Gen:  {q_gen[0]:.3f}  {q_gen[1]:.3f}  {q_gen[2]:.3f}"
+            pgen_a_str = format_phase_value(p_gen[0], "a")
+            pgen_b_str = format_phase_value(p_gen[1], "b")
+            pgen_c_str = format_phase_value(p_gen[2], "c")
+            qgen_a_str = format_phase_value(q_gen[0], "a")
+            qgen_b_str = format_phase_value(q_gen[1], "b")
+            qgen_c_str = format_phase_value(q_gen[2], "c")
+            hover_text += f"⚙️ P Gen   {pgen_a_str} {pgen_b_str} {pgen_c_str}<br>"
+            hover_text += f"⚙️ Q Gen   {qgen_a_str} {qgen_b_str} {qgen_c_str}<br>"
+
+        # Branch flow data (if present)
         edge = branch_data.loc[branch_data.tb == bus_row.id, :]
-        if len(edge) == 0:
-            continue
-        to_name = bus_row.name
-        fb = edge.fb.to_numpy()[0]
-        from_name = bus_data.loc[bus_data.id == fb, "name"].to_numpy()[0]
-        sa, sb, sc = (
-            edge.s_a.to_numpy()[0],
-            edge.s_b.to_numpy()[0],
-            edge.s_c.to_numpy()[0],
-        )
-        new_text = (
-            f"<br>Branch {from_name}→{to_name}"
-            f"<br>    P flow:  {np.real(sa):.3f}  {np.real(sb):.3f}  {np.real(sc):.3f}"
-            f"<br>    Q flow:  {np.imag(sa):.3f}  {np.imag(sb):.3f}  {np.imag(sc):.3f}"
-        )
-        text[i] += new_text
+        if len(edge) > 0:
+            to_name = bus_row.name
+            fb = edge.fb.to_numpy()[0]
+            from_name = bus_data.loc[bus_data.id == fb, "name"].to_numpy()[0]
+            sa, sb, sc = (
+                edge.s_a.to_numpy()[0],
+                edge.s_b.to_numpy()[0],
+                edge.s_c.to_numpy()[0],
+            )
+
+            pflow_a_str = format_phase_value(np.real(sa), "a")
+            pflow_b_str = format_phase_value(np.real(sb), "b")
+            pflow_c_str = format_phase_value(np.real(sc), "c")
+            qflow_a_str = format_phase_value(np.imag(sa), "a")
+            qflow_b_str = format_phase_value(np.imag(sb), "b")
+            qflow_c_str = format_phase_value(np.imag(sc), "c")
+
+            hover_text += "<br>"
+            hover_text += f"<b>  Branch: {from_name} → {to_name}</b><br>"
+            hover_text += f"➡️ P Flow  {pflow_a_str} {pflow_b_str} {pflow_c_str}<br>"
+            hover_text += f"➡️ Q Flow  {qflow_a_str} {qflow_b_str} {qflow_c_str}<br>"
+        text.append(hover_text)
     return text
 
 
@@ -738,6 +830,7 @@ def _make_node_trace(bus_data, node_size, v_max, v_min):
         showlegend=False,
         text=bus_data["name"],
         hovertemplate="%{text}",
+        hoverlabel=dict(font=dict(family="Monospace")),
         textposition="top center",
     )
     return node_trace

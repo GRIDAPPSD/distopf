@@ -2,6 +2,8 @@ import pandas as pd
 from typing import Optional
 
 
+
+
 def get(s: pd.Series, i, default=None):
     """
     Get value at index i from a Series. Return default if it does not exist.

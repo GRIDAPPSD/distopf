@@ -1,8 +1,8 @@
 import distopf as opf
 import pyomo.environ as pyo
-from distopf.pyomo_models.lindist_single import create_lindist_model
+from distopf.pyomo_models.lindist import create_lindist_model
 from distopf.importer import Case, create_case
-from distopf.pyomo_models.constraints_single import (
+from distopf.pyomo_models.constraints import (
     add_capacitor_constraints,
     add_circular_generator_constraints_pq_control,
     add_cvr_load_constraints,
@@ -20,6 +20,8 @@ from distopf.pyomo_models.constraints_single import (
 from distopf.pyomo_models.results import (
     get_voltages,
     get_values,
+    get_mp_voltages,
+    get_mp_values,
 )
 from distopf import (
     plot_voltages,
@@ -53,8 +55,9 @@ def loss_objective_rule(model):
     """
     total_loss = 0
     for _id, ph in model.branch_phase_set:
-        total_loss += (model.p_flow[_id, ph] ** 2) * model.r[_id, ph + ph]
-        total_loss += (model.q_flow[_id, ph] ** 2) * model.r[_id, ph + ph]
+        for t in model.time_set:
+            total_loss += (model.p_flow[_id, ph, t] ** 2) * model.r[_id, ph + ph]
+            total_loss += (model.q_flow[_id, ph, t] ** 2) * model.r[_id, ph + ph]
     return total_loss
 
 
@@ -71,12 +74,12 @@ if results.solver.status == pyo.SolverStatus.ok:
     print("Optimization successful!")
     print(f"Objective value: {pyo.value(model.objective)}")
     # data = get_all_results(model, case)
-    v = get_voltages(model.v)
-    v2 = get_values(model.v)
-    p_flow = get_values(model.p_flow)
-    q_flow = get_values(model.q_flow)
-    p_gen = get_values(model.p_gen)
-    q_gen = get_values(model.q_gen)
+    v = get_mp_voltages(model.v)
+    v2 = get_mp_values(model.v)
+    p_flow = get_mp_values(model.p_flow)
+    q_flow = get_mp_values(model.q_flow)
+    p_gen = get_mp_values(model.p_gen)
+    q_gen = get_mp_values(model.q_gen)
     plot_voltages(v).show(renderer="browser")
     plot_gens(p_flow, q_flow).show(renderer="browser")
     plot_gens(p_gen, q_gen).show(renderer="browser")

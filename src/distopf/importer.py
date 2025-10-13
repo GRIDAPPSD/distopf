@@ -13,13 +13,20 @@ from distopf.utils.utils import (
 )
 
 
-@dataclass
 class Case:
-    branch_data: pd.DataFrame
-    bus_data: pd.DataFrame
-    gen_data: Optional[pd.DataFrame] = None
-    cap_data: Optional[pd.DataFrame] = None
-    reg_data: Optional[pd.DataFrame] = None
+    def __init__(
+        self,
+        branch_data: pd.DataFrame,
+        bus_data: pd.DataFrame,
+        gen_data: Optional[pd.DataFrame] = None,
+        cap_data: Optional[pd.DataFrame] = None,
+        reg_data: Optional[pd.DataFrame] = None,
+    ):
+        self.branch_data = handle_branch_input(branch_data)
+        self.bus_data = handle_bus_input(bus_data)
+        self.gen_data = handle_gen_input(gen_data)
+        self.cap_data = handle_cap_input(cap_data)
+        self.reg_data = handle_reg_input(reg_data)
 
 
 def create_case(data_path: Path, model_type: Optional[str] = None) -> Case:
@@ -374,5 +381,5 @@ def modify_case(
 
     if cvr_q is not None:
         case.bus_data.loc[:, "cvr_q"] = cvr_q
-    
+
     return case
