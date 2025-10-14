@@ -22,15 +22,18 @@ def add_p_flow_constraints(m: pyo.ConcreteModel) -> None:
     def p_balance_rule(m, _id, ph, t):
         load = m.p_load[_id, ph, t]
         generation = m.p_gen[_id, ph, t] if (_id, ph, t) in m.p_gen else 0
+        p_bat = m.p_bat[_id, ph, t] if (_id, ph, t) in m.p_bat else 0
         incoming_flow = m.p_flow[_id, ph, t]
         outgoing_flows = sum(
             m.p_flow[to_bus, ph, t]
             for to_bus in m.to_bus_map[_id]
             if (to_bus, ph) in m.branch_phase_set
         )
-        return incoming_flow == outgoing_flows + load - generation
+        return incoming_flow == outgoing_flows + load - generation - p_bat
 
-    m.power_balance_p = pyo.Constraint(m.branch_phase_set, m.time_set, rule=p_balance_rule)
+    m.power_balance_p = pyo.Constraint(
+        m.branch_phase_set, m.time_set, rule=p_balance_rule
+    )
 
 
 def add_q_flow_constraints(m: pyo.ConcreteModel) -> None:
@@ -42,6 +45,7 @@ def add_q_flow_constraints(m: pyo.ConcreteModel) -> None:
     def q_balanced_rule(m, _id, ph, t):
         load = m.q_load[_id, ph, t]
         generation = m.q_gen[_id, ph, t] if (_id, ph, t) in m.q_gen else 0
+        q_bat = m.q_bat[_id, ph, t] if (_id, ph, t) in m.q_bat else 0
         capacitor = m.q_cap[_id, ph, t] if (_id, ph, t) in m.q_cap else 0
         incoming_flow = m.q_flow[_id, ph, t]
         outgoing_flows = sum(
@@ -49,9 +53,11 @@ def add_q_flow_constraints(m: pyo.ConcreteModel) -> None:
             for to_bus in m.to_bus_map[_id]
             if (to_bus, ph) in m.branch_phase_set
         )
-        return incoming_flow == outgoing_flows + load - generation - capacitor
+        return incoming_flow == outgoing_flows + load - generation - capacitor - q_bat
 
-    m.power_balance_q = pyo.Constraint(m.branch_phase_set, m.time_set, rule=q_balanced_rule)
+    m.power_balance_q = pyo.Constraint(
+        m.branch_phase_set, m.time_set, rule=q_balanced_rule
+    )
 
 
 def add_voltage_drop_constraints(m: pyo.ConcreteModel) -> None:
@@ -66,7 +72,8 @@ def add_voltage_drop_constraints(m: pyo.ConcreteModel) -> None:
     def voltage_drop_rule(m, _id, ph, t):
         if (_id, ph, t) in m.v_reg:
             return pyo.Constraint.Skip
-        # here, "a" represents the current phase, b an c represent next and previous phase
+        # here, "a" represents the current phase,
+        # b an c represent next and previous phase
         a = ph
         _i = "abc".index(a)
         b = "abc"[(_i + 1) % 3]  # next phase. If phase is "a" then "b"
@@ -74,7 +81,8 @@ def add_voltage_drop_constraints(m: pyo.ConcreteModel) -> None:
         aa = "".join(sorted(a + a))
 
         voltage_drop = (
-            2 * m.r[_id, aa] * m.p_flow[_id, ph, t] + 2 * m.x[_id, aa] * m.q_flow[_id, ph, t]
+            2 * m.r[_id, aa] * m.p_flow[_id, ph, t]
+            + 2 * m.x[_id, aa] * m.q_flow[_id, ph, t]
         )
         if (_id, b) in m.branch_phase_set:
             ab = "".join(sorted(a + b))
@@ -87,7 +95,9 @@ def add_voltage_drop_constraints(m: pyo.ConcreteModel) -> None:
 
         return m.v[_id, ph, t] == m.v[m.from_bus_map[_id], ph, t] - voltage_drop
 
-    m.voltage_drop = pyo.Constraint(m.branch_phase_set, m.time_set, rule=voltage_drop_rule)
+    m.voltage_drop = pyo.Constraint(
+        m.branch_phase_set, m.time_set, rule=voltage_drop_rule
+    )
 
 
 def add_regulator_constraints(m: pyo.ConcreteModel) -> None:
@@ -104,10 +114,13 @@ def add_regulator_constraints(m: pyo.ConcreteModel) -> None:
 
     def regulator_rule(m, _id, ph, t):
         return (
-            m.v_reg[_id, ph, t] == m.v[m.from_bus_map[_id], ph, t] * m.reg_ratio[_id, ph] ** 2
+            m.v_reg[_id, ph, t]
+            == m.v[m.from_bus_map[_id], ph, t] * m.reg_ratio[_id, ph] ** 2
         )
 
-    m.regulator_voltage_drop = pyo.Constraint(m.reg_phase_set, m.time_set, rule=regulator_v_drop)
+    m.regulator_voltage_drop = pyo.Constraint(
+        m.reg_phase_set, m.time_set, rule=regulator_v_drop
+    )
     m.regulator_ratio = pyo.Constraint(m.reg_phase_set, m.time_set, rule=regulator_rule)
 
 
@@ -134,14 +147,16 @@ def add_cvr_load_constraints(m: pyo.ConcreteModel) -> None:
 
 def add_generator_constant_p_constraints(m: pyo.ConcreteModel) -> None:
     m.constant_p_gen = pyo.Constraint(
-        m.gen_phase_set, m.time_set,
+        m.gen_phase_set,
+        m.time_set,
         rule=lambda m, _id, ph, t: m.p_gen[_id, ph, t] == m.p_gen_nom[_id, ph, t],
     )
 
 
 def add_generator_constant_q_constraints(m: pyo.ConcreteModel) -> None:
     m.constant_q_gen = pyo.Constraint(
-        m.gen_phase_set, m.time_set,
+        m.gen_phase_set,
+        m.time_set,
         rule=lambda m, _id, ph, t: m.q_gen[_id, ph, t] == m.q_gen_nom[_id, ph, t],
     )
 
@@ -222,7 +237,10 @@ def add_circular_generator_constraints_pq_control(m: pyo.ConcreteModel) -> None:
     def _circle(m, _id, ph, t):
         if m.gen_control_type[_id, ph] != ControlVariable.PQ.value:
             return pyo.Constraint.Skip
-        return m.p_gen[_id, ph, t] ** 2 + m.q_gen[_id, ph, t] ** 2 <= m.s_rated[_id, ph] ** 2
+        return (
+            m.p_gen[_id, ph, t] ** 2 + m.q_gen[_id, ph, t] ** 2
+            <= m.s_rated[_id, ph] ** 2
+        )
 
     m.gen_circle_constraint = pyo.Constraint(m.gen_phase_set, m.time_set, rule=_circle)
 
@@ -236,7 +254,9 @@ def add_capacitor_constraints(m: pyo.ConcreteModel) -> None:
     def capacitor_rule(m, _id, ph, t):
         return m.q_cap[_id, ph, t] == m.q_cap_nom[_id, ph] * m.v[_id, ph, t]
 
-    m.capacitor_injection = pyo.Constraint(m.cap_phase_set, m.time_set, rule=capacitor_rule)
+    m.capacitor_injection = pyo.Constraint(
+        m.cap_phase_set, m.time_set, rule=capacitor_rule
+    )
 
 
 def add_swing_bus_constraints(m: pyo.ConcreteModel) -> None:
@@ -252,23 +272,29 @@ def add_swing_bus_constraints(m: pyo.ConcreteModel) -> None:
             return pyo.Constraint.Skip
         return m.v[_id, ph, t] == m.v_swing[_id, ph, t] ** 2
 
-    m.swing_voltage = pyo.Constraint(m.swing_phase_set, m.time_set, rule=swing_voltage_rule)
+    m.swing_voltage = pyo.Constraint(
+        m.swing_phase_set, m.time_set, rule=swing_voltage_rule
+    )
 
 
-def add_voltage_bounds(m: pyo.ConcreteModel) -> None:
+def add_voltage_limits(m: pyo.ConcreteModel) -> None:
     """Add voltage bounds (for voltage magnitude squared)"""
 
     def voltage_limits(m, _id, ph, t):
         return (m.v_min[_id, ph], m.v[_id, ph, t], m.v_max[_id, ph])
 
-    m.voltage_bounds = pyo.Constraint(m.bus_phase_set, m.time_set, rule=voltage_limits)
+    m.voltage_limits = pyo.Constraint(m.bus_phase_set, m.time_set, rule=voltage_limits)
 
 
-def add_generator_bounds(m: pyo.ConcreteModel) -> None:
+def add_generator_limits(m: pyo.ConcreteModel) -> None:
     """Add generator bounds following the original base.py logic"""
 
     def p_gen_bounds(m, _id, ph, t):
-        return (0, m.p_gen[_id, ph, t], min(m.p_gen_nom[_id, ph, t], m.s_rated[_id, ph]))
+        return (
+            0,
+            m.p_gen[_id, ph, t],
+            min(m.p_gen_nom[_id, ph, t], m.s_rated[_id, ph]),
+        )
 
     def q_gen_bounds(m, _id, ph, t):
         if m.gen_control_type[_id, ph] == ControlVariable.Q:
@@ -284,5 +310,85 @@ def add_generator_bounds(m: pyo.ConcreteModel) -> None:
             min(m.s_rated[_id, ph], m.q_gen_max[_id, ph]),
         )
 
-    m.p_gen_bounds = pyo.Constraint(m.gen_phase_set, m.time_set, rule=p_gen_bounds)
-    m.q_gen_bounds = pyo.Constraint(m.gen_phase_set, m.time_set, rule=q_gen_bounds)
+    m.p_gen_limits = pyo.Constraint(m.gen_phase_set, m.time_set, rule=p_gen_bounds)
+    m.q_gen_limits = pyo.Constraint(m.gen_phase_set, m.time_set, rule=q_gen_bounds)
+
+
+def add_battery_power_limits(m: pyo.ConcreteModel) -> None:
+    def _r(m, _id, ph, t):
+        return (0, m.p_discharge[_id, t], m.s_bat_rated[_id, ph])
+
+    m.battery_discharging_limits = pyo.Constraint(m.bat_set, m.time_set, rule=_r)
+    m.battery_charging_limits = pyo.Constraint(m.bat_set, m.time_set, rule=_r)
+
+
+def add_battery_soc_limits(m: pyo.ConcreteModel) -> None:
+    def battery_soc_limits(m, _id, t):
+        return (m.soc_min[_id], m.soc[_id, t], m.soc_max[_id])
+
+    m.battery_soc_limits = pyo.Constraint(
+        m.bat_set, m.time_set, rule=battery_soc_limits
+    )
+
+
+def add_battery_net_p_bat_constraints(m: pyo.ConcreteModel) -> None:
+    def net_discharge(m, _id, t):
+        p_bat_a = m.p_bat[_id, "a", t] if m.battery_has_phase[_id, "a"] else 0
+        p_bat_b = m.p_bat[_id, "b", t] if m.battery_has_phase[_id, "b"] else 0
+        p_bat_c = m.p_bat[_id, "c", t] if m.battery_has_phase[_id, "c"] else 0
+        return p_bat_a + p_bat_b + p_bat_c == m.p_discharge[_id, t] - m.p_charge[_id, t]
+
+    m.net_discharge = pyo.Constraint(m.bat_phase_set, m.time_set, rule=net_discharge)
+
+
+def add_battery_net_p_bat_equal_phase_constraints(m: pyo.ConcreteModel) -> None:
+    def net_discharge_equal_phases(m, _id, ph, t):
+        n_phases = m.battery_n_phases[_id]
+        return (
+            m.p_bat[_id, ph, t]
+            == (m.p_discharge[_id, t] - m.p_charge[_id, t]) / n_phases
+        )
+
+    m.net_discharge = pyo.Constraint(
+        m.bat_phase_set, m.time_set, rule=net_discharge_equal_phases
+    )
+
+
+def add_battery_energy_constraints(m: pyo.ConcreteModel) -> None:
+    def storage(m, _id, t):
+        eta_d = m.discharge_efficiency[_id]
+        eta_c = m.charge_efficiency[_id]
+        return (
+            m.soc[_id, t]
+            == eta_c * m.delta_t * m.p_charge[_id, t]
+            - (1 / eta_d) * m.delta_t * m.p_discharge[_id, t]
+        )
+
+    m.storage = pyo.Constraint(m.bat_set, m.time_set, rule=storage)
+
+
+# def add_battery_phase_equality_constraints(m: pyo.ConcreteModel) -> None:
+#     def _p_equal(m, _id, ph, t):
+#         a = ph
+#         _i = "abc".index(a)
+#         b = "abc"[(_i + 1) % 3]  # next phase. If phase is "a" then "b"
+#         if (_id, b) not in m.bat_phase_set:
+#             pyo.Constraint.Skip
+#         return m.p_bat[_id, a, t] == m.p_bat[_id, b, t]
+
+#     def _q_equal(m, _id, ph, t):
+#         a = ph
+#         _i = "abc".index(a)
+#         b = "abc"[(_i + 1) % 3]  # next phase. If phase is "a" then "b"
+#         if (_id, b) not in m.bat_phase_set:
+#             pyo.Constraint.Skip
+#         return m.q_bat[_id, a, t] == m.q_bat[_id, b, t]
+
+
+def add_battery_constant_q_constraints_p_control(m: pyo.ConcreteModel) -> None:
+    def _rule(m, _id, ph, t):
+        if m.bat_control_type[_id] != ControlVariable.P:
+            return pyo.Constraint.Skip
+        return m.q_gen[_id, ph, t] == m.q_bat_nom[_id, ph, t]
+
+    m.constant_q_gen = pyo.Constraint(m.gen_phase_set, m.time_set, rule=_rule)

@@ -14,8 +14,14 @@ from distopf.pyomo_models.constraints import (
     add_swing_bus_constraints,
     add_voltage_drop_constraints,
     add_regulator_constraints,
-    add_generator_bounds,
-    add_voltage_bounds,
+    add_generator_limits,
+    add_voltage_limits,
+    add_battery_constant_q_constraints_p_control,
+    add_battery_energy_constraints,
+    add_battery_power_limits,
+    add_battery_net_p_bat_constraints,
+    add_battery_net_p_bat_equal_phase_constraints,
+    add_battery_soc_limits,
 )
 from distopf.pyomo_models.results import (
     get_voltages,
@@ -30,7 +36,7 @@ from distopf import (
     plot_polar,
 )
 
-case = create_case(data_path=opf.CASES_DIR / "csv" / "ieee123_30der")
+case = create_case(data_path=opf.CASES_DIR / "csv" / "ieee123_30der_bat")
 model = create_lindist_model(case)
 add_p_flow_constraints(model)
 add_q_flow_constraints(model)
@@ -43,9 +49,13 @@ add_circular_generator_constraints_pq_control(model)
 # add_octagonal_inverter_constraints_pq_control(model)
 add_capacitor_constraints(model)
 add_regulator_constraints(model)
+add_battery_soc_limits(model)
+add_battery_constant_q_constraints_p_control(model)
+add_battery_energy_constraints(model)
+add_battery_net_p_bat_equal_phase_constraints(model)
 # bounds
-add_voltage_bounds(model)
-add_generator_bounds(model)
+add_voltage_limits(model)
+add_generator_limits(model)
 
 
 def loss_objective_rule(model):

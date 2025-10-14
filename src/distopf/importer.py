@@ -40,14 +40,21 @@ class Case:
         self.n_steps = n_steps
         self.delta_t = delta_t  # hours per step
         self._validate_case()
-    
+
     def _validate_case(self):
         # TODO: add validation logic here
         # test phase consistency across all devices
+        # check control variable is all caps and one of "", "P", "Q", "PQ"
         pass
 
 
-def create_case(data_path: Path, model_type: Optional[str] = None) -> Case:
+def create_case(
+    data_path: Path,
+    model_type: Optional[str] = None,
+    start_step: int = 0,
+    n_steps: int = 1,
+    delta_t: float = 1,
+) -> Case:
     """
     Create a Case object from various input formats.
 
@@ -96,11 +103,26 @@ def create_case(data_path: Path, model_type: Optional[str] = None) -> Case:
 
     # Route to appropriate function based on model type
     if model_type == "csv":
-        return create_case_from_csv(data_path)
+        return create_case_from_csv(
+            data_path,
+            start_step=start_step,
+            n_steps=n_steps,
+            delta_t=delta_t,
+        )
     elif model_type in ["dss", "opendss"]:
-        return create_case_from_dss(data_path)
+        return create_case_from_dss(
+            data_path,
+            start_step=start_step,
+            n_steps=n_steps,
+            delta_t=delta_t,
+        )
     elif model_type == "cim":
-        return create_case_from_cim(data_path)
+        return create_case_from_cim(
+            data_path,
+            start_step=start_step,
+            n_steps=n_steps,
+            delta_t=delta_t,
+        )
     else:
         raise ValueError(
             f"Unsupported model type: '{model_type}'. "
@@ -221,7 +243,12 @@ def _validate_case_data(case: Case) -> None:
 
 
 # Enhanced versions of existing functions with better error handling
-def create_case_from_csv(data_path: Path) -> Case:
+def create_case_from_csv(
+    data_path: Path,
+    start_step: int = 0,
+    n_steps: int = 1,
+    delta_t: float = 1,
+) -> Case:
     """Enhanced version with better error handling and validation."""
 
     if not data_path.exists():
@@ -241,6 +268,8 @@ def create_case_from_csv(data_path: Path) -> Case:
     gen_data = None
     cap_data = None
     reg_data = None
+    bat_data = None
+    schedules = None
 
     # Load CSV files
     csv_files = {
@@ -249,6 +278,8 @@ def create_case_from_csv(data_path: Path) -> Case:
         "gen_data": data_path / "gen_data.csv",
         "cap_data": data_path / "cap_data.csv",
         "reg_data": data_path / "reg_data.csv",
+        "bat_data": data_path / "bat_data.csv",
+        "schedules": data_path / "schedules.csv",
     }
 
     try:
@@ -276,23 +307,39 @@ def create_case_from_csv(data_path: Path) -> Case:
         if csv_files["reg_data"].exists():
             reg_data = pd.read_csv(csv_files["reg_data"], header=0)
 
+        if csv_files["bat_data"].exists():
+            bat_data = pd.read_csv(csv_files["bat_data"], header=0)
+
+        if csv_files["schedules"].exists():
+            schedules = pd.read_csv(csv_files["schedules"], header=0)
+
     except Exception as e:
         raise ValueError(f"Error reading CSV files from {data_path}: {e}")
 
     # Create and validate case
     case = Case(
-        handle_branch_input(branch_data),
-        handle_bus_input(bus_data),
-        handle_gen_input(gen_data),
-        handle_cap_input(cap_data),
-        handle_reg_input(reg_data),
+        branch_data,
+        bus_data,
+        gen_data,
+        cap_data,
+        reg_data,
+        bat_data,
+        schedules,
+        start_step=start_step,
+        n_steps=n_steps,
+        delta_t=delta_t,
     )
 
     _validate_case_data(case)
     return case
 
 
-def create_case_from_dss(data_path: Path) -> Case:
+def create_case_from_dss(
+    data_path: Path,
+    start_step: int = 0,
+    n_steps: int = 1,
+    delta_t: float = 1,
+) -> Case:
     """Enhanced version with better error handling."""
 
     if not data_path.exists():
@@ -307,11 +354,14 @@ def create_case_from_dss(data_path: Path) -> Case:
     try:
         dss_parser = DSSToCSVConverter(data_path)
         case = Case(
-            handle_branch_input(dss_parser.branch_data),
-            handle_bus_input(dss_parser.bus_data),
-            handle_gen_input(dss_parser.gen_data),
-            handle_cap_input(dss_parser.cap_data),
-            handle_reg_input(dss_parser.reg_data),
+            dss_parser.branch_data,
+            dss_parser.bus_data,
+            dss_parser.gen_data,
+            dss_parser.cap_data,
+            dss_parser.reg_data,
+            start_step=start_step,
+            n_steps=n_steps,
+            delta_t=delta_t,
         )
         _validate_case_data(case)
         return case
@@ -320,7 +370,12 @@ def create_case_from_dss(data_path: Path) -> Case:
         raise ValueError(f"Error converting OpenDSS file {data_path}: {e}")
 
 
-def create_case_from_cim(data_path: Path) -> Case:
+def create_case_from_cim(
+    data_path: Path,
+    start_step: int = 0,
+    n_steps: int = 1,
+    delta_t: float = 1,
+) -> Case:
     """Enhanced version with better error handling."""
 
     if not data_path.exists():
@@ -337,11 +392,14 @@ def create_case_from_cim(data_path: Path) -> Case:
         data = cim_parser.convert()
 
         case = Case(
-            handle_branch_input(data["branch_data"]),
-            handle_bus_input(data["bus_data"]),
-            handle_gen_input(data["gen_data"]),
-            handle_cap_input(data["cap_data"]),
-            handle_reg_input(data["reg_data"]),
+            data["branch_data"],
+            data["bus_data"],
+            data["gen_data"],
+            data["cap_data"],
+            data["reg_data"],
+            start_step=start_step,
+            n_steps=n_steps,
+            delta_t=delta_t,
         )
         _validate_case_data(case)
         return case

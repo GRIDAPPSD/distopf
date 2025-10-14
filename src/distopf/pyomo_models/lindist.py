@@ -23,7 +23,7 @@ def _create_phase_tuples(df: pd.DataFrame, id_col: str = "id") -> List[Tuple[str
     return result
 
 
-def _create_sets(m: pyo.ConcreteModel, case: Case, time_periods: List) -> None:
+def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
     """Create all Pyomo sets"""
     m.time_set = pyo.RangeSet(case.start_step, case.start_step + case.n_steps - 1)
     m.bus_set = pyo.Set(initialize=case.bus_data.id.tolist())
@@ -268,37 +268,152 @@ def _create_v_limit_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     p_bat_data, q_bat_data = {}, {}
     s_rated_data, q_bat_min_data, q_bat_max_data = {}, {}, {}
-    bat_control_data = {}
     energy_capacity_data = {}
     min_soc_data, max_soc_data = {}, {}
     start_soc_data = {}
     charge_efficiency_data = {}
     discharge_efficiency_data = {}
-    annual_cycle_limit, control_variable = {}, {}
+    annual_cycle_limit = {}
+    control_variable = {}
+    battery_has_a_phase = {}
+    battery_has_b_phase = {}
+    battery_has_c_phase = {}
+    battery_has_phase = {}
+    battery_n_phases = {}
 
     for _, row in case.bat_data.iterrows():
+        energy_capacity_data[row.id] = getattr(row, "energy_capacity")
+        min_soc_data[row.id] = getattr(row, "min_soc", 0)
+        max_soc_data[row.id] = getattr(row, "max_soc", 1)
+        start_soc_data[row.id] = getattr(row, "start_soc", 0.5)
+        charge_efficiency_data[row.id] = getattr(row, "charge_efficiency", 1)
+        discharge_efficiency_data[row.id] = getattr(row, "discharge_efficiency", 1)
+        annual_cycle_limit[row.id] = getattr(row, "annual_cycle_limit", 365)
+        control_variable[row.id] = CONTROL_VARIABLE_MAP[
+            getattr(row, "control_variable", "P")
+        ]
+
+        battery_has_a_phase[row.id] = "a" in row.phases
+        battery_has_b_phase[row.id] = "b" in row.phases
+        battery_has_c_phase[row.id] = "c" in row.phases
+        battery_has_phase[(row.id, "a")] = "a" in row.phases
+        battery_has_phase[(row.id, "b")] = "b" in row.phases
+        battery_has_phase[(row.id, "c")] = "c" in row.phases
+        n_phases = len(row.phases)
+        battery_n_phases[row.id] = n_phases
+        # Generation limits
         for phase in row.phases:
             if (row.id, phase) not in m.bat_phase_set:
                 continue
-            n_phases = len(row.phases)
-            # Generation limits
-            s_rated = getattr(row, f"s_max", 1000.0)
-            q_max = getattr(row, f"q_max", s_rated)
-            q_min = getattr(row, f"q_min", -s_rated)
+            s_rated = getattr(row, "s_max", 1000.0)
             s_rated_data[(row.id, phase)] = s_rated / n_phases
-            q_bat_min_data[(row.id, phase)] = q_min / n_phases
-            q_bat_max_data[(row.id, phase)] = q_max / n_phases
-
-            # Control variable type
-            control_var = getattr(row, "control_variable", "P")
-            bat_control_data[(row.id, phase)] = CONTROL_VARIABLE_MAP[control_var]
-
+            q_bat_min_data[(row.id, phase)] = getattr(row, "q_min", -s_rated) / n_phases
+            q_bat_max_data[(row.id, phase)] = getattr(row, "q_max", s_rated) / n_phases
             # Nominal generation values
-            p_gen = getattr(row, f"p", 0.0)
-            q_gen = getattr(row, f"q", 0.0)
             for t in m.time_set:
-                p_bat_data[(row.id, phase, t)] = p_gen / n_phases
-                q_bat_data[(row.id, phase, t)] = q_gen / n_phases
+                p_bat_data[(row.id, phase, t)] = getattr(row, f"p", 0.0) / n_phases
+                q_bat_data[(row.id, phase, t)] = getattr(row, f"q", 0.0) / n_phases
+
+    m.p_bat_nom = pyo.Param(
+        m.bat_phase_set,
+        m.time_set,
+        initialize=p_bat_data,
+        default=0.0,
+        doc="Nominal active power discharge from battery",
+    )
+
+    m.q_bat_nom = pyo.Param(
+        m.bat_phase_set,
+        m.time_set,
+        initialize=q_bat_data,
+        default=0.0,
+        doc="Nominal reactive power discharge from battery",
+    )
+    m.s_bat_rated = pyo.Param(
+        m.bat_phase_set,
+        initialize=s_rated_data,
+        default=1000.0,
+        doc="Maximum apparent power rating",
+    )
+    m.q_bat_max = pyo.Param(
+        m.bat_phase_set,
+        initialize=q_bat_max_data,
+        default=1000.0,
+        doc="Maximum reactive power generation",
+    )
+    m.q_bat_min = pyo.Param(
+        m.bat_phase_set,
+        initialize=q_bat_min_data,
+        default=-1000.0,
+        doc="Minimum reactive power generation",
+    )
+    m.bat_control_type = pyo.Param(
+        m.bat_set,
+        initialize=control_variable,
+        default=0,
+        doc="Battery control variable type",
+    )
+    m.energy_capacity = pyo.Param(
+        m.bat_set,
+        initialize=energy_capacity_data,
+        default=0,
+        doc="Battery energy capacity in units power-base * Wh",
+    )
+    m.soc_min = pyo.Param(
+        m.bat_set,
+        initialize=min_soc_data,
+        default=0,
+        doc="Battery soc minimum as a fraction of energy capacity",
+    )
+    m.soc_max = pyo.Param(
+        m.bat_set,
+        initialize=max_soc_data,
+        default=1,
+        doc="Battery soc maximum as a fraction of energy capacity",
+    )
+    m.start_soc = pyo.Param(
+        m.bat_set,
+        initialize=start_soc_data,
+        default=0.5,
+        doc="Battery starting soc as a fraction of energy capacity",
+    )
+    m.charge_efficiency = pyo.Param(
+        m.bat_set,
+        initialize=charge_efficiency_data,
+        default=1.0,
+        doc="Battery charging efficiency",
+    )
+    m.discharge_efficiency = pyo.Param(
+        m.bat_set,
+        initialize=discharge_efficiency_data,
+        default=1.0,
+        doc="Battery discharging efficiency",
+    )
+    m.annual_cycle_limit = pyo.Param(
+        m.bat_set,
+        initialize=annual_cycle_limit,
+        default=365,
+        doc="Limit to number of discharge cycles per year",
+    )
+    m.battery_has_a_phase = pyo.Param(
+        m.bat_set, initialize=battery_has_a_phase, default=True
+    )
+    m.battery_has_b_phase = pyo.Param(
+        m.bat_set, initialize=battery_has_b_phase, default=True
+    )
+    m.battery_has_c_phase = pyo.Param(
+        m.bat_set, initialize=battery_has_c_phase, default=True
+    )
+    m.battery_has_phase = pyo.Param(
+        m.bat_set, ["a", "b", "c"], initialize=battery_has_phase, default=True
+    )
+
+    m.battery_n_phases = pyo.Param(
+        m.bat_set,
+        initialize=battery_n_phases,
+        default=3,
+        doc="Number of phases connected to battery.",
+    )
 
 
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
@@ -313,9 +428,10 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_regulator_parameters(m, case)
     _create_v_swing_parameters(m, case)
     _create_v_limit_parameters(m, case)
+    _create_battery_parameters(m, case)
 
 
-def create_lindist_model(case: Case, time_periods: List = None) -> pyo.ConcreteModel:
+def create_lindist_model(case: Case) -> pyo.ConcreteModel:
     """
     Factory function to create a Pyomo ConcreteModel for multiperiod linear distribution system optimization.
 
@@ -323,16 +439,12 @@ def create_lindist_model(case: Case, time_periods: List = None) -> pyo.ConcreteM
     ----------
     case : Case
         Dataclass containing network data frames
-    time_periods : List, optional
-        List of time periods. If None, defaults to [0]
 
     Returns
     -------
     pyo.ConcreteModel
         Configured Pyomo model with sets, variables, and parameters
     """
-    if time_periods is None:
-        time_periods = [0]
 
     m = pyo.ConcreteModel()
     m.from_bus_map = {
@@ -348,7 +460,8 @@ def create_lindist_model(case: Case, time_periods: List = None) -> pyo.ConcreteM
         int(_id): str(name)
         for _id, name in case.bus_data.loc[:, ["id", "name"]].to_numpy()
     }
-    _create_sets(m, case, time_periods)
+    m.delta_t = pyo.Param(initialize=case.delta_t)
+    _create_sets(m, case)
     _create_parameters(m, case)
 
     # Time-indexed variables
@@ -363,5 +476,10 @@ def create_lindist_model(case: Case, time_periods: List = None) -> pyo.ConcreteM
     m.v_reg = pyo.Var(m.reg_phase_set, m.time_set, domain=pyo.NonNegativeReals)
     m.p_load = pyo.Var(m.bus_phase_set, m.time_set)
     m.q_load = pyo.Var(m.bus_phase_set, m.time_set)
+    m.p_charge = pyo.Var(m.bat_set, m.time_set)
+    m.p_discharge = pyo.Var(m.bat_set, m.time_set)
+    m.p_bat = pyo.Var(m.bat_phase_set, m.time_set)
+    m.q_bat = pyo.Var(m.bat_phase_set, m.time_set)
+    m.soc = pyo.Var(m.bat_set, m.time_set)
 
     return m
