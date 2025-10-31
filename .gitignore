@@ -7,3 +7,5 @@ build/*
 *.ipynb
 .coverage
 .python-version
+*/__marimo__/*
+examples/layouts/*

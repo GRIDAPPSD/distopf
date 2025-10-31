@@ -466,13 +466,14 @@ class DistOPFCase(object):
             self.objective_function = objective_function
         # Solve
         result = auto_solve(self.model, self.objective_function, **kwargs)
-        if raw_result:
-            return result
-
+        self.results = result
         self.voltages_df = self.model.get_voltages(result.x)
         self.power_flows_df = self.model.get_apparent_power_flows(result.x)
         self.p_gens = self.model.get_p_gens(result.x)
         self.q_gens = self.model.get_q_gens(result.x)
+
+        if raw_result:
+            return result
 
         if self.save_inputs:
             self.save_input_data()

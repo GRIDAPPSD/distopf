@@ -29,7 +29,9 @@ from distopf.plot import (
     compare_voltages,
     voltage_differences,
     plot_polar,
-    plot_gens
+    plot_gens,
+    plot_pq,
+    plot_batteries
 )
 from distopf.dss_importer.dss_to_csv_converter import DSSToCSVConverter
 
@@ -50,4 +52,3 @@ CONSTANT_P = "Q"
 CONSTANT_Q = "P"
 CONTROL_PQ = "PQ"
 # fmt: on
-

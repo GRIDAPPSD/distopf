@@ -2,6 +2,7 @@
 plot.py - Plotly visualization functions for LinDistModel results
 """
 
+from typing import Optional
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -10,7 +11,19 @@ import plotly.graph_objects as go
 from distopf.matrix_models.base import LinDistBase
 
 
-def plot_voltages(v: pd.DataFrame = None) -> go.Figure:
+def _choose_t(df, t=None):
+    df = df.copy()
+    if t is None:
+        t = 0
+    if "t" in df.columns:
+        if t is None and len(df) > 0:
+            t = min(df.t)
+        df = df.loc[df.t == t, :]
+        df = df.drop("t", axis=1)
+    return df
+
+
+def plot_voltages(v: pd.DataFrame = None, t=None) -> go.Figure:
     """
     Parameters
     ----------
@@ -22,10 +35,17 @@ def plot_voltages(v: pd.DataFrame = None) -> go.Figure:
     fig : Plotly figure object
         Plotly figure object containing the voltage magnitudes for each bus.
     """
+    v = v.copy()
     if "id" not in v.columns:
         v["id"] = v.index
     if "name" not in v.columns:
         v["name"] = v["id"]
+    # if t is None and "t" in v.columns:
+    #     t = min(v.t)
+    # if "t" in v.columns:
+    #     v = v.loc[v.t == t, :]
+    #     v = v.drop("t", axis=1)
+    v = _choose_t(v, t=t)
     v = v.melt(
         ignore_index=False, id_vars=["id", "name"], var_name="phase", value_name="v"
     )
@@ -36,7 +56,7 @@ def plot_voltages(v: pd.DataFrame = None) -> go.Figure:
     return fig
 
 
-def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame) -> go.Figure:
+def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
     """
     Visually compare voltages by plotting two different results.
     Parameters
@@ -48,6 +68,8 @@ def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame) -> go.Figure:
     -------
     fig : Plotly figure object
     """
+    v1 = v1.copy()
+    v2 = v2.copy()
     if "id" not in v1.columns:
         v1["id"] = v1.index
     if "name" not in v1.columns:
@@ -56,6 +78,18 @@ def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame) -> go.Figure:
         v2["id"] = v2.index
     if "name" not in v2.columns:
         v2["name"] = v2["id"]
+
+    if t is None and "t" in v1.columns:
+        t1 = min(v1.t)
+    if t is None and "t" in v2.columns:
+        t2 = min(v2.t)
+    assert t1 == t2
+    if "t" in v1.columns:
+        v1 = v1.loc[v1.t == t1, :]
+        v1 = v1.drop("t", axis=1)
+    if "t" in v2.columns:
+        v2 = v2.loc[v2.t == t2, :]
+        v2 = v2.drop("t", axis=1)
     v1 = v1.melt(
         ignore_index=True, var_name="phase", id_vars=["id", "name"], value_name="v1"
     )
@@ -78,7 +112,7 @@ def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def voltage_differences(v1: pd.DataFrame, v2: pd.DataFrame) -> go.Figure:
+def voltage_differences(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
     """
     Visually compare voltages from two different results by plotting the difference v1-v2.
     Parameters
@@ -90,6 +124,8 @@ def voltage_differences(v1: pd.DataFrame, v2: pd.DataFrame) -> go.Figure:
     -------
     fig : Plotly figure object
     """
+    v1 = v1.copy()
+    v2 = v2.copy()
     if "id" not in v1.columns:
         v1["id"] = v1.index
     if "name" not in v1.columns:
@@ -98,6 +134,16 @@ def voltage_differences(v1: pd.DataFrame, v2: pd.DataFrame) -> go.Figure:
         v2["id"] = v2.index
     if "name" not in v2.columns:
         v2["name"] = v2["id"]
+    if "t" in v1.columns:
+        if t is None:
+            t1 = min(v1.t)
+        v1 = v1.loc[v1.t == t1, :]
+        v1 = v1.drop("t", axis=1)
+    if "t" in v2.columns:
+        if t is None:
+            t2 = min(v2.t)
+        v2 = v2.loc[v2.t == t2, :]
+        v2 = v2.drop("t", axis=1)
     v1 = v1.melt(
         ignore_index=True, var_name="phase", id_vars=["id", "name"], value_name="v1"
     )
@@ -130,7 +176,7 @@ def plot_power_flows(s: pd.DataFrame) -> go.Figure:
     -------
     fig : Plotly figure object
     """
-
+    s = s.copy()
     s = s.melt(
         ignore_index=True,
         id_vars=["fb", "tb", "from_name", "to_name"],
@@ -163,7 +209,7 @@ def plot_power_flows(s: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def plot_gens(p_gens: pd.DataFrame, q_gens: pd.DataFrame) -> go.Figure:
+def plot_gens(p_gens: pd.DataFrame, q_gens: pd.DataFrame, t=None) -> go.Figure:
     """
     Plot the active and reactive power flowing into each bus on each phase.
     Parameters
@@ -174,6 +220,22 @@ def plot_gens(p_gens: pd.DataFrame, q_gens: pd.DataFrame) -> go.Figure:
     -------
     fig : Plotly figure object
     """
+    p_gens = p_gens.copy()
+    q_gens = q_gens.copy()
+    if t is None:
+        t = 0
+    if "t" in p_gens.columns:
+        t1 = t
+        if t is None and len(p_gens) > 0:
+            t1 = min(p_gens.t)
+        p_gens = p_gens.loc[p_gens.t == t1, :]
+        p_gens = p_gens.drop("t", axis=1)
+    if "t" in q_gens.columns:
+        t2 = t
+        if t is None and len(q_gens) > 0:
+            t2 = min(q_gens.t)
+        q_gens = q_gens.loc[q_gens.t == t2, :]
+        q_gens = q_gens.drop("t", axis=1)
 
     p_gens = p_gens.melt(
         ignore_index=True,
@@ -216,6 +278,75 @@ def plot_gens(p_gens: pd.DataFrame, q_gens: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def plot_pq(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
+    """
+    Plot the active and reactive power.
+    Parameters
+    ----------
+    p : pd.DataFrame
+    q : pd.DataFrame
+    Returns
+    -------
+    fig : Plotly figure object
+    """
+    p = p.copy()
+    q = q.copy()
+    if t is None:
+        t = 0
+    if "t" in p.columns:
+        t1 = t
+        if t is None and len(p) > 0:
+            t1 = min(p.t)
+        p = p.loc[p.t == t1, :]
+        p = p.drop("t", axis=1)
+    if "t" in q.columns:
+        t2 = t
+        if t is None and len(q) > 0:
+            t2 = min(q.t)
+        q = q.loc[q.t == t2, :]
+        q = q.drop("t", axis=1)
+
+    p = p.melt(
+        ignore_index=True,
+        id_vars=["id", "name"],
+        var_name="phase",
+        value_name="P",
+    )
+    q = q.melt(
+        ignore_index=True,
+        id_vars=["id", "name"],
+        var_name="phase",
+        value_name="Q",
+    )
+    pq = pd.merge(p, q, how="outer", on=["id", "name", "phase"])
+    pq.id = p.id
+    pq.name = p.name
+    pq.phase = p.phase
+    pq["P"] = p["P"]
+    pq["Q"] = q["Q"]
+    pq = pq.melt(
+        ignore_index=False,
+        id_vars=["id", "name", "phase"],
+        var_name="part",
+        value_name="power",
+    )
+    fig = px.bar(
+        pq,
+        x="name",
+        y="power",
+        facet_col="phase",
+        facet_row="part",
+        color="phase",
+        labels={"name": "Bus Name"},
+    )
+    fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
+    fig.update_layout(
+        yaxis4_title="Active Power (p.u.)",
+        yaxis_title="Reactive Power (p.u.)",
+    )
+    return fig
+
+
 def compare_flows(s1: pd.DataFrame, s2: pd.DataFrame) -> go.Figure:
     """
     Similar to plot_power_flows but plots two results side by side.
@@ -228,6 +359,8 @@ def compare_flows(s1: pd.DataFrame, s2: pd.DataFrame) -> go.Figure:
     -------
     fig : Plotly figure object
     """
+    s1 = s1.copy()
+    s2 = s2.copy()
     if "from_name" not in s1.columns:
         s1["from_name"] = s1.fb
     if "to_name" not in s1.columns:
@@ -298,6 +431,7 @@ def plot_ders(ders: pd.DataFrame) -> go.Figure:
     -------
     fig : Plotly figure object
     """
+    ders = ders.copy()
     dec_var = ders.melt(
         ignore_index=False,
         var_name="phase",
@@ -316,21 +450,42 @@ def plot_ders(ders: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def plot_polar(p: pd.DataFrame, q: pd.DataFrame) -> go.Figure:
-    p = p.melt(
-        ignore_index=False,
-        var_name="phase",
-        value_name="p",
-        id_vars=["id", "name"],
-    )
+def plot_polar(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
+    p = p.copy()
+    q = q.copy()
+    if t is None:
+        t = 0
+    if "t" in p.columns:
+        t1 = t
+        if t is None and len(p) > 0:
+            t1 = min(p.t)
+        p = p.loc[p.t == t1, :]
+        p = p.drop("t", axis=1)
+    if "t" in q.columns:
+        t2 = t
+        if t is None and len(q) > 0:
+            t2 = min(q.t)
+        q = q.loc[q.t == t2, :]
+        q = q.drop("t", axis=1)
 
-    q = q.melt(
-        ignore_index=False,
-        var_name="phase",
-        value_name="q",
+    p = p.melt(
+        ignore_index=True,
         id_vars=["id", "name"],
+        var_name="phase",
+        value_name="value",
     )
-    pq = pd.merge(p, q, on=["name", "phase"], how="outer")
+    q = q.melt(
+        ignore_index=True,
+        id_vars=["id", "name"],
+        var_name="phase",
+        value_name="value",
+    )
+    pq = pd.merge(p, q, how="outer", on=["id", "name", "phase"])
+    pq.id = p.id
+    pq.name = p.name
+    pq.phase = p.phase
+    pq["p"] = p.value
+    pq["q"] = q.value
     pq["s"] = (pq.p.array + 1j * pq.q.array).astype(complex)
     pq["r"] = np.abs(pq.s)
     pq["th"] = np.angle(pq.s, deg=True)
@@ -339,10 +494,46 @@ def plot_polar(p: pd.DataFrame, q: pd.DataFrame) -> go.Figure:
         r="r",
         theta="th",
         color="phase",
-        range_theta=[-90, 90],
+        # range_theta=[-90, 90],
         start_angle=0,
         direction="counterclockwise",
+        hover_data="name",
     )
+    return fig
+
+
+def plot_batteries(p: pd.DataFrame, soc: pd.DataFrame) -> go.Figure:
+    df = p.copy()
+    p_last = df.loc[df.t == df.t.max(), :].copy()
+    p_last.loc[:, "t"] = df.t.max() + 1
+    df = pd.concat([df, p_last]).reset_index(drop=True)
+    soc = soc.copy()
+    soc.t = soc.t + 1
+    soc.value = soc.value * 100
+    df["value"] = df.a + df.b + df.c
+    df["variable"] = "power"
+    df.drop(["a", "b", "c"], axis=1)
+    soc["variable"] = "soc"
+    df = pd.concat([df, soc])
+    fig = px.line(
+        df,
+        x="t",
+        y="value",
+        facet_row="variable",
+        color="name",
+        labels={"name": "Bus Name"},
+    )
+    for trace in fig.data:
+        if trace.yaxis == "y2":  # Top row uses y2 axis
+            trace.update(line_shape="hv")
+    fig.for_each_annotation(lambda a: a.update(text=""))
+    fig.update_layout(
+        yaxis2_title="Discharging Power (p.u.)",
+        yaxis_title="SOC (%)",
+        yaxis=dict(matches=None),  # Make bottom y-axis independent
+        yaxis2=dict(matches=None),  # Make top y-axis independent
+    )
+
     return fig
 
 
@@ -350,12 +541,15 @@ def plot_network(
     model: LinDistBase,
     v: pd.DataFrame = None,
     s: pd.DataFrame = None,
+    p_flow: pd.DataFrame = None,
+    q_flow: pd.DataFrame = None,
     p_gen: pd.DataFrame = None,
     q_gen: pd.DataFrame = None,
     v_min: int = 0.95,
     v_max: int = 1.05,
     show_phases: str = "abc",
     show_reactive_power: bool = False,
+    t: Optional[int] = None,
 ) -> go.Figure:
     """
     Plot the distribution network showing voltage and power results.
@@ -363,7 +557,9 @@ def plot_network(
     ----------
     model : LinDistBase
     v : pd.DataFrame, (default=None) Dataframe containing voltage magnitudes for each bus.
-    s : pd.DataFrame, (default=None) Dataframe containing power flows for each branch.
+    s : pd.DataFrame, (default=None) Dataframe containing power flows for each branch. Either s or p_flow and q_flow should be provided.
+    p_flow : pd.DataFrame, (default=None) Dataframe containing power flows for each branch.
+    q_flow : pd.DataFrame, (default=None) Dataframe containing power flows for each branch.
     p_gen : pd.DataFrame, (default=None) Dataframe containing actve power generated by each generator.
     q_gen : pd.DataFrame, (default=None) Dataframe containing reactive power generated by each generator.
     v_min : (default=0.95) Used for scaling node colors.
@@ -378,18 +574,36 @@ def plot_network(
     _v = None
     _s = None
     if s is not None:
-        _s = s.copy()
+        _s = _choose_t(s.copy(), t)
     if v is not None:
-        _v = v.copy()
+        _v = _choose_t(v.copy(), t)
+    if s is None and p_flow is not None and q_flow is not None:
+        from_bus_map = {
+            int(tb): int(fb)
+            for fb, tb in model.branch_data.loc[:, ["fb", "tb"]].to_numpy()
+        }
+        _s = p_flow.copy()
+        _s = _s.drop(["a", "b", "c"], axis=1)
+        _s["a"] = p_flow.a + 1j * q_flow.a
+        _s["b"] = p_flow.b + 1j * q_flow.b
+        _s["c"] = p_flow.c + 1j * q_flow.c
+        _s["tb"] = _s["id"]
+        _s["fb"] = _s["tb"].map(from_bus_map)
+        _s = _choose_t(_s, t)
+    if p_gen is not None:
+        p_gen = _choose_t(p_gen, t)
+    if q_gen is not None:
+        q_gen = _choose_t(q_gen, t)
+
     # validate phases
     if show_phases.lower() not in ["a", "b", "c", "abc"]:
         raise ValueError("Invalid phase. Must be 'a', 'b', 'c', or 'abc'.")
     show_phases = show_phases.lower()
     phase_list = sorted([ph.lower() for ph in show_phases])
-    bus_data = model.bus.copy()
-    branch_data = model.branch.copy()
-    gen_data = model.gen.copy()
-    cap_data = model.cap.copy()
+    bus_data = model.bus_data.copy()
+    branch_data = model.branch_data.copy()
+    gen_data = model.gen_data.copy()
+    cap_data = model.cap_data.copy()
 
     node_size = 10
     edge_scale = 10
@@ -577,6 +791,7 @@ def _make_edge_traces(branch_data, show_phases, show_reactive_power):
             mode="lines",
             line=dict(color=color, width=linewidth, dash=dash),
             showlegend=False,
+            hoverinfo="none",
         )
         edge_traces.append(edge_trace)
     return edge_traces

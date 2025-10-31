@@ -3,6 +3,9 @@ import pyomo.environ as pyo
 from typing import Tuple, List
 import pandas as pd
 from distopf.importer import Case
+from distopf.pyomo_models.protocol import LindistModelProtocol
+
+
 
 
 class ControlVariable(IntEnum):
@@ -52,7 +55,7 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
     m.bat_phase_set = pyo.Set(
         initialize=_create_phase_tuples(case.bat_data, "id"), dimen=2
     )
-    m.bat_set = pyo.Set(initialize=case.bus_data.id.tolist())
+    m.bat_set = pyo.Set(initialize=case.bat_data.id.tolist())
 
 
 def _create_rx_parameters(m: pyo.ConcreteModel, case: Case) -> None:
@@ -88,9 +91,16 @@ def _create_load_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             # Active and reactive loads
             p_load = getattr(row, f"pl_{phase}", 0.0)
             q_load = getattr(row, f"ql_{phase}", 0.0)
+            load_mult_p = load_mult_q = 1.0
+            load_shape = getattr(row, "load_shape", "default")
             for t in m.time_set:
-                load_p_data[(row.id, phase, t)] = p_load
-                load_q_data[(row.id, phase, t)] = q_load
+                if load_shape in case.schedules.columns:
+                    load_mult_p = load_mult_q = case.schedules.at[t, load_shape]
+                elif f"{load_shape}.{phase}.p" in case.schedules.columns:
+                    load_mult_p = case.schedules.at[t, f"{load_shape}.{phase}.p"]
+                    load_mult_q = case.schedules.at[t, f"{load_shape}.{phase}.q"]
+                load_p_data[(row.id, phase, t)] = p_load * load_mult_p
+                load_q_data[(row.id, phase, t)] = q_load * load_mult_q
 
     m.p_load_nom = pyo.Param(
         m.bus_phase_set,
@@ -193,7 +203,7 @@ def _create_capacitor_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     q_cap_data = {}
     for _, row in case.cap_data.iterrows():
         for phase in row.phases:
-            q_cap = getattr(row, f"q_{phase}", 0.0)
+            q_cap = getattr(row, f"q{phase}", 0.0)
             q_cap_data[(row.id, phase)] = q_cap
 
     m.q_cap_nom = pyo.Param(
@@ -247,20 +257,19 @@ def _create_v_limit_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     for _, row in case.bus_data.iterrows():
         for phase in row.phases:
             if (row.id, phase) in m.bus_phase_set:
-                # Store as voltage magnitude squared
-                v_min_data[(row.id, phase)] = getattr(row, "v_min", 0.95) ** 2
-                v_max_data[(row.id, phase)] = getattr(row, "v_max", 1.05) ** 2
+                v_min_data[(row.id, phase)] = getattr(row, "v_min", 0.95)
+                v_max_data[(row.id, phase)] = getattr(row, "v_max", 1.05)
 
     m.v_min = pyo.Param(
         m.bus_phase_set,
         initialize=v_min_data,
-        default=0.95**2,
+        default=0.95,
         doc="Minimum voltage magnitude squared",
     )
     m.v_max = pyo.Param(
         m.bus_phase_set,
         initialize=v_max_data,
-        default=1.05**2,
+        default=1.05,
         doc="Maximum voltage magnitude squared",
     )
 
@@ -274,7 +283,7 @@ def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     charge_efficiency_data = {}
     discharge_efficiency_data = {}
     annual_cycle_limit = {}
-    control_variable = {}
+    bat_control_data = {}
     battery_has_a_phase = {}
     battery_has_b_phase = {}
     battery_has_c_phase = {}
@@ -289,7 +298,7 @@ def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         charge_efficiency_data[row.id] = getattr(row, "charge_efficiency", 1)
         discharge_efficiency_data[row.id] = getattr(row, "discharge_efficiency", 1)
         annual_cycle_limit[row.id] = getattr(row, "annual_cycle_limit", 365)
-        control_variable[row.id] = CONTROL_VARIABLE_MAP[
+        bat_control_data[row.id] = CONTROL_VARIABLE_MAP[
             getattr(row, "control_variable", "P")
         ]
 
@@ -349,7 +358,7 @@ def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     )
     m.bat_control_type = pyo.Param(
         m.bat_set,
-        initialize=control_variable,
+        initialize=bat_control_data,
         default=0,
         doc="Battery control variable type",
     )
@@ -431,7 +440,7 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_battery_parameters(m, case)
 
 
-def create_lindist_model(case: Case) -> pyo.ConcreteModel:
+def create_lindist_model(case: Case) -> LindistModelProtocol:
     """
     Factory function to create a Pyomo ConcreteModel for multiperiod linear distribution system optimization.
 
@@ -461,25 +470,29 @@ def create_lindist_model(case: Case) -> pyo.ConcreteModel:
         for _id, name in case.bus_data.loc[:, ["id", "name"]].to_numpy()
     }
     m.delta_t = pyo.Param(initialize=case.delta_t)
+    m.start_step = pyo.Param(initialize=case.start_step)
+    m.n_steps = pyo.Param(initialize=case.n_steps)
     _create_sets(m, case)
     _create_parameters(m, case)
 
     # Time-indexed variables
-    m.v = pyo.Var(
-        m.bus_phase_set, m.time_set, domain=pyo.NonNegativeReals
+    m.v2 = pyo.Var(
+        m.bus_phase_set, m.time_set, domain=pyo.NonNegativeReals, initialize=1
     )  # Voltage magnitude squared
     m.p_flow = pyo.Var(m.branch_phase_set, m.time_set)
-    m.q_flow = pyo.Var(m.branch_phase_set, m.time_set)
+    m.q_flow = pyo.Var(m.branch_phase_set, m.time_set, initialize=0)
     m.p_gen = pyo.Var(m.gen_phase_set, m.time_set, domain=pyo.NonNegativeReals)
-    m.q_gen = pyo.Var(m.gen_phase_set, m.time_set)
+    m.q_gen = pyo.Var(m.gen_phase_set, m.time_set, initialize=0)
     m.q_cap = pyo.Var(m.cap_phase_set, m.time_set)
-    m.v_reg = pyo.Var(m.reg_phase_set, m.time_set, domain=pyo.NonNegativeReals)
+    m.v2_reg = pyo.Var(m.reg_phase_set, m.time_set, domain=pyo.NonNegativeReals, initialize=1)
     m.p_load = pyo.Var(m.bus_phase_set, m.time_set)
     m.q_load = pyo.Var(m.bus_phase_set, m.time_set)
-    m.p_charge = pyo.Var(m.bat_set, m.time_set)
-    m.p_discharge = pyo.Var(m.bat_set, m.time_set)
-    m.p_bat = pyo.Var(m.bat_phase_set, m.time_set)
-    m.q_bat = pyo.Var(m.bat_phase_set, m.time_set)
-    m.soc = pyo.Var(m.bat_set, m.time_set)
 
-    return m
+    # create battery variables
+    m.p_charge = pyo.Var(m.bat_set, m.time_set, initialize=0)
+    m.p_discharge = pyo.Var(m.bat_set, m.time_set, initialize=0)
+    m.p_bat = pyo.Var(m.bat_phase_set, m.time_set, initialize=0)
+    m.q_bat = pyo.Var(m.bat_phase_set, m.time_set, initialize=0)
+    m.soc = pyo.Var(m.bat_set, m.time_set, initialize=0.5)
+    model: LindistModelProtocol = m
+    return model
