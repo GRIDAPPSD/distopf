@@ -39,7 +39,7 @@ from distopf.cases import CASES_DIR
 
 from distopf.distOPF import DistOPFCase, create_model, auto_solve
 
-from distopf.utils.utils import *
+from distopf.utils import *
 
 # bus_type options
 SWING_FREE = "IN"

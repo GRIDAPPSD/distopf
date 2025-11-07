@@ -113,12 +113,40 @@ def handle_branch_input(branch_data: Optional[pd.DataFrame]) -> pd.DataFrame:
 def handle_bus_input(bus_data: Optional[pd.DataFrame]) -> pd.DataFrame:
     if bus_data is None:
         raise ValueError("Bus data must be provided.")
+    type_dict = {
+        "id": int,
+        "name": str,
+        "pl_a": float,
+        "ql_a": float,
+        "pl_b": float,
+        "ql_b": float,
+        "pl_c": float,
+        "ql_c": float,
+        "bus_type": str,
+        "v_a": float,
+        "v_b": float,
+        "v_c": float,
+        "v_ln_base": float,
+        "s_base": float,
+        "v_min": float,
+        "v_max": float,
+        "cvr_p": float,
+        "cvr_q": float,
+        "phases": str,
+        "has_gen": bool,
+        "has_load": bool,
+        "has_cap": bool,
+        "latitude": float,
+        "longitude": float,
+        "load_shape": str,
+    }
+    bus = bus_data.astype(type_dict)
     bus = bus_data.sort_values(by="id", ignore_index=True)
     bus.index = bus.id.to_numpy() - 1
     return bus
 
 
-def handle_loadshape_input(loadshape_data: Optional[pd.DataFrame]) -> pd.DataFrame:
+def handle_schedules_input(loadshape_data: Optional[pd.DataFrame]) -> pd.DataFrame:
     if loadshape_data is None:
         return pd.DataFrame(
             columns=[

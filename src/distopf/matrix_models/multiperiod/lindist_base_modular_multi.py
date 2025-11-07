@@ -13,7 +13,7 @@ from distopf.utils import (
     handle_cap_input,
     handle_reg_input,
     handle_bat_input,
-    handle_loadshape_input,
+    handle_schedules_input,
     handle_pv_loadshape_input,
     get,
 )
@@ -66,7 +66,7 @@ class LinDistModelMulti:
         self.gen = handle_gen_input(gen_data)
         self.cap = handle_cap_input(cap_data)
         self.reg = handle_reg_input(reg_data)
-        self.loadshape = handle_loadshape_input(loadshape_data)
+        self.loadshape = handle_schedules_input(loadshape_data)
         self.pv_loadshape = handle_pv_loadshape_input(pv_loadshape_data)
         self.bat = handle_bat_input(bat_data)
         self.start_step = start_step

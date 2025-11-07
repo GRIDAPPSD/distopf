@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, override
 import pandas as pd
 import distopf as opf
 from distopf.multiperiod.base_mp import LinDistBaseMP
@@ -38,16 +38,16 @@ class LinDistMPL(LinDistBaseMP):
     May 2019, doi: 10.1109/TPWRS.2018.2890613.
     """
 
+    @override
     def __init__(
         self,
-        branch_data: pd.DataFrame = None,
-        bus_data: pd.DataFrame = None,
-        gen_data: pd.DataFrame = None,
-        cap_data: pd.DataFrame = None,
-        reg_data: pd.DataFrame = None,
-        bat_data: pd.DataFrame = None,
-        loadshape_data: pd.DataFrame = None,
-        pv_loadshape_data: pd.DataFrame = None,
+        branch_data: Optional[pd.DataFrame] = None,
+        bus_data: Optional[pd.DataFrame] = None,
+        gen_data: Optional[pd.DataFrame] = None,
+        cap_data: Optional[pd.DataFrame] = None,
+        reg_data: Optional[pd.DataFrame] = None,
+        bat_data: Optional[pd.DataFrame] = None,
+        schedules: Optional[pd.DataFrame] = None,
         start_step: int = 0,
         n_steps: int = 24,
         delta_t: float = 1,  # hours per step
@@ -59,8 +59,7 @@ class LinDistMPL(LinDistBaseMP):
             cap_data=cap_data,
             reg_data=reg_data,
             bat_data=bat_data,
-            loadshape_data=loadshape_data,
-            pv_loadshape_data=pv_loadshape_data,
+            schedules=schedules,
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,
@@ -69,6 +68,7 @@ class LinDistMPL(LinDistBaseMP):
         self.ql_map: Optional[dict[int, dict[str, pd.Series]]] = None
         self.build()
 
+    @override
     def initialize_variable_index_pointers(self):
         # ~~ initialize index pointers ~~
         self.x_maps = {}
@@ -116,6 +116,7 @@ class LinDistMPL(LinDistBaseMP):
                 self.n_x, self.load_buses
             )
 
+    @override
     def additional_variable_idx(self, var, node_j, phase, t=0):
         """
         User added index function. Override this function to add custom variables. Return None if `var` is not found.

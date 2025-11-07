@@ -2,7 +2,7 @@ import pyomo.environ as pyo
 from pathlib import Path
 import pandas as pd
 from scipy.stats.tests.test_continuous_basic import case1
-from distopf.utils.utils import (
+from distopf.utils import (
     handle_branch_input,
     handle_bus_input,
     handle_gen_input,

@@ -1,3 +1,4 @@
+from typing import Optional, override
 import pandas as pd
 from distopf.multiperiod.base_mp import LinDistBaseMP
 
@@ -46,16 +47,16 @@ class LinDistMP(LinDistBaseMP):
     using a provided case, and visualize the results.
     """
 
+    @override
     def __init__(
         self,
-        branch_data: pd.DataFrame = None,
-        bus_data: pd.DataFrame = None,
-        gen_data: pd.DataFrame = None,
-        cap_data: pd.DataFrame = None,
-        reg_data: pd.DataFrame = None,
-        bat_data: pd.DataFrame = None,
-        loadshape_data: pd.DataFrame = None,
-        pv_loadshape_data: pd.DataFrame = None,
+        branch_data: Optional[pd.DataFrame] = None,
+        bus_data: Optional[pd.DataFrame] = None,
+        gen_data: Optional[pd.DataFrame] = None,
+        cap_data: Optional[pd.DataFrame] = None,
+        reg_data: Optional[pd.DataFrame] = None,
+        bat_data: Optional[pd.DataFrame] = None,
+        schedules: Optional[pd.DataFrame] = None,
         start_step: int = 0,
         n_steps: int = 24,
         delta_t: float = 1,  # hours per step
@@ -67,8 +68,7 @@ class LinDistMP(LinDistBaseMP):
             cap_data=cap_data,
             reg_data=reg_data,
             bat_data=bat_data,
-            loadshape_data=loadshape_data,
-            pv_loadshape_data=pv_loadshape_data,
+            schedules=schedules,
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,

@@ -4,7 +4,7 @@ import pandas as pd
 from numpy import sqrt, zeros
 from scipy.sparse import csr_array, lil_array, vstack
 from distopf.matrix_models.base import LinDistBase
-from distopf.utils.utils import get
+from distopf.utils import get
 
 
 class LinDistModelCapMI(LinDistBase):

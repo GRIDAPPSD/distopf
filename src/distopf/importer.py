@@ -4,14 +4,14 @@ from distopf.dss_importer import DSSToCSVConverter
 from distopf.cim_importer import CIMToCSVConverter
 from typing import Optional
 from dataclasses import dataclass
-from distopf.utils.utils import (
+from distopf.utils import (
     handle_branch_input,
     handle_bus_input,
     handle_gen_input,
     handle_cap_input,
     handle_reg_input,
     handle_bat_input,
-    handle_loadshape_input,
+    handle_schedules_input,
 )
 
 
@@ -35,7 +35,7 @@ class Case:
         self.cap_data = handle_cap_input(cap_data)
         self.reg_data = handle_reg_input(reg_data)
         self.bat_data = handle_bat_input(bat_data)
-        self.schedules = handle_loadshape_input(schedules)
+        self.schedules = handle_schedules_input(schedules)
         self.start_step = start_step
         self.n_steps = n_steps
         self.delta_t = delta_t  # hours per step

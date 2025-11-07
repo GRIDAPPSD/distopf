@@ -7,7 +7,7 @@ from numpy import sqrt, zeros
 from scipy.sparse import csr_array, lil_array  # type: ignore
 import distopf as opf
 import warnings
-from distopf.utils.utils import (
+from distopf.utils import (
     handle_branch_input,
     handle_bus_input,
     handle_gen_input,

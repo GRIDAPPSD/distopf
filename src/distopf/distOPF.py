@@ -40,7 +40,7 @@ from distopf.matrix_models.objectives import (
     gradient_curtail,
 )
 from distopf.plot import plot_network, plot_voltages, plot_power_flows, plot_gens
-from distopf.utils.utils import (
+from distopf.utils import (
     handle_branch_input,
     handle_bus_input,
     handle_gen_input,
