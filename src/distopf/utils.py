@@ -46,8 +46,8 @@ def handle_gen_input(gen_data: Optional[pd.DataFrame]) -> pd.DataFrame:
                 "control_variable",
             ]
         )
-    if f"control_variable" not in gen_data.columns:
-        gen_data[f"control_variable"] = ""
+    if "control_variable" not in gen_data.columns:
+        gen_data["control_variable"] = ""
     gen = gen_data.sort_values(by="id", ignore_index=True)
     gen.index = gen.id.to_numpy() - 1
     return gen
@@ -88,9 +88,9 @@ def handle_reg_input(reg_data: Optional[pd.DataFrame]) -> pd.DataFrame:
     reg = reg_data.sort_values(by="tb", ignore_index=True)
     reg.index = reg.tb.to_numpy() - 1
     for ph in "abc":
-        if f"tap_{ph}" in reg.columns and not f"ratio_{ph}" in reg.columns:
+        if f"tap_{ph}" in reg.columns and f"ratio_{ph}" not in reg.columns:
             reg[f"ratio_{ph}"] = 1 + 0.00625 * reg[f"tap_{ph}"]
-        elif f"ratio_{ph}" in reg.columns and not f"tap_{ph}" in reg.columns:
+        elif f"ratio_{ph}" in reg.columns and f"tap_{ph}" not in reg.columns:
             reg[f"tap_{ph}"] = (reg[f"ratio_{ph}"] - 1) / 0.00625
         elif f"ratio_{ph}" in reg.columns and f"tap_{ph}" in reg.columns:
             reg[f"ratio_{ph}"] = 1 + 0.00625 * reg[f"tap_{ph}"]
@@ -106,7 +106,7 @@ def handle_branch_input(branch_data: Optional[pd.DataFrame]) -> pd.DataFrame:
     if branch_data is None:
         raise ValueError("Branch data must be provided.")
     branch = branch_data.sort_values(by="tb", ignore_index=True)
-    branch = branch.loc[branch.status != "OPEN", :]
+    branch = pd.DataFrame(branch.loc[branch.status != "OPEN", :])
     return branch
 
 
@@ -140,6 +140,11 @@ def handle_bus_input(bus_data: Optional[pd.DataFrame]) -> pd.DataFrame:
         "longitude": float,
         "load_shape": str,
     }
+    if "load_shape" not in bus_data.columns:
+        bus_data["load_shape"] = "default"
+    for c, t in type_dict.items():
+        if c not in bus_data.columns:
+            bus_data[c] = t()
     bus = bus_data.astype(type_dict)
     bus = bus_data.sort_values(by="id", ignore_index=True)
     bus.index = bus.id.to_numpy() - 1

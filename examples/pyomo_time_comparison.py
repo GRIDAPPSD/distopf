@@ -1,36 +1,40 @@
 import distopf as opf
 import pyomo.environ as pyo
 from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.importer import Case, create_case
+from distopf.importer import create_case
 from distopf.pyomo_models import constraints
 from distopf.pyomo_models.results import OpfResult
 from distopf import (
     plot_voltages,
-    plot_gens,
-    plot_network,
-    plot_polar,
+    # plot_gens,
+    # plot_network,
+    # plot_polar,
 )
-import distopf as opf
+from distopf.matrix_models.multiperiod.solvers import cp_obj_loss, cvxpy_solve
+# from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP
+from distopf.matrix_models.multiperiod.lindist_loads_mp import LinDistMPL
 from time import perf_counter
 
 t0 = perf_counter()
-case_matrix = opf.DistOPFCase(
-    data_path=opf.CASES_DIR / "csv" / "ieee123_30der",
-    objective_function=opf.cp_obj_loss,
-    control_variable="PQ",
-)
-case = create_case(data_path=opf.CASES_DIR / "csv" / "ieee123_30der")
+case = create_case(data_path=opf.CASES_DIR / "csv" / "ieee123_30der", n_steps=1, start_step=12)
+# case.bus_data.v_max = 2
+# case.bus_data.v_min = 0
+case.schedules.default = 1
+case.schedules.PV = 1
 case.gen_data.control_variable = "PQ"
-matrix_model = opf.LinDistModelL(
-    case.branch_data, case.bus_data, case.gen_data, case.cap_data, case.reg_data
+matrix_model = LinDistMPL(
+    case=case
 )
 t1 = perf_counter()
-results_matrix = opf.cvxpy_solve(matrix_model, opf.cp_obj_loss)
+results_matrix = cvxpy_solve(matrix_model, obj_func=cp_obj_loss)
 t2 = perf_counter()
 print(f"Objective value: {results_matrix.fun}")
-# case_matrix.plot_voltages().show(renderer="browser")
+v = matrix_model.get_voltages(results_matrix.x)
+p_gen = matrix_model.get_p_gens(results_matrix.x)
+q_gen = matrix_model.get_q_gens(results_matrix.x)
+# opf.plot_voltages(v).show(renderer="browser")
 # case_matrix.plot_power_flows().show(renderer="browser")
-# plot_gens(case_matrix.p_gens, case_matrix.q_gens).show(renderer="browser")
+# opf.plot_gens(p_gen, q_gen).show(renderer="browser")
 # plot_polar(case_matrix.p_gens, case_matrix.q_gens).show(renderer="browser")
 # case_matrix.plot_network(show_reactive_power=True).show(renderer="browser")
 t3 = perf_counter()
@@ -86,7 +90,7 @@ if results.solver.status == pyo.SolverStatus.ok:
     print("Optimization successful!")
     print(f"Objective value: {pyo.value(model.objective)}")
     # # data = get_all_results(model, case)
-    # res = OpfResult(model)
+    res = OpfResult(model)
     # s = res.p_flow.copy()
     # s = s.drop(["a", "b", "c"], axis=1)
     # s["a"] = res.p_flow.a + 1j * res.q_flow.a
@@ -94,7 +98,7 @@ if results.solver.status == pyo.SolverStatus.ok:
     # s["c"] = res.p_flow.c + 1j * res.q_flow.c
     # s["tb"] = s["id"]
     # s["fb"] = s["tb"].map(model.from_bus_map)
-    # plot_voltages(res.voltages, t=0).show(renderer="browser")
+    plot_voltages(res.voltages, t=0).show(renderer="browser")
     # plot_gens(res.p_flow, res.q_flow).show(renderer="browser")
     # plot_polar(res.p_flow, res.q_flow).show(renderer="browser")
     # plot_gens(res.p_gen, res.q_gen).show(renderer="browser")
@@ -112,11 +116,11 @@ if results.solver.status == pyo.SolverStatus.ok:
 else:
     print("Optimization failed!")
 
-print(f"Matrix solve:")
+print("Matrix solve:")
 print(f" - setup time: {t1 - t0}")
 print(f" - solve time: {t2 - t1}")
 print(f" - total time: {t2 - t0}")
-print(f"Pyomo solve:")
+print("Pyomo solve:")
 print(f" - setup time: {t4 - t3}")
 print(f" - solve time: {t5 - t4}")
 print(f" - total time: {t5 - t3}")

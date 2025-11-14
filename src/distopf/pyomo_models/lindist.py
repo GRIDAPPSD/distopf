@@ -1,11 +1,9 @@
 from enum import IntEnum
-import pyomo.environ as pyo
+import pyomo.environ as pyo  # type: ignore
 from typing import Tuple, List
 import pandas as pd
 from distopf.importer import Case
 from distopf.pyomo_models.protocol import LindistModelProtocol
-
-
 
 
 class ControlVariable(IntEnum):
@@ -18,7 +16,7 @@ class ControlVariable(IntEnum):
 CONTROL_VARIABLE_MAP = {"": 0, "Q": 1, "P": 2, "PQ": 3}
 
 
-def _create_phase_tuples(df: pd.DataFrame, id_col: str = "id") -> List[Tuple[str, str]]:
+def _create_phase_tuples(df: pd.DataFrame, id_col: str = "id") -> List[Tuple[int, str]]:
     """Create (id, phase) tuples from dataframe with phases column"""
     result = []
     for _, row in df.iterrows():
@@ -95,10 +93,10 @@ def _create_load_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             load_shape = getattr(row, "load_shape", "default")
             for t in m.time_set:
                 if load_shape in case.schedules.columns:
-                    load_mult_p = load_mult_q = case.schedules.at[t, load_shape]
+                    load_mult_p = load_mult_q = case.schedules.at[t, load_shape]  # type: ignore
                 elif f"{load_shape}.{phase}.p" in case.schedules.columns:
-                    load_mult_p = case.schedules.at[t, f"{load_shape}.{phase}.p"]
-                    load_mult_q = case.schedules.at[t, f"{load_shape}.{phase}.q"]
+                    load_mult_p = case.schedules.at[t, f"{load_shape}.{phase}.p"]  # type: ignore
+                    load_mult_q = case.schedules.at[t, f"{load_shape}.{phase}.q"]  # type: ignore
                 load_p_data[(row.id, phase, t)] = p_load * load_mult_p
                 load_q_data[(row.id, phase, t)] = q_load * load_mult_q
 
@@ -320,8 +318,8 @@ def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             q_bat_max_data[(row.id, phase)] = getattr(row, "q_max", s_rated) / n_phases
             # Nominal generation values
             for t in m.time_set:
-                p_bat_data[(row.id, phase, t)] = getattr(row, f"p", 0.0) / n_phases
-                q_bat_data[(row.id, phase, t)] = getattr(row, f"q", 0.0) / n_phases
+                p_bat_data[(row.id, phase, t)] = getattr(row, "p", 0.0) / n_phases
+                q_bat_data[(row.id, phase, t)] = getattr(row, "q", 0.0) / n_phases
 
     m.p_bat_nom = pyo.Param(
         m.bat_phase_set,
@@ -484,7 +482,9 @@ def create_lindist_model(case: Case) -> LindistModelProtocol:
     m.p_gen = pyo.Var(m.gen_phase_set, m.time_set, domain=pyo.NonNegativeReals)
     m.q_gen = pyo.Var(m.gen_phase_set, m.time_set, initialize=0)
     m.q_cap = pyo.Var(m.cap_phase_set, m.time_set)
-    m.v2_reg = pyo.Var(m.reg_phase_set, m.time_set, domain=pyo.NonNegativeReals, initialize=1)
+    m.v2_reg = pyo.Var(
+        m.reg_phase_set, m.time_set, domain=pyo.NonNegativeReals, initialize=1
+    )
     m.p_load = pyo.Var(m.bus_phase_set, m.time_set)
     m.q_load = pyo.Var(m.bus_phase_set, m.time_set)
 

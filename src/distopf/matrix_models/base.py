@@ -6,7 +6,6 @@ import pandas as pd
 from numpy import sqrt, zeros
 from scipy.sparse import csr_array, lil_array  # type: ignore
 import distopf as opf
-import warnings
 from distopf.utils import (
     handle_branch_input,
     handle_bus_input,
@@ -721,7 +720,7 @@ class LinDistBase(BaseModel):
                     continue
                 pg = self.idx("pg", j, a)
                 qg = self.idx("qg", j, a)
-                s_rated = self.gen.at[j, f"s{a}_max"]
+                s_rated: float = self.gen.at[j, f"s{a}_max"]  # type: ignore
                 coef = sqrt(2) - 1  # ~=0.4142
                 # Right half plane. Positive P
                 # limit for small +P and large +Q
@@ -809,45 +808,85 @@ class LinDistBase(BaseModel):
                 x[self.x_maps[ph].pij] + 1j * x[self.x_maps[ph].qij]
             )
         return s_df
+    
+    def get_p_flows(self, x):
+        df = pd.DataFrame(
+            columns=["fb", "tb", "from_name", "to_name", "a", "b", "c"],
+            index=range(2, self.nb + 1),
+        )
+        df["a"] = df["a"].astype(float)
+        df["b"] = df["b"].astype(float)
+        df["c"] = df["c"].astype(float)
+        for ph in "abc":
+            fb_idxs = self.x_maps[ph].bi.to_numpy()
+            fb_names = self.bus.name[fb_idxs].to_numpy()
+            tb_idxs = self.x_maps[ph].bj.to_numpy()
+            tb_names = self.bus.name[tb_idxs].to_numpy()
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "fb"] = fb_idxs + 1
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "id"] = tb_idxs + 1
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "from_name"] = fb_names
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "name"] = tb_names
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, ph] = x[self.x_maps[ph].pij]
+        return df
+    
+    def get_q_flows(self, x):
+        df = pd.DataFrame(
+            columns=["fb", "tb", "from_name", "to_name", "a", "b", "c"],
+            index=range(2, self.nb + 1),
+        )
+        df["a"] = df["a"].astype(float)
+        df["b"] = df["b"].astype(float)
+        df["c"] = df["c"].astype(float)
+        for ph in "abc":
+            fb_idxs = self.x_maps[ph].bi.to_numpy()
+            fb_names = self.bus.name[fb_idxs].to_numpy()
+            tb_idxs = self.x_maps[ph].bj.to_numpy()
+            tb_names = self.bus.name[tb_idxs].to_numpy()
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "fb"] = fb_idxs + 1
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "id"] = tb_idxs + 1
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "from_name"] = fb_names
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "name"] = tb_names
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, ph] = x[self.x_maps[ph].qij]
+        return df
 
-    def update(
-        self,
-        bus_data: Optional[pd.DataFrame] = None,
-        gen_data: Optional[pd.DataFrame] = None,
-        cap_data: Optional[pd.DataFrame] = None,
-        reg_data: Optional[pd.DataFrame] = None,
-    ):
-        # TODO: update is untested!
-        warnings.warn("update method is untested!")
-        if bus_data is not None:
-            self.bus = handle_bus_input(bus_data)
-        if gen_data is not None:
-            self.gen = handle_gen_input(gen_data)
-        if cap_data is not None:
-            self.cap = handle_cap_input(cap_data)
-        if reg_data is not None:
-            self.reg = handle_reg_input(reg_data)
+    # def update(
+    #     self,
+    #     bus_data: Optional[pd.DataFrame] = None,
+    #     gen_data: Optional[pd.DataFrame] = None,
+    #     cap_data: Optional[pd.DataFrame] = None,
+    #     reg_data: Optional[pd.DataFrame] = None,
+    # ):
+    #     # TODO: update is untested!
+    #     warnings.warn("update method is untested!")
+    #     if bus_data is not None:
+    #         self.bus = handle_bus_input(bus_data)
+    #     if gen_data is not None:
+    #         self.gen = handle_gen_input(gen_data)
+    #     if cap_data is not None:
+    #         self.cap = handle_cap_input(cap_data)
+    #     if reg_data is not None:
+    #         self.reg = handle_reg_input(reg_data)
 
-        a_eq = lil_array(self.a_eq)
-        for j in range(1, self.nb):
-            for ph in ["abc", "bca", "cab"]:
-                a, b, c = ph[0], ph[1], ph[2]
-                if not self.phase_exists(a, j):
-                    continue
-                if bus_data is not None:
-                    a_eq, self.b_eq = self.add_swing_voltage_model(
-                        a_eq, self.b_eq, j, a
-                    )
-                    a_eq, self.b_eq = self.add_load_model(a_eq, self.b_eq, j, a)
-                if gen_data is not None:
-                    a_eq, self.b_eq = self.add_generator_model(a_eq, self.b_eq, j, a)
-                if cap_data is not None:
-                    a_eq, self.b_eq = self.add_capacitor_model(a_eq, self.b_eq, j, a)
-                if reg_data is not None:
-                    a_eq, self.b_eq = self.add_regulator_model(a_eq, self.b_eq, j, a)
-        self.a_eq = csr_array(a_eq)
-        self.a_ub, self.b_ub = self.create_inequality_constraints()
-        self.bounds = self.init_bounds()
-        self.bounds_tuple = list(map(tuple, self.bounds))
-        self.x_min = self.bounds[:, 0]
-        self.x_max = self.bounds[:, 1]
+    #     a_eq = lil_array(self.a_eq)
+    #     for j in range(1, self.nb):
+    #         for ph in ["abc", "bca", "cab"]:
+    #             a, b, c = ph[0], ph[1], ph[2]
+    #             if not self.phase_exists(a, j):
+    #                 continue
+    #             if bus_data is not None:
+    #                 a_eq, self.b_eq = self.add_swing_voltage_model(
+    #                     a_eq, self.b_eq, j, a
+    #                 )
+    #                 a_eq, self.b_eq = self.add_load_model(a_eq, self.b_eq, j, a)
+    #             if gen_data is not None:
+    #                 a_eq, self.b_eq = self.add_generator_model(a_eq, self.b_eq, j, a)
+    #             if cap_data is not None:
+    #                 a_eq, self.b_eq = self.add_capacitor_model(a_eq, self.b_eq, j, a)
+    #             if reg_data is not None:
+    #                 a_eq, self.b_eq = self.add_regulator_model(a_eq, self.b_eq, j, a)
+    #     self.a_eq = csr_array(a_eq)
+    #     self.a_ub, self.b_ub = self.create_inequality_constraints()
+    #     self.bounds = self.init_bounds()
+    #     self.bounds_tuple = list(map(tuple, self.bounds))
+    #     self.x_min = self.bounds[:, 0]
+    #     self.x_max = self.bounds[:, 1]

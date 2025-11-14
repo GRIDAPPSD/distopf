@@ -1,8 +1,9 @@
 from functools import cache
 import warnings
-from typing import Optional, Tuple
+from typing import Optional
 import networkx as nx
 import numpy as np
+from numpy.typing import NDArray
 import pandas as pd
 from numpy import sqrt, zeros
 from scipy.sparse import csr_array, lil_array, vstack  # type: ignore
@@ -44,6 +45,8 @@ class BaseModelMP:
         DataFrame containing PV profile of 1h interval for 24h
     n_steps : int,
         Number of time intervals for multi period optimization. Default is 24.
+    case : Case,
+        Case object containing all of the parameters. Alternative to listing seperately.
 
     """
 
@@ -59,18 +62,31 @@ class BaseModelMP:
         start_step: int = 0,
         n_steps: int = 24,
         delta_t: float = 1,  # hours per step
+        case: Optional[Case] = None,
     ):
         # ~~~~~~~~~~~~~~~~~~~~ Load Data Frames ~~~~~~~~~~~~~~~~~~~~
-        self.branch = handle_branch_input(branch_data)
-        self.bus = handle_bus_input(bus_data)
-        self.gen = handle_gen_input(gen_data)
-        self.cap = handle_cap_input(cap_data)
-        self.reg = handle_reg_input(reg_data)
-        self.bat = handle_bat_input(bat_data)
-        self.schedules = handle_schedules_input(schedules)
-        self.start_step = start_step
-        self.n_steps = n_steps
-        self.delta_t = delta_t  # hours per step
+        if case:
+            self.branch = case.branch_data
+            self.bus = case.bus_data
+            self.gen = case.gen_data
+            self.cap = case.cap_data
+            self.reg = case.reg_data
+            self.bat = case.bat_data
+            self.schedules = case.schedules
+            self.start_step = case.start_step
+            self.n_steps = case.n_steps
+            self.delta_t = case.delta_t  # hours per step
+        else:
+            self.branch = handle_branch_input(branch_data)
+            self.bus = handle_bus_input(bus_data)
+            self.gen = handle_gen_input(gen_data)
+            self.cap = handle_cap_input(cap_data)
+            self.reg = handle_reg_input(reg_data)
+            self.bat = handle_bat_input(bat_data)
+            self.schedules = handle_schedules_input(schedules)
+            self.start_step = start_step
+            self.n_steps = n_steps
+            self.delta_t = delta_t  # hours per step
 
         # ~~~~~~~~~~~~~~~~~~~~ prepare data ~~~~~~~~~~~~~~~~~~~~
         self.nb = len(self.bus.id)
@@ -162,14 +178,14 @@ class BaseModelMP:
         self.soc_map: dict[int, dict[str, pd.Series]] = {}
         self.vx_map: dict[int, dict[str, pd.Series]] = {}
         # ~~~~~~~~~~~~~~~~~~~~ initialize Aeq and beq ~~~~~~~~~~~~~~~~~~~~
-        self.a_eq: csr_array = csr_array([[0]])
-        self.b_eq: np.ndarray = zeros(0)
-        self.a_ub: csr_array = csr_array([[0]])
-        self.b_ub: np.ndarray = zeros(0)
-        self.bounds: np.ndarray = zeros(0)
+        # self.a_ineq = csr_array(([0], ([0], [0])), shape=(1, 1))
+        # self.b_ineq = zeros(0)
+        self.a_ub = csr_array([[0]])
+        self.b_ub = zeros(0)
+        self.bounds = zeros(0)
         self.bounds_tuple: list[tuple] = []
-        self.x_min: np.ndarray = zeros(0)
-        self.x_max: np.ndarray = zeros(0)
+        self.x_min = zeros(0)
+        self.x_max = zeros(0)
         self.is_built = False
 
     @staticmethod
@@ -207,8 +223,8 @@ class BaseModelMP:
             "bc": csr_array((np.r_[branch.xbc, branch.xbc], (row, col))),
             "cc": csr_array((np.r_[branch.xcc, branch.xcc], (row, col))),
         }
-        return r, x    
-    
+        return r, x
+
     @property
     def branch_data(self):
         return self.branch
@@ -294,7 +310,7 @@ class LinDistBaseMP(BaseModelMP):
         self.initialize_variable_index_pointers()
         self.a_eq, self.b_eq = self.create_model()
         self.a_ub, self.b_ub = self.create_inequality_constraints()
-        self.bounds: np.ndarray = self.init_bounds()
+        self.bounds = self.init_bounds()
         self.bounds_tuple = list(map(tuple, self.bounds))
         self.x_min = self.bounds[:, 0]
         self.x_max = self.bounds[:, 1]
@@ -303,7 +319,7 @@ class LinDistBaseMP(BaseModelMP):
     @staticmethod
     def _variable_tables(
         branch: pd.DataFrame, n_x: int = 0
-    ) -> Tuple[dict[str, pd.DataFrame], int]:
+    ) -> tuple[dict[str, pd.DataFrame], int]:
         """
         Constructs tables to map branch power variables to indices within the
         optimization variable vector.
@@ -349,7 +365,7 @@ class LinDistBaseMP(BaseModelMP):
     @staticmethod
     def _add_device_variables(
         n_x: int, device_buses: dict
-    ) -> Tuple[dict[str, pd.Series], int]:
+    ) -> tuple[dict[str, pd.Series], int]:
         """
         Adds device-related variables (e.g., voltage, power load) to the
         optimization problem, indexed by the phase.
@@ -396,7 +412,7 @@ class LinDistBaseMP(BaseModelMP):
         n_x = n_x + n
         return device_maps, n_x
 
-    def init_bounds(self) -> np.ndarray:
+    def init_bounds(self) -> NDArray:
         """
         Initializes the variable bounds for the optimization problem.
 
@@ -432,8 +448,8 @@ class LinDistBaseMP(BaseModelMP):
         return bounds
 
     def additional_limits(
-        self, x_lim_lower: np.ndarray, x_lim_upper: np.ndarray, t: int = 0
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        self, x_lim_lower: NDArray, x_lim_upper: NDArray, t: int = 0
+    ) -> tuple[NDArray, NDArray]:
         """
         User added limits function. Override this function to add custom variable limits.
         Parameters
@@ -466,7 +482,7 @@ class LinDistBaseMP(BaseModelMP):
 
     def add_voltage_limits(
         self, x_lim_lower: np.ndarray, x_lim_upper: np.ndarray, t: int = 0
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         for a in "abc":
@@ -483,7 +499,7 @@ class LinDistBaseMP(BaseModelMP):
 
     def add_generator_limits(
         self, x_lim_lower: np.ndarray, x_lim_upper: np.ndarray, t: int = 0
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         gen_mult = 1
@@ -499,7 +515,7 @@ class LinDistBaseMP(BaseModelMP):
             q_max_manual = self.gen.get(f"q{a}_max", np.ones_like(q_min) * 100e3)
             q_min_manual = self.gen.get(f"q{a}_min", np.ones_like(q_min) * -100e3)
             for j in self.gen_buses[a]:
-                mode = self.gen.loc[j, f"control_variable"]
+                mode = self.gen.loc[j, "control_variable"]
                 pg = self.idx("pg", j, a, t)
                 qg = self.idx("qg", j, a, t)
                 # active power bounds
@@ -517,7 +533,7 @@ class LinDistBaseMP(BaseModelMP):
 
     def add_battery_discharging_limits(
         self, x_lim_lower: np.ndarray, x_lim_upper: np.ndarray, t: int = 0
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         phases = self.bat.loc[:, "phases"]
@@ -527,13 +543,13 @@ class LinDistBaseMP(BaseModelMP):
                 continue
             x_lim_lower[self.discharge_map[t][a]] = 0
             x_lim_upper[self.discharge_map[t][a]] = (
-                self.bat.loc[self.discharge_map[t][a].index, f"s_max"] / n_phases
+                self.bat.loc[self.discharge_map[t][a].index, "s_max"] / n_phases
             )
         return x_lim_lower, x_lim_upper
 
     def add_battery_charging_limits(
         self, x_lim_lower: np.ndarray, x_lim_upper: np.ndarray, t: int = 0
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         phases = self.bat.loc[:, "phases"]
@@ -543,46 +559,46 @@ class LinDistBaseMP(BaseModelMP):
                 continue
             x_lim_lower[self.charge_map[t][a]] = 0
             x_lim_upper[self.charge_map[t][a]] = (
-                self.bat.loc[self.charge_map[t][a].index, f"s_max"] / n_phases
+                self.bat.loc[self.charge_map[t][a].index, "s_max"] / n_phases
             )
         return x_lim_lower, x_lim_upper
 
     def add_battery_soc_limits(
         self, x_lim_lower: np.ndarray, x_lim_upper: np.ndarray, t: int = 0
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         for a in "abc":
             if not self.phase_exists(a):
                 continue
-            max_soc = self.bat.loc[self.soc_map[t][a].index, f"max_soc"]
-            min_soc = self.bat.loc[self.soc_map[t][a].index, f"min_soc"]
+            max_soc = self.bat.loc[self.soc_map[t][a].index, "max_soc"]
+            min_soc = self.bat.loc[self.soc_map[t][a].index, "min_soc"]
             max_soc_energy = (
-                self.bat.loc[self.soc_map[t][a].index, f"energy_capacity"] * max_soc
+                self.bat.loc[self.soc_map[t][a].index, "energy_capacity"] * max_soc
             )
             min_soc_energy = (
-                self.bat.loc[self.soc_map[t][a].index, f"energy_capacity"] * min_soc
+                self.bat.loc[self.soc_map[t][a].index, "energy_capacity"] * min_soc
             )
             x_lim_upper[self.soc_map[t][a]] = max_soc_energy
             x_lim_lower[self.soc_map[t][a]] = min_soc_energy
         return x_lim_lower, x_lim_upper
 
     @cache
-    def branch_into_j(self, var: str, j: int, phase: str, t: int = 0) -> np.ndarray:
+    def branch_into_j(self, var: str, j: int, phase: str, t: int = 0) -> list[int]:
         if t < self.start_step:
             t = self.start_step
         idx = self.x_maps[t][phase].loc[self.x_maps[t][phase].bj == j, var].to_numpy()
-        return idx[~np.isnan(idx)].astype(int)
+        return idx[~np.isnan(idx)].astype(int).tolist()
 
     @cache
-    def branches_out_of_j(self, var: str, j: int, phase: str, t: int = 0) -> np.ndarray:
+    def branches_out_of_j(self, var: str, j: int, phase: str, t: int = 0) -> list[int]:
         if t < self.start_step:
             t = self.start_step
         idx = self.x_maps[t][phase].loc[self.x_maps[t][phase].bi == j, var].to_numpy()
-        return idx[~np.isnan(idx)].astype(int)
+        return idx[~np.isnan(idx)].astype(int).tolist()
 
     @cache
-    def idx(self, var: str, node_j: int, phase: str, t: int = 0) -> np.ndarray | list:
+    def idx(self, var: str, node_j: int, phase: str, t: int = 0) -> list[int] | int:
         if t < self.start_step:
             t = self.start_step
         if t in self.x_maps.keys() and var in self.x_maps[t][phase].columns:
@@ -592,25 +608,25 @@ class LinDistBaseMP(BaseModelMP):
         if var in ["qjk"]:  # indexes of all branch reactive power out of node j
             return self.branches_out_of_j("qij", node_j, phase, t=t)
         if var in ["v"]:  # active power generation at node
-            return self.v_map[t][phase].get(node_j, [])
+            return self.v_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["pg", "p_gen"]:  # active power generation at node
-            return self.pg_map[t][phase].get(node_j, [])
+            return self.pg_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["qg", "q_gen"]:  # reactive power generation at node
-            return self.qg_map[t][phase].get(node_j, [])
+            return self.qg_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["qc", "q_cap"]:  # reactive power injection by capacitor
-            return self.qc_map[t][phase].get(node_j, [])
+            return self.qc_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["ch", "charge"]:
-            return self.charge_map[t][phase].get(node_j, [])
+            return self.charge_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["dis", "discharge"]:
-            return self.discharge_map[t][phase].get(node_j, [])
+            return self.discharge_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["pb"]:  # active power injection by battery
-            return self.pb_map[t][phase].get(node_j, [])
+            return self.pb_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["qb"]:  # reactive power injection by battery
-            return self.qb_map[t][phase].get(node_j, [])
+            return self.qb_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["soc"]:
-            return self.soc_map[t][phase].get(node_j, [])
+            return self.soc_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["vx"]:
-            return self.vx_map[t][phase].get(node_j, [])
+            return self.vx_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         ix = self.additional_variable_idx(var, node_j, phase, t=t)
         if ix is not None:
             return ix
@@ -642,7 +658,7 @@ class LinDistBaseMP(BaseModelMP):
             return self.x_maps[t][phase].shape[0] > 0
         return len(self.idx("bj", index, phase, t=t)) > 0
 
-    def create_model(self) -> Tuple[csr_array, np.ndarray]:
+    def create_model(self) -> tuple[csr_array, np.ndarray]:
         """
         Constructs the equality constraint matrices for the linear optimization
         problem based on power flow equations.
@@ -681,20 +697,13 @@ class LinDistBaseMP(BaseModelMP):
 
     def add_power_flow_model(
         self, a_eq: lil_array, b_eq, j, phase, t=0
-    ) -> Tuple[lil_array, np.ndarray]:
+    ) -> tuple[lil_array, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         pij = self.idx("pij", j, phase, t=t)
         qij = self.idx("qij", j, phase, t=t)
         pjk = self.idx("pjk", j, phase, t=t)
         qjk = self.idx("qjk", j, phase, t=t)
-        p_discharge_j = self.idx("discharge", j, phase, t=t)
-        p_charge_j = self.idx("charge", j, phase, t=t)
-        pg = self.idx("pg", j, phase, t=t)
-        qg = self.idx("qg", j, phase, t=t)
-        qc = self.idx("q_cap", j, phase, t=t)
-        pb = self.idx("pb", j, phase, t=t)
-        qb = self.idx("qb", j, phase, t=t)
         # Set P equation variable coefficients in a_eq
         a_eq[pij, pij] = 1
         a_eq[pij, pjk] = -1
@@ -706,7 +715,7 @@ class LinDistBaseMP(BaseModelMP):
 
     def add_voltage_drop_model(
         self, a_eq: lil_array, b_eq, j, a, b, c, t=0
-    ) -> Tuple[lil_array, np.ndarray]:
+    ) -> tuple[lil_array, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         if self.reg is not None:
@@ -741,7 +750,7 @@ class LinDistBaseMP(BaseModelMP):
 
     def add_regulator_model(
         self, a_eq: lil_array, b_eq, j, a, t=0
-    ) -> Tuple[lil_array, np.ndarray]:
+    ) -> tuple[lil_array, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         if self.reg is None:
@@ -769,23 +778,23 @@ class LinDistBaseMP(BaseModelMP):
 
     def add_swing_voltage_model(
         self, a_eq: lil_array, b_eq: np.ndarray, j: int, a: str, t: int = 0
-    ) -> Tuple[lil_array, np.ndarray]:
+    ) -> tuple[lil_array, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         i = self.idx("bi", j, a, t=t)[0]  # get the upstream node
         vi = self.idx("v", i, a, t=t)
         # Set V equation variable coefficients in a_eq and constants in b_eq
         if self.bus.bus_type[i] == opf.SWING_BUS:  # Swing bus
-            v_source = self.bus.at[i, f"v_{a}"]
+            v_source = float(self.bus.at[i, f"v_{a}"])
             if f"v_{a}" in self.schedules:
-                v_source = self.schedules.at[t, f"v_{a}"]
+                v_source = float(self.schedules.at[t, f"v_{a}"])
             a_eq[vi, vi] = 1
             b_eq[vi] = v_source**2
         return a_eq, b_eq
 
     def add_generator_model(
         self, a_eq: lil_array, b_eq, j, a, t=0
-    ) -> Tuple[lil_array, np.ndarray]:
+    ) -> tuple[lil_array, np.ndarray]:
         if j not in self.gen.index:
             return a_eq, b_eq
         if t < self.start_step:
@@ -815,7 +824,7 @@ class LinDistBaseMP(BaseModelMP):
 
     def add_load_model(
         self, a_eq: lil_array, b_eq, j, a, t=0
-    ) -> Tuple[lil_array, np.ndarray]:
+    ) -> tuple[lil_array, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         pij = self.idx("pij", j, a, t=t)
@@ -843,7 +852,7 @@ class LinDistBaseMP(BaseModelMP):
 
     def add_capacitor_model(
         self, a_eq: lil_array, b_eq, j, a, t=0
-    ) -> Tuple[lil_array, np.ndarray]:
+    ) -> tuple[lil_array, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
         q_cap_nom = 0
@@ -867,7 +876,7 @@ class LinDistBaseMP(BaseModelMP):
         b: str,
         c: str,
         t: int = 0,
-    ) -> Tuple[lil_array, np.ndarray]:
+    ) -> tuple[lil_array, np.ndarray]:
         if j not in self.bat.index:
             return a_eq, b_eq
         if t < self.start_step:
@@ -880,10 +889,9 @@ class LinDistBaseMP(BaseModelMP):
         pb = self.idx("pb", j, a, t=t)
         qb = self.idx("qb", j, a, t=t)
 
-        eta_c = self.bat[f"charge_efficiency"].get(j, 1)
-        eta_d = self.bat[f"discharge_efficiency"].get(j, 1)
-        control_variable = self.bat[f"control_variable"].get(j, "P")
-        max_soc = self.bat["max_soc"].get(j, 0)
+        eta_c = self.bat["charge_efficiency"].get(j, 1)
+        eta_d = self.bat["discharge_efficiency"].get(j, 1)
+        control_variable = self.bat["control_variable"].get(j, "P")
         energy_capacity = self.bat["energy_capacity"].get(j, 0)
         start_soc = self.bat["start_soc"].get(j, 0.5)
         energy0 = energy_capacity * start_soc
@@ -921,7 +929,7 @@ class LinDistBaseMP(BaseModelMP):
             a_eq[energy, energy_prev] = -1
         return a_eq, b_eq
 
-    def create_battery_cyclie_limit_constraints(self) -> Tuple[csr_array, np.ndarray]:
+    def create_battery_cycle_limit_constraints(self) -> tuple[csr_array, np.ndarray]:
         # ########## Aineq and Bineq Formation ###########
         n_inequalities = 1
         n_rows_ineq = n_inequalities * self.n_bats
@@ -946,7 +954,7 @@ class LinDistBaseMP(BaseModelMP):
                 eq_idx += 1
         return csr_array(a_ineq), b_ineq
 
-    def create_inequality_constraints(self) -> Tuple[csr_array, np.ndarray]:
+    def create_inequality_constraints(self) -> tuple[csr_array, np.ndarray]:
         """
         Constructs the inequality constraint matrices.
         a_ub*x <= b_ub
@@ -958,15 +966,15 @@ class LinDistBaseMP(BaseModelMP):
         b_ub : np.ndarray
             Array representing the inequality constraint vector.
         """
-        a_bat, b_bat = self.create_battery_cyclie_limit_constraints()
+        # a_bat, b_bat = self.create_battery_cycle_limit_constraints()
         a_inv, b_inv = self.create_inverter_octagon_constraints()
-        a_therm, b_therm = self.create_octagon_thermal_constraints()
+        # a_therm, b_therm = self.create_octagon_thermal_constraints()
         a_bat8, b_bat8 = self.create_octagon_battery_constraints()
-        a_ub = vstack([a_inv, a_therm, a_bat8])  # , a_bat
-        b_ub = np.r_[b_inv, b_therm, b_bat8]  # , b_bat
+        a_ub = vstack([a_inv, a_bat8])  # a_therm, a_bat
+        b_ub = np.r_[b_inv, b_bat8]  # b_therm, b_bat
         return csr_array(a_ub), b_ub
 
-    def create_hexagon_constraints(self) -> Tuple[csr_array, np.ndarray]:
+    def create_hexagon_constraints(self) -> tuple[csr_array, np.ndarray]:
         """
         Use a hexagon to approximate the circular inequality constraint of an inverter.
         """
@@ -989,7 +997,7 @@ class LinDistBaseMP(BaseModelMP):
                         continue
                     pg = self.idx("pg", j, a, t=t)
                     qg = self.idx("qg", j, a, t=t)
-                    s_rated = self.gen.at[j, f"s{a}_max"]
+                    s_rated = float(self.gen.at[j, f"s{a}_max"])
                     coef = sqrt(3) / 3  # ~=0.5774
                     # Right half plane. Positive P
                     # limit for small +P and large +Q
@@ -1014,17 +1022,13 @@ class LinDistBaseMP(BaseModelMP):
                     # increment equation indices
                     for n_ineq in range(len(ineq)):
                         ineq[n_ineq] += len(ineq)
-
         return csr_array(a_ineq), b_ineq
 
-    def create_inverter_octagon_constraints(self) -> Tuple[csr_array, np.ndarray]:
+    def create_inverter_octagon_constraints(self) -> tuple[csr_array, np.ndarray]:
         """
         Use an octagon to approximate the circular inequality constraint of an inverter.
         """
-
-        # ########## Aineq and Bineq Formation ###########
         n_inequalities = 5
-
         n_rows_ineq = (
             n_inequalities
             * (len(np.where(self.gen.control_variable == opf.CONTROL_PQ)[0]) * 3)
@@ -1033,7 +1037,7 @@ class LinDistBaseMP(BaseModelMP):
         n_rows_ineq = max(n_rows_ineq, 1)
         a_ineq = lil_array((n_rows_ineq, self.n_x))
         b_ineq = zeros(n_rows_ineq)
-        ineq = list(range(n_inequalities))
+        ineq = list(range(n_inequalities))  # initialize equation indices
         for t in range(self.start_step, self.start_step + self.n_steps):
             for j in self.gen.index:
                 for a in "abc":
@@ -1043,7 +1047,7 @@ class LinDistBaseMP(BaseModelMP):
                         continue
                     pg = self.idx("pg", j, a, t=t)
                     qg = self.idx("qg", j, a, t=t)
-                    s_rated = self.gen.at[j, f"s{a}_max"]
+                    s_rated = float(self.gen.at[j, f"s{a}_max"])
                     coef = sqrt(2) - 1  # ~=0.4142
                     # Right half plane. Positive P
                     # limit for small +P and large +Q
@@ -1065,7 +1069,7 @@ class LinDistBaseMP(BaseModelMP):
                     # limit to right half plane
                     a_ineq[ineq[4], pg] = -1
                     b_ineq[ineq[4]] = 0
-
+                    # increment equation indices
                     for n_ineq in range(len(ineq)):
                         ineq[n_ineq] += len(ineq)
         return csr_array(a_ineq), b_ineq
@@ -1079,7 +1083,7 @@ class LinDistBaseMP(BaseModelMP):
         n_inequalities = 8
 
         n_rows_ineq = n_inequalities * (len(self.bat)) * self.n_steps
-        a_ineq = zeros((n_rows_ineq, self.n_x))
+        a_ineq = lil_array((n_rows_ineq, self.n_x))
         b_ineq = zeros(n_rows_ineq)
         ineq = list(range(n_inequalities))
         for t in range(self.start_step, self.start_step + self.n_steps):
@@ -1091,7 +1095,7 @@ class LinDistBaseMP(BaseModelMP):
                         continue
                     pb = self.idx("pb", j, a, t=t)
                     qb = self.idx("qb", j, a, t=t)
-                    s_rated = self.bat.at[j, f"s_max"] / len(self.bat.at[j, f"phases"])
+                    s_rated = self.bat.at[j, "s_max"] / len(self.bat.at[j, "phases"])
                     coef = sqrt(2) - 1  # ~=0.4142
                     # equation indexes
                     # Right half plane. Positive P
@@ -1139,6 +1143,12 @@ class LinDistBaseMP(BaseModelMP):
         """
 
         # ########## Aineq and Bineq Formation ###########
+        if (
+            "sa_max" not in self.branch.columns
+            or "sb_max" not in self.branch.columns
+            or "sc_max" not in self.branch.columns
+        ):
+            return lil_array((0, self.n_x)), zeros(0)
         n_inequalities = 8
 
         n_rows_ineq = (
@@ -1150,7 +1160,7 @@ class LinDistBaseMP(BaseModelMP):
             )
             * self.n_steps
         )
-        a_ineq = zeros((n_rows_ineq, self.n_x))
+        a_ineq = lil_array((n_rows_ineq, self.n_x))
         b_ineq = zeros(n_rows_ineq)
         ineq = list(range(n_inequalities))
         for t in range(self.start_step, self.start_step + self.n_steps):
@@ -1228,6 +1238,9 @@ class LinDistBaseMP(BaseModelMP):
                 df.loc[variable_map[t][a].index + 1, a] = x[variable_map[t][a]]
             df_list.append(df)
         df = pd.concat(df_list, axis=0).reset_index(drop=True)
+        df.a = df.a.astype(float)
+        df.b = df.b.astype(float)
+        df.c = df.c.astype(float)
         return df
 
     def get_device_variables_no_phases(self, x, variable_map):
@@ -1254,9 +1267,12 @@ class LinDistBaseMP(BaseModelMP):
         return df
 
     def get_voltages(self, x):
-        v_df = self.get_device_variables(x, self.v_map)
-        v_df.loc[:, ["a", "b", "c"]] = v_df.loc[:, ["a", "b", "c"]] ** 0.5
-        return v_df
+        df = self.get_device_variables(x, self.v_map)
+        df.loc[:, ["a", "b", "c"]] = df.loc[:, ["a", "b", "c"]] ** 0.5
+        df.a = df.a.astype(float)
+        df.b = df.b.astype(float)
+        df.c = df.c.astype(float)
+        return df
 
     def get_p_gens(self, x):
         return self.get_device_variables(x, self.pg_map)
@@ -1308,6 +1324,60 @@ class LinDistBaseMP(BaseModelMP):
             df_list.append(s_df)
         s_df = pd.concat(df_list, axis=0).reset_index(drop=True)
         return s_df
+
+    def get_p_flows(self, x):
+        df_list = []
+        for t in range(self.start_step, self.start_step + self.n_steps):
+            df = pd.DataFrame(
+                columns=["fb", "id", "from_name", "name", "t", "a", "b", "c"],
+                index=range(2, self.nb + 1),
+            )
+            df["a"] = df["a"].astype(float)
+            df["b"] = df["b"].astype(float)
+            df["c"] = df["c"].astype(float)
+            df.t = t
+            for ph in "abc":
+                fb_idxs = self.x_maps[t][ph].bi.to_numpy()
+                fb_names = self.bus.name[fb_idxs].to_numpy()
+                tb_idxs = self.x_maps[t][ph].bj.to_numpy()
+                tb_names = self.bus.name[tb_idxs].to_numpy()
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "fb"] = fb_idxs + 1
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "id"] = tb_idxs + 1
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "from_name"] = fb_names
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "name"] = tb_names
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, ph] = x[
+                    self.x_maps[t][ph].pij
+                ]
+            df_list.append(df)
+        df = pd.concat(df_list, axis=0).reset_index(drop=True)
+        return df
+
+    def get_q_flows(self, x):
+        df_list = []
+        for t in range(self.start_step, self.start_step + self.n_steps):
+            df = pd.DataFrame(
+                columns=["fb", "id", "from_name", "name", "t", "a", "b", "c"],
+                index=range(2, self.nb + 1),
+            )
+            df["a"] = df["a"].astype(float)
+            df["b"] = df["b"].astype(float)
+            df["c"] = df["c"].astype(float)
+            df.t = t
+            for ph in "abc":
+                fb_idxs = self.x_maps[t][ph].bi.to_numpy()
+                fb_names = self.bus.name[fb_idxs].to_numpy()
+                tb_idxs = self.x_maps[t][ph].bj.to_numpy()
+                tb_names = self.bus.name[tb_idxs].to_numpy()
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "fb"] = fb_idxs + 1
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "id"] = tb_idxs + 1
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "from_name"] = fb_names
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "name"] = tb_names
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, ph] = x[
+                    self.x_maps[t][ph].qij
+                ]
+            df_list.append(df)
+        df = pd.concat(df_list, axis=0).reset_index(drop=True)
+        return df
 
     def update(
         self,
@@ -1394,5 +1464,3 @@ class LinDistBaseMP(BaseModelMP):
         self.bounds_tuple = list(map(tuple, self.bounds))
         self.x_min = self.bounds[:, 0]
         self.x_max = self.bounds[:, 1]
-
-

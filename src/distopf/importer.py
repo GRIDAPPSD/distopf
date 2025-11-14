@@ -3,7 +3,6 @@ import pandas as pd
 from distopf.dss_importer import DSSToCSVConverter
 from distopf.cim_importer import CIMToCSVConverter
 from typing import Optional
-from dataclasses import dataclass
 from distopf.utils import (
     handle_branch_input,
     handle_bus_input,
@@ -190,8 +189,8 @@ def _detect_model_type(data_path: Path) -> str:
             # If there are DSS files, this might be a DSS directory
             # But our current implementation expects a single .dss file
             raise ValueError(
-                f"Directory contains .dss files but create_case() expects a single .dss file. "
-                f"Please specify the exact .dss file path instead of the directory."
+                "Directory contains .dss files but create_case() expects a single .dss file. "
+                "Please specify the exact .dss file path instead of the directory."
             )
 
         # Check for CIM files in directory
@@ -199,8 +198,8 @@ def _detect_model_type(data_path: Path) -> str:
         if xml_files:
             # Similar issue as with DSS
             raise ValueError(
-                f"Directory contains .xml files but create_case() expects a single .xml file. "
-                f"Please specify the exact .xml file path instead of the directory."
+                "Directory contains .xml files but create_case() expects a single .xml file. "
+                "Please specify the exact .xml file path instead of the directory."
             )
 
         raise ValueError(

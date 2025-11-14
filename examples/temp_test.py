@@ -1,5 +1,3 @@
-from typing import Generator
-import plotly.express as px
 from pyomo.core.base.var import VarData
 import distopf as opf
 import pyomo.environ as pyo
@@ -7,7 +5,6 @@ from distopf.pyomo_models.lindist import create_lindist_model
 from distopf.pyomo_models import constraints
 from distopf.pyomo_models.results import OpfResult
 from distopf.importer import create_case
-from pyomo.core.base.var import VarData
 from pyomo.core.expr.calculus.derivatives import differentiate
 
 

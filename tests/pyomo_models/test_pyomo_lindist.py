@@ -2,52 +2,30 @@ import pytest
 import pandas as pd
 import pyomo.environ as pyo
 import distopf as opf
-from distopf.pyomo_models.lindist_single import (
-    Case,
-    create_lindist_model,
-    add_voltage_bounds,
-    add_generator_bounds,
-)
-
-
-class TestCase:
-    """Test the Case dataclass"""
-
-    def test_case_creation_empty(self):
-        """Test creating an empty Case"""
-        case = Case()
-        assert case.branch_data is None
-        assert case.bus_data is None
-        assert case.gen_data is None
-        assert case.cap_data is None
-        assert case.reg_data is None
-
-    def test_case_creation_with_data(self):
-        """Test creating a Case with data"""
-        branch_data = pd.DataFrame({"fb": [1], "tb": [2]})
-        case = Case(branch_data=branch_data)
-        assert case.branch_data is not None
-        assert len(case.branch_data) == 1
+from distopf.pyomo_models.lindist import create_lindist_model
+from distopf.importer import Case, create_case
 
 
 @pytest.fixture
 def ieee13_case():
     """Fixture to load IEEE 13 test case"""
-    return opf.DistOPFCase(
-        data_path=opf.CASES_DIR / "csv" / "ieee13",
-        objective_functions=opf.cp_obj_loss,
-        control_variable="PQ",
-    )
+    # return opf.DistOPFCase(
+    #     data_path=opf.CASES_DIR / "csv" / "ieee13",
+    #     objective_functions=opf.cp_obj_loss,
+    #     control_variable="PQ",
+    # )
+    return create_case(data_path=opf.CASES_DIR / "csv" / "ieee13")
 
 
 @pytest.fixture
 def ieee123_30der_case():
     """Fixture to load IEEE 123 with 30 DER test case"""
-    return opf.DistOPFCase(
-        data_path=opf.CASES_DIR / "csv" / "ieee123_30der",
-        objective_functions=opf.cp_obj_loss,
-        control_variable="PQ",
-    )
+    # return opf.DistOPFCase(
+    #     data_path=opf.CASES_DIR / "csv" / "ieee123_30der",
+    #     objective_functions=opf.cp_obj_loss,
+    #     control_variable="PQ",
+    # )
+    return create_case(data_path=opf.CASES_DIR / "csv" / "ieee123_30der")
 
 
 @pytest.fixture
@@ -158,28 +136,75 @@ class TestCreateLinDistModel:
         # Check that model is created
         assert isinstance(model, pyo.ConcreteModel)
 
-        # Check sets exist
+        # ==================== SETS ====================
+        assert hasattr(model, "time_set")
         assert hasattr(model, "bus_set")
-        assert hasattr(model, "phase_set")
         assert hasattr(model, "swing_bus_set")
+        assert hasattr(model, "swing_phase_set")
         assert hasattr(model, "branch_set")
         assert hasattr(model, "phase_pair_set")
         assert hasattr(model, "bus_phase_set")
         assert hasattr(model, "branch_phase_set")
         assert hasattr(model, "gen_phase_set")
         assert hasattr(model, "cap_phase_set")
+        assert hasattr(model, "reg_phase_set")
+        assert hasattr(model, "bat_phase_set")
+        assert hasattr(model, "bat_set")
 
-        # Check parameters exist
+        # ==================== PARAMETERS ====================
+        assert hasattr(model, "delta_t")
+        assert hasattr(model, "start_step")
+        assert hasattr(model, "n_steps")
         assert hasattr(model, "r")
         assert hasattr(model, "x")
-
-        # Check variables exist
-        assert hasattr(model, "v")
+        assert hasattr(model, "p_load_nom")
+        assert hasattr(model, "q_load_nom")
+        assert hasattr(model, "cvr_p")
+        assert hasattr(model, "cvr_q")
+        assert hasattr(model, "p_gen_nom")
+        assert hasattr(model, "q_gen_nom")
+        assert hasattr(model, "s_rated")
+        assert hasattr(model, "q_gen_max")
+        assert hasattr(model, "q_gen_min")
+        assert hasattr(model, "gen_control_type")
+        assert hasattr(model, "q_cap_nom")
+        assert hasattr(model, "reg_ratio")
+        assert hasattr(model, "v_swing")
+        assert hasattr(model, "v_min")
+        assert hasattr(model, "v_max")
+        assert hasattr(model, "p_bat_nom")
+        assert hasattr(model, "q_bat_nom")
+        assert hasattr(model, "s_bat_rated")
+        assert hasattr(model, "q_bat_max")
+        assert hasattr(model, "q_bat_min")
+        assert hasattr(model, "bat_control_type")
+        assert hasattr(model, "energy_capacity")
+        assert hasattr(model, "soc_min")
+        assert hasattr(model, "soc_max")
+        assert hasattr(model, "start_soc")
+        assert hasattr(model, "charge_efficiency")
+        assert hasattr(model, "discharge_efficiency")
+        assert hasattr(model, "annual_cycle_limit")
+        assert hasattr(model, "battery_has_a_phase")
+        assert hasattr(model, "battery_has_b_phase")
+        assert hasattr(model, "battery_has_c_phase")
+        assert hasattr(model, "battery_has_phase")
+        assert hasattr(model, "battery_n_phases")
+        # ==================== VARIABLES ====================
+        assert hasattr(model, "v2")
+        assert hasattr(model, "v2_reg")
         assert hasattr(model, "p_flow")
         assert hasattr(model, "q_flow")
         assert hasattr(model, "p_gen")
         assert hasattr(model, "q_gen")
+        assert hasattr(model, "p_load")
+        assert hasattr(model, "q_load")
         assert hasattr(model, "q_cap")
+        assert hasattr(model, "p_charge")
+        assert hasattr(model, "p_discharge")
+        assert hasattr(model, "p_bat")
+        assert hasattr(model, "q_bat")
+        assert hasattr(model, "soc")
 
     def test_model_creation_ieee123_30der(self, ieee123_30der_case):
         """Test model creation with IEEE 123 + 30 DER case"""
@@ -206,7 +231,6 @@ class TestCreateLinDistModel:
         # Check basic structure
         assert isinstance(model, pyo.ConcreteModel)
         assert len(model.bus_set) == 3
-        assert len(model.phase_set) == 3
         assert len(model.swing_bus_set) == 1
         assert len(model.branch_set) == 2
 
@@ -313,114 +337,16 @@ class TestParameters:
 
         # Check that parameters exist and have expected values
         # From CSV: branch 1->2 has raa=0.0008786982248520712
-        assert pyo.value(model.r["aa", 2]) == pytest.approx(
+        assert pyo.value(model.r[2, "aa"]) == pytest.approx(
             0.0008786982248520712, rel=1e-10
         )
-        assert pyo.value(model.x["aa", 2]) == pytest.approx(
+        assert pyo.value(model.x[2, "aa"]) == pytest.approx(
             0.0015976331360946748, rel=1e-10
         )
 
         # Check off-diagonal terms
-        assert pyo.value(model.r["ab", 2]) == 0.0
-        assert pyo.value(model.x["ab", 2]) == 0.0
-
-
-class TestVariables:
-    """Test variable creation and bounds"""
-
-    def test_voltage_variables_ieee13(self, ieee13_case):
-        """Test voltage variables for IEEE 13"""
-        case = Case(
-            branch_data=ieee13_case.branch_data,
-            bus_data=ieee13_case.bus_data,
-            gen_data=ieee13_case.gen_data,
-            cap_data=ieee13_case.cap_data,
-            reg_data=ieee13_case.reg_data,
-        )
-
-        model = create_lindist_model(case)
-
-        # Check voltage bounds (should be squared)
-        v_min_sq = 0.95**2
-        v_max_sq = 1.05**2
-
-        # Test a few voltage variables
-        assert model.v[1, "a"].lb == pytest.approx(v_min_sq, rel=1e-6)
-        assert model.v[1, "a"].ub == pytest.approx(v_max_sq, rel=1e-6)
-        assert model.v[7, "b"].lb == pytest.approx(v_min_sq, rel=1e-6)
-        assert model.v[7, "b"].ub == pytest.approx(v_max_sq, rel=1e-6)
-
-    def test_generator_variables_with_ders(self, ieee123_30der_case):
-        """Test generator variables when generators exist"""
-        case = Case(
-            branch_data=ieee123_30der_case.branch_data,
-            bus_data=ieee123_30der_case.bus_data,
-            gen_data=ieee123_30der_case.gen_data,
-            cap_data=ieee123_30der_case.cap_data,
-            reg_data=ieee123_30der_case.reg_data,
-        )
-
-        model = create_lindist_model(case)
-
-        # Check that generator variables exist and have bounds
-        gen_vars = [var for var in model.p_gen.values()]
-        assert len(gen_vars) > 0
-
-        # All P generation should have non-negative lower bounds
-        for var in gen_vars:
-            assert var.lb >= 0
-
-    def test_power_flow_variables(self, simple_case_data):
-        """Test power flow variables"""
-        model = create_lindist_model(simple_case_data)
-
-        # Check that power flow variables exist for all branch-phase combinations
-        p_flow_vars = list(model.p_flow.keys())
-        q_flow_vars = list(model.q_flow.keys())
-
-        assert len(p_flow_vars) > 0
-        assert len(q_flow_vars) > 0
-        assert len(p_flow_vars) == len(q_flow_vars)
-
-
-class TestBounds:
-    """Test bound functions"""
-
-    def test_voltage_bounds_function(self, simple_case_data):
-        """Test voltage bounds function"""
-        model = create_lindist_model(simple_case_data)
-
-        # Remove bounds to test the function
-        for var in model.v.values():
-            var.setlb(None)
-            var.setub(None)
-
-        # Apply bounds
-        add_voltage_bounds(model, simple_case_data.bus_data)
-
-        # Check bounds are applied
-        assert model.v[1, "a"].lb == pytest.approx(0.95**2, rel=1e-6)
-        assert model.v[1, "a"].ub == pytest.approx(1.05**2, rel=1e-6)
-
-    def test_generator_bounds_function(self, simple_case_data):
-        """Test generator bounds function"""
-        model = create_lindist_model(simple_case_data)
-
-        # Remove bounds to test the function
-        for var in model.p_gen.values():
-            var.setlb(None)
-            var.setub(None)
-        for var in model.q_gen.values():
-            var.setlb(None)
-            var.setub(None)
-
-        # Apply bounds
-        add_generator_bounds(model, simple_case_data.gen_data)
-
-        # Check bounds are applied
-        # From simple_case_data: gen at bus 2, pa=0.5, sa_max=1.0
-        assert model.p_gen[2, "a"].lb == 0
-        assert model.p_gen[2, "a"].ub == pytest.approx(0.5, rel=1e-6)
+        assert pyo.value(model.r[2, "ab"]) == 0.0
+        assert pyo.value(model.x[2, "ab"]) == 0.0
 
 
 class TestModelIntegrity:
@@ -439,24 +365,24 @@ class TestModelIntegrity:
         model = create_lindist_model(case)
 
         # Check that variable keys match set contents
-        v_keys = set(model.v.keys())
-        bus_phase_set = set(model.bus_phase_set)
+        v_keys = set(model.v2.keys())
+        bus_phase_set = set(model.bus_phase_set * model.time_set)
         assert v_keys == bus_phase_set
 
         p_flow_keys = set(model.p_flow.keys())
         q_flow_keys = set(model.q_flow.keys())
-        branch_phase_set = set(model.branch_phase_set)
+        branch_phase_set = set(model.branch_phase_set * model.time_set)
         assert p_flow_keys == branch_phase_set
         assert q_flow_keys == branch_phase_set
 
         p_gen_keys = set(model.p_gen.keys())
         q_gen_keys = set(model.q_gen.keys())
-        gen_phase_set = set(model.gen_phase_set)
+        gen_phase_set = set(model.gen_phase_set * model.time_set)
         assert p_gen_keys == gen_phase_set
         assert q_gen_keys == gen_phase_set
 
         q_cap_keys = set(model.q_cap.keys())
-        cap_phase_set = set(model.cap_phase_set)
+        cap_phase_set = set(model.cap_phase_set * model.time_set)
         assert q_cap_keys == cap_phase_set
 
 

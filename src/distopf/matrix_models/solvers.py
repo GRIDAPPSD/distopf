@@ -249,7 +249,7 @@ def pyomo_solve(
         cm.inequality = pe.Constraint(cm.ineq_set, rule=inequality_rule)
     cm.objective = pe.Objective(expr=obj_func(model, cm.xk, **kwargs))
     opt = pe.SolverFactory(solver)
-    results = opt.solve(cm)
+    opt.solve(cm)
 
     x_dict = cm.xk.extract_values()
     x_res = np.zeros(len(x_dict))

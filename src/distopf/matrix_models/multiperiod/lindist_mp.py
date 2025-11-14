@@ -1,6 +1,7 @@
 from typing import Optional, override
 import pandas as pd
-from distopf.multiperiod.base_mp import LinDistBaseMP
+from distopf.importer import Case
+from distopf.matrix_models.multiperiod.base_mp import LinDistBaseMP
 
 
 class LinDistMP(LinDistBaseMP):
@@ -32,6 +33,8 @@ class LinDistMP(LinDistBaseMP):
         DataFrame containing PV profile of 1h interval for 24h
     n_steps : int,
         Number of time intervals for multi period optimization. Default is 24.
+    case : Case,
+        Case object containing all of the parameters. Alternative to listing seperately.
 
     References
     ----------
@@ -40,11 +43,6 @@ class LinDistMP(LinDistBaseMP):
     With Voltage Control Devices,”
     IEEE Trans. Power Syst., vol. 34, no. 3, pp. 1801–1813,
     May 2019, doi: 10.1109/TPWRS.2018.2890613.
-
-    Examples
-    --------
-    This example demonstrates how to set up and solve a linear distribution flow model
-    using a provided case, and visualize the results.
     """
 
     @override
@@ -60,6 +58,7 @@ class LinDistMP(LinDistBaseMP):
         start_step: int = 0,
         n_steps: int = 24,
         delta_t: float = 1,  # hours per step
+        case: Optional[Case] = None,
     ):
         super().__init__(
             branch_data=branch_data,
@@ -72,5 +71,6 @@ class LinDistMP(LinDistBaseMP):
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,
+            case=case,
         )
         self.build()

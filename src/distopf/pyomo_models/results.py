@@ -1,13 +1,11 @@
-from dataclasses import dataclass
 import pandas as pd
-import pyomo.environ as pyo
-from typing import Optional
-from distopf.importer import Case
+import pyomo.environ as pyo  # type: ignore
 from math import sqrt
+from distopf.pyomo_models.protocol import LindistModelProtocol
 
 
 class OpfResult:
-    def __init__(self, model: pyo.ConcreteModel):
+    def __init__(self, model: pyo.ConcreteModel | LindistModelProtocol):
         self.voltages = get_voltages(model.v2)
         vars = [
             att
@@ -72,6 +70,7 @@ def get_values_tidy(var: pyo.Var):
             ],
             columns=["id", "name", "t", "phase", "value"],
         )
+    return pd.DataFrame(columns=["id", "name", "t", "phase", "value"])
 
 
 def get_voltages(var: pyo.Var) -> pd.DataFrame:

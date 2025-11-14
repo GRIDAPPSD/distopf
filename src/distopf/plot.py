@@ -9,7 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from distopf.matrix_models.base import LinDistBase
-
+from distopf.importer import Case
 
 def _choose_t(df, t=None):
     df = df.copy()
@@ -23,7 +23,7 @@ def _choose_t(df, t=None):
     return df
 
 
-def plot_voltages(v: pd.DataFrame = None, t=None) -> go.Figure:
+def plot_voltages(v: pd.DataFrame, t=None) -> go.Figure:
     """
     Parameters
     ----------
@@ -85,10 +85,10 @@ def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
         t2 = min(v2.t)
     assert t1 == t2
     if "t" in v1.columns:
-        v1 = v1.loc[v1.t == t1, :]
+        v1 = pd.DataFrame(v1.loc[v1.t == t1, :])
         v1 = v1.drop("t", axis=1)
     if "t" in v2.columns:
-        v2 = v2.loc[v2.t == t2, :]
+        v2 = pd.DataFrame(v2.loc[v2.t == t2, :])
         v2 = v2.drop("t", axis=1)
     v1 = v1.melt(
         ignore_index=True, var_name="phase", id_vars=["id", "name"], value_name="v1"
@@ -137,12 +137,12 @@ def voltage_differences(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure
     if "t" in v1.columns:
         if t is None:
             t1 = min(v1.t)
-        v1 = v1.loc[v1.t == t1, :]
+        v1 = pd.DataFrame(v1.loc[v1.t == t1, :])
         v1 = v1.drop("t", axis=1)
     if "t" in v2.columns:
         if t is None:
             t2 = min(v2.t)
-        v2 = v2.loc[v2.t == t2, :]
+        v2 = pd.DataFrame(v2.loc[v2.t == t2, :])
         v2 = v2.drop("t", axis=1)
     v1 = v1.melt(
         ignore_index=True, var_name="phase", id_vars=["id", "name"], value_name="v1"
@@ -228,13 +228,13 @@ def plot_gens(p_gens: pd.DataFrame, q_gens: pd.DataFrame, t=None) -> go.Figure:
         t1 = t
         if t is None and len(p_gens) > 0:
             t1 = min(p_gens.t)
-        p_gens = p_gens.loc[p_gens.t == t1, :]
+        p_gens = pd.DataFrame(p_gens.loc[p_gens.t == t1, :])
         p_gens = p_gens.drop("t", axis=1)
     if "t" in q_gens.columns:
         t2 = t
         if t is None and len(q_gens) > 0:
             t2 = min(q_gens.t)
-        q_gens = q_gens.loc[q_gens.t == t2, :]
+        q_gens = pd.DataFrame(q_gens.loc[q_gens.t == t2, :])
         q_gens = q_gens.drop("t", axis=1)
 
     p_gens = p_gens.melt(
@@ -297,13 +297,13 @@ def plot_pq(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
         t1 = t
         if t is None and len(p) > 0:
             t1 = min(p.t)
-        p = p.loc[p.t == t1, :]
+        p = pd.DataFrame(p.loc[p.t == t1, :])
         p = p.drop("t", axis=1)
     if "t" in q.columns:
         t2 = t
         if t is None and len(q) > 0:
             t2 = min(q.t)
-        q = q.loc[q.t == t2, :]
+        q = pd.DataFrame(q.loc[q.t == t2, :])
         q = q.drop("t", axis=1)
 
     p = p.melt(
@@ -459,13 +459,13 @@ def plot_polar(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
         t1 = t
         if t is None and len(p) > 0:
             t1 = min(p.t)
-        p = p.loc[p.t == t1, :]
+        p = pd.DataFrame(p.loc[p.t == t1, :])
         p = p.drop("t", axis=1)
     if "t" in q.columns:
         t2 = t
         if t is None and len(q) > 0:
             t2 = min(q.t)
-        q = q.loc[q.t == t2, :]
+        q = pd.DataFrame(q.loc[q.t == t2, :])
         q = q.drop("t", axis=1)
 
     p = p.melt(
@@ -486,7 +486,7 @@ def plot_polar(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
     pq.phase = p.phase
     pq["p"] = p.value
     pq["q"] = q.value
-    pq["s"] = (pq.p.array + 1j * pq.q.array).astype(complex)
+    pq["s"] = pq.p + 1j * pq.q
     pq["r"] = np.abs(pq.s)
     pq["th"] = np.angle(pq.s, deg=True)
     fig = px.scatter_polar(
@@ -538,15 +538,15 @@ def plot_batteries(p: pd.DataFrame, soc: pd.DataFrame) -> go.Figure:
 
 
 def plot_network(
-    model: LinDistBase,
-    v: pd.DataFrame = None,
-    s: pd.DataFrame = None,
-    p_flow: pd.DataFrame = None,
-    q_flow: pd.DataFrame = None,
-    p_gen: pd.DataFrame = None,
-    q_gen: pd.DataFrame = None,
-    v_min: int = 0.95,
-    v_max: int = 1.05,
+    model: LinDistBase | Case,
+    v: Optional[pd.DataFrame] = None,
+    s: Optional[pd.DataFrame] = None,
+    p_flow: Optional[pd.DataFrame] = None,
+    q_flow: Optional[pd.DataFrame] = None,
+    p_gen: Optional[pd.DataFrame] = None,
+    q_gen: Optional[pd.DataFrame] = None,
+    v_min: float = 0.95,
+    v_max: float = 1.05,
     show_phases: str = "abc",
     show_reactive_power: bool = False,
     t: Optional[int] = None,
@@ -869,7 +869,7 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
         hover_text = ""
         hover_text = f"<b>  Bus: {bus_row.name:<5}        (p.u.)</b><br>"
         # Create a formatted table-like structure using spaces and HTML
-        hover_text += f"<b>              A       B       C</b><br>"  # Adjusted spacing
+        hover_text += "<b>              A       B       C</b><br>"  # Adjusted spacing
         # hover_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br>"
 
         # Voltage data
@@ -946,7 +946,7 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
 
 
 def _make_title(show_phases, show_reactive_power):
-    title = f"<b>Network Plot (P.U.)</b>"
+    title = "<b>Network Plot (P.U.)</b>"
     # if _v is not None:
     title = title + "<br>Node color: "
     if show_phases == "abc":

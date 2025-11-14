@@ -13,23 +13,17 @@ from distopf.matrix_models.base import LinDistBase
 from distopf import (
     DSSToCSVConverter,
     CASES_DIR,
-    LinDistModelL,
     LinDistModelCapMI,
     LinDistModelCapacitorRegulatorMI,
 )
 from distopf.matrix_models.lindist_p_gen import LinDistModelPGen
 from distopf.matrix_models.lindist_q_gen import LinDistModelQGen
 from distopf.matrix_models.lindist import LinDistModel
-from distopf.matrix_models.lindist_capacitor_mi import LinDistModelCapMI
-from distopf.matrix_models.lindist_capacitor_regulator_mi import (
-    LinDistModelCapacitorRegulatorMI,
-)
 from distopf.matrix_models.solvers import (
     lp_solve,
     cvxpy_solve,
 )
 from distopf.matrix_models.objectives import (
-    cp_obj_none,
     cp_obj_loss,
     cp_obj_curtail,
     cp_obj_target_p_3ph,
@@ -119,15 +113,15 @@ def auto_solve(model: LinDistBase, objective_function=None, **kwargs):
     """
     if objective_function is None:
         objective_function = np.zeros(model.n_x)
-    if not isinstance(objective_function, (str, Callable, np.ndarray, list)):
+    if not isinstance(objective_function, (str, Callable, np.ndarray, list)):  # type: ignore
         raise TypeError(
             "objective_function must be a function handle, array, or string"
         )
-    objective_function_map_gradient: [str, Callable] = {
+    objective_function_map_gradient: dict[str, Callable] = {
         "gen_max": gradient_curtail,
         "load_min": gradient_load_min,
     }
-    objective_function_map: [str, Callable] = {
+    objective_function_map: dict[str, Callable] = {
         "loss_min": cp_obj_loss,
         "curtail_min": cp_obj_curtail,
         "target_p_3ph": cp_obj_target_p_3ph,
@@ -141,12 +135,12 @@ def auto_solve(model: LinDistBase, objective_function=None, **kwargs):
             objective_function = objective_function_map[objective_function]
         if objective_function in objective_function_map_gradient.keys():
             objective_function = objective_function_map[objective_function](model)
-    if isinstance(objective_function, Callable):
+    if isinstance(objective_function, Callable):  # type: ignore
         if hasattr(model, "solve"):
             return model.solve(objective_function, **kwargs)
         return cvxpy_solve(model, objective_function, **kwargs)
     if isinstance(objective_function, (np.ndarray, list)):
-        return lp_solve(model, objective_function)
+        return lp_solve(model, objective_function)  # type: ignore
 
 
 def _handle_path_input(data_path: Path) -> Path:
@@ -546,8 +540,8 @@ class DistOPFCase(object):
 
     def plot_network(
         self,
-        v_min: int = 0.95,
-        v_max: int = 1.05,
+        v_min: float = 0.95,
+        v_max: float = 1.05,
         show_phases: str = "abc",
         show_reactive_power: bool = False,
     ):
@@ -608,7 +602,7 @@ class DistOPFCase(object):
     def add_generator(
         self,
         name: str,
-        phases: str = None,
+        phases: Optional[str] = None,
         p=0,
         q=0,
         s_rated=None,
@@ -658,7 +652,7 @@ class DistOPFCase(object):
     def add_capacitor(
         self,
         name: any,
-        phases: str = None,
+        phases: Optional[str] = None,
         q=0,
     ):
         cap = self.cap_data.copy()

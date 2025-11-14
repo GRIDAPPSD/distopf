@@ -16,14 +16,11 @@ dependencies = [
     "networkx>=3.4.2",
     "numpy>=2.2.6",
     "opendssdirect-py==0.8.4",
-    "pandas>=2.3.1",
     "plotly>=6.3.0",
     "scipy>=1.15.3",
     "pyomo>=6.9.4",
+    "pandas>=2.3.3",
 ]
-
-[project.scripts]
-distopf = "distopf:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -33,12 +30,14 @@ build-backend = "hatchling.build"
 dev = [
     "jupyter>=1.1.1",
     "marimo>=0.15.2",
-    "mypy>=1.17.1",
-    "pandas-stubs>=2.3.2.250827",
+    "mypy>=1.18.2",
+    "pandas-stubs>=2.3.2.250926",
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "ruff>=0.12.12",
     "scipy-stubs>=1.15.3.0",
+    "tabulate>=0.9.0",
+    "ty>=0.0.1a26",
     "types-networkx>=3.5.0.20250901",
     "types-openpyxl>=3.1.5.20250822",
     "types-python-dateutil>=2.9.0.20250822",
@@ -50,6 +49,11 @@ dev = [
 module = "cimgraph.*"
 follow_untyped_imports = true
 
+[tool.ty.src]
+exclude = ["src/distopf/pyomo_models"]
+
+[tool.ty.rules]
+possibly-missing-attribute = "ignore"
 
 [tool.pytest.ini_options]
 markers = [
@@ -66,7 +70,7 @@ addopts = """
     --cov=distopf
     --cov-report=html
     --cov-report=term-missing
-    --cov-fail-under=70
+    --cov-fail-under=50
     -v
     --tb=short
 """

@@ -4,7 +4,7 @@ from time import perf_counter
 import numpy as np
 import pandas as pd
 import cvxpy as cp
-from scipy.sparse import csr_array
+from scipy.sparse import csr_array, lil_array
 from scipy.optimize import OptimizeResult
 import distopf as opf
 
@@ -26,12 +26,12 @@ class LinDistModelCapacitorRegulatorMI(opf.LinDistModelCapMI):
             reg_data=reg_data,
         )
         self.x0 = None
-        self.xk = None
+        self.xk: None | cp.Variable = None
         self.u_reg = None
         self.b_i = np.arange(0.9, 1.1, 0.00625)
-        self.g_reg = None
+        self.g_reg: list = []
 
-    def add_regulator_model(self, a_eq, b_eq, j, a) -> (csr_array, np.ndarray):
+    def add_regulator_model(self, a_eq, b_eq, j, a) -> tuple[lil_array, np.ndarray]:
         return a_eq, b_eq
 
     def cvxpy_regulator_mi_constraints(self):

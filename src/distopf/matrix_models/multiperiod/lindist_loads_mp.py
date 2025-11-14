@@ -1,7 +1,8 @@
 from typing import Optional, override
 import pandas as pd
 import distopf as opf
-from distopf.multiperiod.base_mp import LinDistBaseMP
+from distopf.importer import Case
+from distopf.matrix_models.multiperiod.base_mp import LinDistBaseMP
 
 
 class LinDistMPL(LinDistBaseMP):
@@ -19,15 +20,25 @@ class LinDistMPL(LinDistBaseMP):
     Parameters
     ----------
     branch_data : pd.DataFrame
-        DataFrame containing branch data including resistance and reactance values and limits.
+        DataFrame containing branch data (r and x values, limits)
     bus_data : pd.DataFrame
-        DataFrame containing bus data such as loads, voltages, and limits.
+        DataFrame containing bus data (loads, voltages, limits)
     gen_data : pd.DataFrame
-        DataFrame containing generator data.
+        DataFrame containing generator/DER data
     cap_data : pd.DataFrame
-        DataFrame containing capacitor data.
+        DataFrame containing capacitor data
     reg_data : pd.DataFrame
-        DataFrame containing regulator data.
+        DataFrame containing regulator data
+    bat_data : pd DataFrame
+        DataFrame containing battery data
+    loadshape_data : pd.DataFrame
+        DataFrame containing loadshape multipliers for P values
+    pv_loadshape_data : pd.DataFrame
+        DataFrame containing PV profile of 1h interval for 24h
+    n_steps : int,
+        Number of time intervals for multi period optimization. Default is 24.
+    case : Case,
+        Case object containing all of the parameters. Alternative to listing seperately.
 
     References
     ----------
@@ -51,6 +62,7 @@ class LinDistMPL(LinDistBaseMP):
         start_step: int = 0,
         n_steps: int = 24,
         delta_t: float = 1,  # hours per step
+        case: Optional[Case] = None,
     ):
         super().__init__(
             branch_data=branch_data,
@@ -63,9 +75,10 @@ class LinDistMPL(LinDistBaseMP):
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,
+            case=case,
         )
-        self.pl_map: Optional[dict[int, dict[str, pd.Series]]] = None
-        self.ql_map: Optional[dict[int, dict[str, pd.Series]]] = None
+        self.pl_map: dict[int, dict[str, pd.Series]] = {}
+        self.ql_map: dict[int, dict[str, pd.Series]] = {}
         self.build()
 
     @override
@@ -144,13 +157,20 @@ class LinDistMPL(LinDistBaseMP):
         pl = self.idx("pl", j, a, t=t)
         ql = self.idx("ql", j, a, t=t)
         vj = self.idx("v", j, a, t=t)
-        p_load_nom, q_load_nom = 0, 0
-        load_mult = self.loadshape.M[t]
+
         a_eq[pij, pl] = -1  # add load variable to power flow equation
         a_eq[qij, ql] = -1  # add load variable to power flow equation
+        p_load_nom, q_load_nom = 0, 0
+        load_mult_p = load_mult_q = 1
+        load_shape = self.bus.load_shape[j]
+        if load_shape in self.schedules.columns:
+            load_mult_p = load_mult_q = self.schedules.at[t, load_shape]
+        elif f"{load_shape}.{a}.p" in self.schedules.columns:
+            load_mult_p = self.schedules.at[t, f"{load_shape}.{a}.p"]
+            load_mult_q = self.schedules.at[t, f"{load_shape}.{a}.q"]
         if self.bus.bus_type[j] == opf.PQ_BUS:
-            p_load_nom = self.bus[f"pl_{a}"][j] * load_mult
-            q_load_nom = self.bus[f"ql_{a}"][j] * load_mult
+            p_load_nom = self.bus[f"pl_{a}"][j] * load_mult_p
+            q_load_nom = self.bus[f"ql_{a}"][j] * load_mult_q
         if self.bus.bus_type[j] != opf.PQ_FREE:
             # Set Load equation variable coefficients in a_eq
             a_eq[pl, pl] = 1

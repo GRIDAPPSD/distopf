@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from typing import Optional
 from functools import cache
 from pathlib import Path
 import networkx as nx
@@ -25,7 +25,7 @@ def load_dss_model(
 class DSSToCSVConverter:
     def __init__(
         self,
-        dssfile: (str, Path),
+        dssfile: str | Path,
         s_base: float = 1e6,
         v_min: float = 0.95,
         v_max: float = 1.05,
@@ -216,11 +216,12 @@ class DSSToCSVConverter:
         v_df = pd.merge(va, vb, on="name", how="outer")
         v_df = pd.merge(v_df, vc, on="name", how="outer")
         v_df.index = v_df.name.apply(self.bus_names_to_index_map_fun)
+        # v_df.set_index(v_df.name.apply(self.bus_names_to_index_map_fun))
         v_df = v_df.sort_index()
         return v_df
 
     def get_apparent_power_flows(self) -> pd.DataFrame:
-        s_base = self.s_base
+        # s_base = self.s_base
         flag = self.dss.PDElements.First()
         power_data = []
         while flag:
@@ -285,8 +286,8 @@ class DSSToCSVConverter:
         """
         n_phases = self.dss.Lines.Phases()
 
-        z_matrix_real = np.zeros((3, 3))
-        z_matrix_imag = np.zeros((3, 3))
+        # z_matrix_real = np.zeros((3, 3))
+        # z_matrix_imag = np.zeros((3, 3))
         if n_phases > 3:
             pass
         if (len(self.dss.CktElement.BusNames()[0].split(".")) == 4) or (
@@ -378,7 +379,7 @@ class DSSToCSVConverter:
         s_base = self.s_base
         flag = self.dss.PDElements.First()
         line_data = []
-        power_data = []
+        # power_data = []
         while flag:
             switch_status = None
             element_type = self.dss.CktElement.Name().lower().split(".")[0]
@@ -389,49 +390,49 @@ class DSSToCSVConverter:
                 flag = self.dss.PDElements.Next()
                 continue
             if element_type == "transformer":
-                is_delta = self.dss.Transformers.IsDelta()
-                n_windings = self.dss.Transformers.NumWindings()
+                # is_delta = self.dss.Transformers.IsDelta()
+                # n_windings = self.dss.Transformers.NumWindings()
                 r_xfmr = 0
                 x_xfmr = 0
                 n_phases = self.dss.CktElement.NumPhases()
-                n_terminals = self.dss.CktElement.NumTerminals()
+                # n_terminals = self.dss.CktElement.NumTerminals()
                 y_prime_flat = np.array(self.dss.CktElement.YPrim())
                 y_prim = y_prime_flat[::2] + 1j * y_prime_flat[1::2]
                 y_shape = int(np.sqrt(len(y_prim)))
                 y_prim = np.reshape(y_prim, (y_shape, y_shape))
-                n_y11 = int(y_shape / 2)
+                # n_y11 = int(y_shape / 2)
                 v_all = np.array(self.dss.CktElement.Voltages())
                 v_all = v_all[::2] + 1j * v_all[1::2]
-                v1 = v_all[: len(v_all) // 2]
-                v2 = v_all[len(v_all) // 2 :]
+                # v1 = v_all[: len(v_all) // 2]
+                # v2 = v_all[len(v_all) // 2 :]
                 i_all = np.array(self.dss.CktElement.Currents())
                 i_all = i_all[::2] + 1j * i_all[1::2]
-                i1 = i_all[: len(i_all) // 2]
-                i2 = i_all[len(i_all) // 2 :]
+                # i1 = i_all[: len(i_all) // 2]
+                # i2 = i_all[len(i_all) // 2 :]
                 self.dss.Transformers.Wdg(1)
                 # v1 = np.array(self.dss.Transformers.WdgVoltages())
                 # v1 = v1[::2] + 1j * v1[1::2]
-                kv_h = self.dss.Transformers.kV()
+                # kv_h = self.dss.Transformers.kV()
                 self.dss.Transformers.Wdg(2)
                 # v2 = np.array(self.dss.Transformers.WdgVoltages())
                 # v2 = v2[::2] + 1j * v2[1::2]
-                kv_l = self.dss.Transformers.kV()
-                n = kv_h / kv_l
-                y11 = y_prim[:n_y11, :n_y11] * n**2
-                y12 = y_prim[:n_y11, n_y11:] * n
-                y21 = y_prim[n_y11:, :n_y11]
-                y22 = y_prim[n_y11:, n_y11:]
-                y_prim_l = np.r_[np.c_[y11, y12], np.c_[y21, y22]]
+                # kv_l = self.dss.Transformers.kV()
+                # n = kv_h / kv_l
+                # y11 = y_prim[:n_y11, :n_y11] * n**2
+                # y12 = y_prim[:n_y11, n_y11:] * n
+                # y21 = y_prim[n_y11:, :n_y11]
+                # y22 = y_prim[n_y11:, n_y11:]
+                # y_prim_l = np.r_[np.c_[y11, y12], np.c_[y21, y22]]
                 # z_prim_l = np.linalg.inv(y_prim_l)
                 # z11 = z_prim_l[:n_y11, :n_y11]
                 # z12 = z_prim_l[:n_y11, n_y11:]
                 # z21 = z_prim_l[n_y11:, :n_y11]
                 # z22 = z_prim_l[n_y11:, n_y11:]
                 i_all = np.array(self.dss.Transformers.WdgCurrents())
-                i_in = i_all[::2]
+                # i_in = i_all[::2]
                 i_all = i_all[::2] + i_all[1::2] * 1j
-                i_in = i_all[::2]
-                i_out = i_all[1::2]
+                # i_in = i_all[::2]
+                # i_out = i_all[1::2]
                 # i1_in = i_in[::2]
                 # i2_in = i_in[1::2]
                 # i2_out = i_out[1::2]
@@ -684,12 +685,12 @@ class DSSToCSVConverter:
 
             each_gen["phases"] = phases
 
-            each_gen["qa_max"] = each_gen[f"sa_max"]
-            each_gen["qb_max"] = each_gen[f"sb_max"]
-            each_gen["qc_max"] = each_gen[f"sc_max"]
-            each_gen["qa_min"] = -each_gen[f"sa_max"]
-            each_gen["qb_min"] = -each_gen[f"sb_max"]
-            each_gen["qc_min"] = -each_gen[f"sc_max"]
+            each_gen["qa_max"] = each_gen["sa_max"]
+            each_gen["qb_max"] = each_gen["sb_max"]
+            each_gen["qc_max"] = each_gen["sc_max"]
+            each_gen["qa_min"] = -each_gen["sa_max"]
+            each_gen["qb_min"] = -each_gen["sb_max"]
+            each_gen["qc_min"] = -each_gen["sc_max"]
             each_gen["control_variable"] = "PQ"
 
             gen_data.append(each_gen)
@@ -744,12 +745,12 @@ class DSSToCSVConverter:
 
             each_gen["phases"] = phases
 
-            each_gen["qa_max"] = each_gen[f"sa_max"]
-            each_gen["qb_max"] = each_gen[f"sb_max"]
-            each_gen["qc_max"] = each_gen[f"sc_max"]
-            each_gen["qa_min"] = -each_gen[f"sa_max"]
-            each_gen["qb_min"] = -each_gen[f"sb_max"]
-            each_gen["qc_min"] = -each_gen[f"sc_max"]
+            each_gen["qa_max"] = each_gen["sa_max"]
+            each_gen["qb_max"] = each_gen["sb_max"]
+            each_gen["qc_max"] = each_gen["sc_max"]
+            each_gen["qa_min"] = -each_gen["sa_max"]
+            each_gen["qb_min"] = -each_gen["sb_max"]
+            each_gen["qc_min"] = -each_gen["sc_max"]
             each_gen["control_variable"] = "PQ"
 
             gen_data.append(each_gen)
@@ -881,7 +882,7 @@ class DSSToCSVConverter:
         return cap_df
 
     def get_reg_data(self) -> pd.DataFrame:
-        s_base = self.s_base
+        # s_base = self.s_base
         reg_data = []
         reg_control_names = self.dss.RegControls.AllNames()
         reg_names = []
@@ -966,7 +967,7 @@ class DSSToCSVConverter:
         # reg_df["tap_c"] = (reg_df["ratio_c"] - 1) / 0.00625
         return reg_df
 
-    def _get_loads(self) -> dict[str, list[float]]:
+    def _get_loads(self) -> pd.DataFrame:
         """Extract load information for each node for each phase. This method extracts load on the exact bus(node) as
         modeled in the distribution model, including secondary.
 
@@ -1022,17 +1023,17 @@ class DSSToCSVConverter:
             # nonzero_power_indices = np.where(conductor_power != 0)[0]
             # nonzero_power = conductor_power[nonzero_power_indices]
             # Extract P and Q values (every alternate elements)
-            a1 = np.exp(-1 / 6 * 1j * np.pi)
-            a2 = np.exp(-5 / 6 * 1j * np.pi)
+            # a1 = np.exp(-1 / 6 * 1j * np.pi)
+            # a2 = np.exp(-5 / 6 * 1j * np.pi)
             p_values = conductor_power[::2]
             q_values = conductor_power[1::2]
             phases = "abc"
-            n_phases = self.dss.Loads.Phases()
-            pf = self.dss.Loads.PF()
-            kw = self.dss.Loads.kW()
-            kv = self.dss.Loads.kV()
-            kvar = self.dss.Loads.kvar()
-            is_delta = self.dss.Loads.IsDelta()
+            # n_phases = self.dss.Loads.Phases()
+            # pf = self.dss.Loads.PF()
+            # kw = self.dss.Loads.kW()
+            # kv = self.dss.Loads.kV()
+            # kvar = self.dss.Loads.kvar()
+            # is_delta = self.dss.Loads.IsDelta()
             if len(connected_phase_secondary) > 0:
                 phases = "".join("abc"[int(n) - 1] for n in connected_phase_secondary)
             # if len(phases) != n_phases:
@@ -1057,7 +1058,7 @@ class DSSToCSVConverter:
         load_df = load_df.fillna(0)
         return load_df.reset_index(drop=True)
 
-    def to_csv(self, dir_name: str = None, overwrite: bool = True) -> None:
+    def to_csv(self, dir_name: Optional[str] = None, overwrite: bool = True) -> None:
         if dir_name is None:
             dir_name = "testfiles"
 
@@ -1086,13 +1087,3 @@ class DSSToCSVConverter:
             kvar = q.loc[bus_id, phase_columns].sum() * self.s_base / 1000
             self.dss.Generators.kvar(kvar)
             flag = self.dss.Generators.Next()
-
-
-def main() -> None:
-    # dss_data = DSSParser(r'ieee9500_dss/Master-unbal-initial-config.dss')
-    dss_data = DSSToCSVConverter(r"ieee13Bus/IEEE13Nodeckt.dss")
-    print(dss_data.get_branches())
-
-
-if __name__ == "__main__":
-    main()

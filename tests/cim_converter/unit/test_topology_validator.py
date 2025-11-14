@@ -1,6 +1,6 @@
 # tests/unit/test_topology_validator.py
 import pandas as pd
-import pytest
+# import pytest
 from distopf.cim_importer.validators.topology_validator import TopologyValidator
 
 

@@ -5,7 +5,7 @@ Each function takes a Pyomo ConcreteModel and data, and adds constraints to the 
 Functions are designed to work with models created by create_lindist_model().
 """
 
-import pyomo.environ as pyo
+import pyomo.environ as pyo  # ty: ignore
 from distopf.pyomo_models.lindist import ControlVariable
 from distopf.pyomo_models.protocol import LindistModelProtocol
 from numpy import sqrt
@@ -322,9 +322,11 @@ def add_generator_limits(m: LindistModelProtocol) -> None:
 # ============ Battery Constraints =====================================================
 # ======================================================================================
 
+
 def add_battery_power_limits(m: LindistModelProtocol) -> None:
     def _d(m: LindistModelProtocol, _id, ph, t):
         return (0, m.p_discharge[_id, t], m.s_bat_rated[_id, ph])
+
     def _c(m: LindistModelProtocol, _id, ph, t):
         return (0, m.p_charge[_id, t], m.s_bat_rated[_id, ph])
 

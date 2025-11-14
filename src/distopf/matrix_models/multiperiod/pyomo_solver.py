@@ -1,30 +1,26 @@
-from collections.abc import Callable, Collection
+from collections.abc import Callable
 from time import perf_counter
 import distopf as opf
-import distopf.multiperiod as mpopf
-from distopf.multiperiod.base_mp import LinDistBaseMP
-from numpy import sqrt
+import distopf.matrix_models.multiperiod as mpopf
+from distopf.matrix_models.multiperiod.base_mp import LinDistBaseMP
 import numpy as np
 import cvxpy as cp
 import pandas as pd
-from scipy.optimize import OptimizeResult, linprog
-from scipy.sparse import csr_array
+from scipy.optimize import OptimizeResult
 import pyomo.environ as pe
-from scipy.optimize import OptimizeResult, linprog
 from distopf import (
     LinDistModel,
-    LinDistModelL,
-    LinDistModelCapMI,
 )
-from distopf.base import LinDistBase
-from distopf.opf_solver import lp_solve
+from distopf.matrix_models.base import LinDistBase
+from distopf.matrix_models.solvers import lp_solve
+
 
 def pyo_obj_loss(model: LinDistBaseMP, xk: pe.Var, **kwargs):
     """
 
     Parameters
     ----------
-    model : LinDistModel, or LinDistModelP, or LinDistModelQ
+    model : LinDistBaseMP
     xk : cp.Variable
     kwargs :
 
@@ -57,16 +53,17 @@ def pyo_obj_loss(model: LinDistBaseMP, xk: pe.Var, **kwargs):
     r = np.array(r_list)
     ix = np.array(index_list).astype(int)
     if isinstance(xk, pe.Var):
-        return sum([r[i] * xk[ix[i]]**2 for i in range(len(ix))])
+        return sum([r[i] * xk[ix[i]] ** 2 for i in range(len(ix))])
     else:
         return np.vdot(r, xk[ix] ** 2)
+
 
 def pyo_battery_efficiency(model: LinDistBaseMP, x: pe.Var, **kwargs):
     """
 
     Parameters
     ----------
-    model : LinDistModel, or LinDistModelP, or LinDistModelQ
+    model : LinDistBaseMP
     x : pe.Var
     kwargs :
 
@@ -101,9 +98,7 @@ def pyo_battery_efficiency(model: LinDistBaseMP, x: pe.Var, **kwargs):
     return sum([vec1[i] * x[ix[i]] for i in range(len(ix))])
 
 
-def pyo_obj_loss_batt(
-    model: LinDistBaseMP, xk: cp.Variable, **kwargs
-) -> cp.Expression:
+def pyo_obj_loss_batt(model: LinDistBaseMP, xk: cp.Variable, **kwargs) -> cp.Expression:
     """
 
     Parameters
@@ -131,7 +126,7 @@ def pyo_voltage_reduction(model: LinDistBaseMP, x: pe.Var, **kwargs):
     return sum(v_list)
 
 
-def pyo_voltage_reduction_mp(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
+def pyo_voltage_reduction_mp(model: LinDistBaseMP, x: pe.Var, **kwargs):
     v_list = []
     for t in range(model.start_step, model.start_step + model.n_steps):
         for a in "abc":
@@ -142,7 +137,7 @@ def pyo_voltage_reduction_mp(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs
     return sum(v_list)
 
 
-def pyo_storage_max(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
+def pyo_storage_max(model: LinDistBaseMP, x: pe.Var, **kwargs):
     b_list = []
     for t in range(model.start_step, model.start_step + model.n_steps):
         for a in "abc":
@@ -153,7 +148,7 @@ def pyo_storage_max(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
     return sum(b_list) + pyo_battery_efficiency(model, x, **kwargs)
 
 
-def pyo_resiliency(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
+def pyo_resiliency(model: LinDistBaseMP, x: pe.Var, **kwargs):
     b_list = []
     for t in range(model.start_step, model.start_step + model.n_steps):
         for a in "abc":
@@ -166,7 +161,7 @@ def pyo_resiliency(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
     return score
 
 
-def pyo_co2_min(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
+def pyo_co2_min(model: LinDistBaseMP, x: pe.Var, **kwargs):
     net_load = kwargs.get("net_load")
     gen_lists = {"a": [], "b": [], "c": []}
     for t in range(model.start_step, model.start_step + model.n_steps):
@@ -187,7 +182,7 @@ def pyo_co2_min(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
     return score
 
 
-def pyo_global(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
+def pyo_global(model: LinDistBaseMP, x: pe.Var, **kwargs):
     return (
         pyo_resiliency(model, x, **kwargs)
         + pyo_decarb(model, x, **kwargs)
@@ -196,19 +191,19 @@ def pyo_global(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
     )
 
 
-def pyo_cvr(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
+def pyo_cvr(model: LinDistBaseMP, x: pe.Var, **kwargs):
     return pyo_voltage_reduction_mp(model, x, **kwargs) + pyo_battery_efficiency(
         model, x, **kwargs
     )
 
 
-def pyo_res(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
+def pyo_res(model: LinDistBaseMP, x: pe.Var, **kwargs):
     return pyo_resiliency(model, x, **kwargs) + pyo_battery_efficiency(
         model, x, **kwargs
     )
 
 
-def pyo_decarb(model: mpopf.LinDistModelMulti, x: pe.Var, **kwargs):
+def pyo_decarb(model: LinDistBaseMP, x: pe.Var, **kwargs):
     return pyo_co2_min(model, x, **kwargs) + pyo_battery_efficiency(model, x, **kwargs)
 
 
@@ -322,7 +317,7 @@ def test_multi():
     bus_data.cvr_p = 2
     bus_data.cvr_q = 2
     gen_data.control_variable = "PQ"
-    model = mpopf.LinDistModelMultiFast(
+    model = mpopf.LindistMP(
         branch_data=branch_data,
         bus_data=bus_data,
         gen_data=gen_data,
@@ -368,8 +363,8 @@ def test():
     pg = model.get_p_gens(result.x)
     qg = model.get_q_gens(result.x)
     # s = model.get_apparent_power_flows(result.x)
-    opf.plot_voltages(v).show()
-    opf.plot_gens(pg, qg).show()
+    opf.plot_voltages(v).show(renderer="browser")
+    opf.plot_gens(pg, qg).show(renderer="browser")
 
 
 if __name__ == "__main__":

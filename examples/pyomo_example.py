@@ -1,12 +1,12 @@
 import distopf as opf
 import pyomo.environ as pyo
-from distopf.pyomo_models.lindist_single import create_lindist_model
-from distopf.importer import Case, create_case
-from distopf.pyomo_models.constraints_single import (
+from distopf.pyomo_models.lindist import create_lindist_model
+from distopf.importer import create_case
+from distopf.pyomo_models.constraints import (
     add_capacitor_constraints,
     add_circular_generator_constraints_pq_control,
     add_cvr_load_constraints,
-    add_octagonal_inverter_constraints_pq_control,
+    # add_octagonal_inverter_constraints_pq_control,
     add_generator_constant_p_constraints_q_control,
     add_generator_constant_q_constraints_p_control,
     add_p_flow_constraints,
@@ -14,8 +14,8 @@ from distopf.pyomo_models.constraints_single import (
     add_swing_bus_constraints,
     add_voltage_drop_constraints,
     add_regulator_constraints,
-    add_generator_bounds,
-    add_voltage_bounds,
+    add_generator_limits,
+    add_voltage_limits,
 )
 from distopf.pyomo_models.results import (
     get_voltages,
@@ -24,7 +24,7 @@ from distopf.pyomo_models.results import (
 from distopf import (
     plot_voltages,
     plot_gens,
-    plot_network,
+    # plot_network,
     plot_polar,
 )
 
@@ -42,8 +42,8 @@ add_circular_generator_constraints_pq_control(model)
 add_capacitor_constraints(model)
 add_regulator_constraints(model)
 # bounds
-add_voltage_bounds(model)
-add_generator_bounds(model)
+add_voltage_limits(model)
+add_generator_limits(model)
 
 
 def loss_objective_rule(model):
