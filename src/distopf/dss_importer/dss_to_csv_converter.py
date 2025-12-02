@@ -1069,6 +1069,25 @@ class DSSToCSVConverter:
         self.gen_data.to_csv(f"{dir_name}/gen_data.csv", index=False)
         self.reg_data.to_csv(f"{dir_name}/reg_data.csv", index=False)
 
+    def update_gen_p(self, p: pd.DataFrame):
+        flag = self.dss.Generators.First()
+        while flag:
+            bus_phases = np.array(
+                self.dss.CktElement.BusNames()[0].split(".")[1:]
+            ).astype(int)
+            n_phases = len(bus_phases)
+            if len(bus_phases) == 0 or len(bus_phases) >= 3:
+                n_phases = 3
+            active_phases = np.array([0, 1, 2])
+            if n_phases < 3:
+                active_phases = bus_phases - 1
+            phase_columns = ["abc"[ph_idx] for ph_idx in active_phases]
+            bus = self.dss.Generators.Bus1().split(".")[0]
+            bus_id = self.bus_names_to_index_map[bus]
+            kw = p.loc[bus_id, phase_columns].sum() * self.s_base / 1000
+            self.dss.Generators.kW(kw)
+            flag = self.dss.Generators.Next()
+
     def update_gen_q(self, q: pd.DataFrame):
         flag = self.dss.Generators.First()
         while flag:
