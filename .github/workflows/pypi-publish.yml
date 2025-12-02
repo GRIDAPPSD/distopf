@@ -26,8 +26,6 @@ jobs:
           uv build
 
       - name: Publish to PyPI
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.UV_PUBLISH_TOKEN }}
         run: |
           printf "Deploying PYPI project"
-          uv publish --dry-run
+          uv publish
