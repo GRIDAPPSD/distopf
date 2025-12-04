@@ -555,7 +555,7 @@ class DSSToCSVConverter:
             .reset_index(drop=True)
         )
         return branch_df
-
+        
     def get_bus_data(self) -> pd.DataFrame:
         """Extract the bus data from the distribution model.
 
@@ -604,8 +604,8 @@ class DSSToCSVConverter:
                 s_base=s_base,  # s_base of the system
                 v_min=v_min,  # minimum p.u. voltage for the bus
                 v_max=v_max,  # maximum p.u. voltage for the bus
-                cvr_p=cvr_p,  # conservative voltage reduction parameter for active power
-                cvr_q=cvr_q,  # conservative voltage reduction parameter for reactive power
+                # cvr_p=cvr_p,  # conservative voltage reduction parameter for active power
+                # cvr_q=cvr_q,  # conservative voltage reduction parameter for reactive power
                 phases=self.num_phase_map[
                     str(self.dss.Bus.Nodes())
                 ],  # bus phases a,b,c
@@ -1053,6 +1053,8 @@ class DSSToCSVConverter:
                 "ql_b": "sum",
                 "pl_c": "sum",
                 "ql_c": "sum",
+                "cvr_p": "sum",
+                "cvr_q": "sum",
             }
         )
         load_df = load_df.fillna(0)
