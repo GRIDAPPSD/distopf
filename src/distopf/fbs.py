@@ -1069,7 +1069,7 @@ def compare_with_reference(
     return comparisons
 
 
-def solve_power_flow(
+def fbs_solve(
     case: Case,
     max_iterations: int = 100,
     tolerance: float = 1e-6,
