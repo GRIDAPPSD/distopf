@@ -286,6 +286,51 @@ def cp_obj_curtail_lp(model: LinDistBaseMP, xk: cp.Variable, **kwargs) -> cp.Exp
     return cp.sum((model.x_max[all_pg_idx] - xk[all_pg_idx]))
 
 
+def cp_obj_energy_cost_min(model: LinDistBaseMP, xk, **kwargs):
+    cost_curve = kwargs.get("cost_curve")
+    delta_t = model.delta_t
+    period_cost = cost_curve * delta_t
+    edges = np.array([])
+    costs = np.array([])
+    for t in range(model.start_step, model.start_step + model.n_steps):
+        for a in "abc":
+            if not model.phase_exists(a):
+                continue
+            edges = np.append(edges, model.idx("pjk", model.swing_bus, a, t=t), axis=0)
+            # edges = np.append(edges, model.idx("pl", model.SWING, a, t=t))
+            costs = np.append(
+                costs, period_cost[t]
+            )  # costs = np.append(costs, period_cost[t])
+    edges = edges.flatten().astype(int)
+    if isinstance(xk, cp.Variable):
+        return cp.vdot(costs, xk[edges])
+    else:
+        return np.vdot(costs, xk[edges])
+
+
+def cp_obj_demand_cost_min(model: LinDistBaseMP, xk, **kwargs):
+    demand_charge = kwargs.get("demand_charge") * 1000  # convert to $/MW
+    edges = np.array([])
+    for t in range(model.start_step, model.start_step + model.n_steps):
+        for a in "abc":
+            if not model.phase_exists(a):
+                continue
+            edges = np.append(
+                edges, model.idx("pjk", model.swing_bus, a, t=t), axis=0
+            )  # edges = np.append(edges, model.idx("pl", model.SWING, a, t=t))
+    edges = edges.flatten().astype(int)
+    if isinstance(xk, cp.Variable):
+        return cp.max(xk[edges]) * demand_charge
+    else:
+        return np.max(xk[edges]) * demand_charge
+
+
+def cp_obj_cost_min(model: LinDistBaseMP, xk, **kwargs):
+    return cp_obj_energy_cost_min(model, xk, **kwargs) + cp_obj_demand_cost_min(model, xk, **kwargs)
+
+
+
+
 def cp_obj_none(*args, **kwargs) -> cp.Constant:
     """
     For use with cvxpy_solve() to run a power flow with no optimization.

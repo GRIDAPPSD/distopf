@@ -1,0 +1,2 @@
+id,name,s_max,phases,energy_capacity,min_soc,max_soc,start_soc,charge_efficiency,discharge_efficiency,annual_cycle_limit,control_variable
+6,6,2.0,abc,4.5,0,1,0.5,0.93,0.93,365,P

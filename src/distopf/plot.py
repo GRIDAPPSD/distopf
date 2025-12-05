@@ -78,12 +78,13 @@ def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
         v2["id"] = v2.index
     if "name" not in v2.columns:
         v2["name"] = v2["id"]
-
+    t1 = t2 = t
     if t is None and "t" in v1.columns:
         t1 = min(v1.t)
     if t is None and "t" in v2.columns:
         t2 = min(v2.t)
-    assert t1 == t2
+    if "t" in v1.columns and "t" in v2.columns:
+        assert t1 == t2
     if "t" in v1.columns:
         v1 = pd.DataFrame(v1.loc[v1.t == t1, :])
         v1 = v1.drop("t", axis=1)
