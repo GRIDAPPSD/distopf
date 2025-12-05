@@ -146,7 +146,7 @@ def handle_bus_input(bus_data: Optional[pd.DataFrame]) -> pd.DataFrame:
         if c not in bus_data.columns:
             bus_data[c] = t()
     bus = bus_data.astype(type_dict)
-    bus = bus_data.sort_values(by="id", ignore_index=True)
+    bus = bus.sort_values(by="id", ignore_index=True)
     bus.index = bus.id.to_numpy() - 1
     return bus
 

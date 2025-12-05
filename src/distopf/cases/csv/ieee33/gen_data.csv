@@ -1,0 +1,2 @@
+id,name,pa,pb,pc,qa,qb,qc,sa_max,sb_max,sc_max,phases,qa_max,qb_max,qc_max,qa_min,qb_min,qc_min,a_mode,b_mode,c_mode,control_variable
+6,6,2.667,2.667,2.667,0,0,0,2.667,2.667,2.667,abc,100,100,100,-100,-100,-100,CONTROL_PQ,CONTROL_PQ,CONTROL_PQ,PQ
