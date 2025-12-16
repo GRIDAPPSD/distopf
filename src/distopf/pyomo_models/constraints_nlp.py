@@ -5,6 +5,7 @@ Each function takes a Pyomo ConcreteModel and data, and adds constraints to the 
 Functions are designed to work with models created by create_lindist_model().
 """
 
+from itertools import product
 import pyomo.environ as pyo  # type: ignore
 from distopf.pyomo_models.lindist import ControlVariable
 from distopf.pyomo_models.protocol import LindistModelProtocol
@@ -31,10 +32,12 @@ def add_p_flow_nlp_constraints(m: LindistModelProtocol) -> None:
             if (to_bus, ph) in m.branch_phase_set
         )
         loss = sum(
-            m.l_flow[_id, ph + ph2, t]
+            m.l_flow[_id, "".join(sorted(ph + ph2)), t]
             * (
-                m.r[_id, ph + ph2] * cos(m.d[_id, ph + ph2, t])
-                - m.x[_id, ph + ph2] * sin(m.d[_id, ph + ph2, t])
+                m.r[_id, "".join(sorted(ph + ph2))]
+                * cos(m.d[_id, "".join(sorted(ph + ph2))])
+                - m.x[_id, "".join(sorted(ph + ph2))]
+                * sin(m.d[_id, "".join(sorted(ph + ph2))])
             )
             for ph2 in m.phase_map[_id]
         )
@@ -63,10 +66,12 @@ def add_q_flow_nlp_constraints(m: LindistModelProtocol) -> None:
             if (to_bus, ph) in m.branch_phase_set
         )
         loss = sum(
-            m.l_flow[_id, ph + ph2, t]
+            m.l_flow[_id, "".join(sorted(ph + ph2)), t]
             * (
-                m.x[_id, ph + ph2] * cos(m.d[_id, ph + ph2, t])
-                - m.r[_id, ph + ph2] * sin(m.d[_id, ph + ph2, t])
+                m.x[_id, "".join(sorted(ph + ph2))]
+                * cos(m.d[_id, "".join(sorted(ph + ph2))])
+                - m.r[_id, "".join(sorted(ph + ph2))]
+                * sin(m.d[_id, "".join(sorted(ph + ph2))])
             )
             for ph2 in m.phase_map[_id]
         )
@@ -113,10 +118,46 @@ def add_voltage_drop_nlp_constraints(m: LindistModelProtocol) -> None:
             voltage_drop += (-m.r[_id, ac] - sqrt3 * m.x[_id, ac]) * m.p_flow[_id, c, t]
             voltage_drop += (-m.x[_id, ac] + sqrt3 * m.r[_id, ac]) * m.q_flow[_id, c, t]
 
-        # voltage_drop_term2 = sum(z*l)
-        voltage_drop_term3 = m.l_flow[_id, ]
+        voltage_drop_term2 = sum(
+            [
+                (
+                    m.r[_id, "".join(sorted(a + ph2))] ** 2
+                    + m.x[_id, "".join(sorted(a + ph2))] ** 2
+                )
+                * m.l_flow[_id, ph2 + ph2, t]
+                for ph2 in m.phase_map[_id]
+            ]
+        )
+        voltage_drop_term3 = sum(
+            [
+                2
+                * m.l_flow[_id, "".join(sorted(q1 + q2)), t]
+                * (
+                    cos(m.d[_id, "".join(sorted(q1 + q2))])
+                    * m.r[_id, "".join(sorted(a + q1))]
+                    * m.r[_id, "".join(sorted(a + q2))]
+                    - cos(m.d[_id, "".join(sorted(q1 + q2))])
+                    * m.x[_id, "".join(sorted(a + q1))]
+                    * m.x[_id, "".join(sorted(a + q2))]
+                    - sin(m.d[_id, "".join(sorted(q1 + q2))])
+                    * m.r[_id, "".join(sorted(a + q1))]
+                    * m.x[_id, "".join(sorted(a + q2))]
+                    - sin(m.d[_id, "".join(sorted(q1 + q2))])
+                    * m.r[_id, "".join(sorted(a + q2))]
+                    * m.x[_id, "".join(sorted(a + q1))]
+                )
+                for q1, q2 in product("abc", "abc")
+                if q1 != q2 and q1 in m.phase_map[_id] and q2 in m.phase_map[_id]
+            ]
+        )
 
-        return m.v2[_id, ph, t] == m.v2[m.from_bus_map[_id], ph, t] - voltage_drop
+        return (
+            m.v2[_id, ph, t]
+            == m.v2[m.from_bus_map[_id], ph, t]
+            - voltage_drop
+            - voltage_drop_term2
+            - voltage_drop_term3
+        )
 
     m.voltage_drop = pyo.Constraint(
         m.branch_phase_set, m.time_set, rule=voltage_drop_rule
@@ -432,13 +473,27 @@ def add_battery_constant_q_constraints_p_control(m: LindistModelProtocol) -> Non
     m.battery_constant_q_bat = pyo.Constraint(m.bat_phase_set, m.time_set, rule=_rule)
 
 
-def add_current_constraint(m: LindistModelProtocol) -> None:
-    def _rule1(m: LindistModelProtocol, _id, ph, ph2, t):
-        m.p_flow[_id, ph, t] ** 2 + m.q_flow[_id, ph, t] ** 2 == m.v2[
-            _id, ph, t
-        ] * m.l_flow[_id, ph + ph2, t]
-    def _rule2(m: LindistModelProtocol, _id, ph, ph2, t):
-        m.l_flow[_id, ph + ph2, t]**2 == m.l_flow[_id, ph + ph, t]*m.l_flow[_id, ph2 + ph2, t]
+def add_current_constraint1(m: LindistModelProtocol) -> None:
+    def _rule1(m: LindistModelProtocol, _id, phases, t):
+        ph = phases[0]
+        ph2 = phases[1]
+        return (
+            m.p_flow[_id, ph, t] ** 2 + m.q_flow[_id, ph, t] ** 2
+            == m.v2[_id, ph, t] * m.l_flow[_id, ph + ph2, t]
+        )
 
     m.current_constraint = pyo.Constraint(m.bus_phase_pair_set, m.time_set, rule=_rule1)
-    m.current_sqr_constraint = pyo.Constraint(m.bus_phase_pair_set, m.time_set, rule=_rule2)
+
+
+def add_current_constraint2(m: LindistModelProtocol) -> None:
+    def _rule2(m: LindistModelProtocol, _id, phases, t):
+        ph = phases[0]
+        ph2 = phases[1]
+        return (
+            m.l_flow[_id, ph + ph2, t] ** 2
+            == m.l_flow[_id, ph + ph, t] * m.l_flow[_id, ph2 + ph2, t]
+        )
+
+    m.current_sqr_constraint = pyo.Constraint(
+        m.bus_phase_pair_set, m.time_set, rule=_rule2
+    )

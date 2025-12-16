@@ -40,7 +40,7 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
     )
     m.bus_phase_pair_set = pyo.Set(
         initialize=[
-            (i, ph1+ph2)
+            (i, ph1 + ph2)
             for i, phs in m.phase_map.items()
             for ph1, ph2 in combinations_with_replacement(phs, 2)
             if i not in m.swing_bus_set
@@ -431,8 +431,10 @@ def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         doc="Number of phases connected to battery.",
     )
 
+
 def _create_angle_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     m.d = pyo.Param(m.bus_phase_pair_set, initialize=0)
+
 
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     """
@@ -450,7 +452,7 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_angle_parameters(m, case)
 
 
-def create_lindist_model(case: Case) -> LindistModelProtocol:
+def create_nl_branchflow_model(case: Case) -> LindistModelProtocol:
     """
     Factory function to create a Pyomo ConcreteModel for multiperiod linear distribution system optimization.
 
