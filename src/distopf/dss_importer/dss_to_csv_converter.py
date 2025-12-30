@@ -422,12 +422,12 @@ class DSSToCSVConverter:
 
         x_xfmr = self.dss.Transformers.Xhl() / 100 * z_base_xfmr
         r_xfmr = self.dss.Transformers.R() / 100 * z_base_xfmr * 2
-        z_matrix_real[0, 0] = r_xfmr/100
-        z_matrix_real[1, 1] = r_xfmr/100
-        z_matrix_real[2, 2] = r_xfmr/100
-        z_matrix_imag[0, 0] = x_xfmr/100
-        z_matrix_imag[1, 1] = x_xfmr/100
-        z_matrix_imag[2, 2] = x_xfmr/100
+        z_matrix_real[0, 0] = r_xfmr
+        z_matrix_real[1, 1] = r_xfmr
+        z_matrix_real[2, 2] = r_xfmr
+        z_matrix_imag[0, 0] = x_xfmr
+        z_matrix_imag[1, 1] = x_xfmr
+        z_matrix_imag[2, 2] = x_xfmr
         return z_matrix_real, z_matrix_imag
 
     def _get_powers(self):
