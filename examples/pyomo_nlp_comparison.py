@@ -6,10 +6,7 @@ import numpy as np
 from distopf.pyomo_models.objectives import loss_objective_rule
 from distopf.pyomo_models.lindist import create_lindist_model
 from distopf.importer import create_case
-from distopf.pyomo_models.nl_branchflow_prebuilt import (
-    NLBranchFlow,
-    NLBranchFlowRelaxed,
-)
+from distopf.pyomo_models.nl_branchflow_prebuilt import NLBranchFlow
 from distopf.pyomo_models.lindist_loads import LinDistPyoMPL
 from distopf.pyomo_models.results import (
     get_voltages,
@@ -25,8 +22,26 @@ from distopf.fbs import fbs_solve
 from math import pi
 import plotly.express as px
 
-def initialize_non_linear_model(non_linear_model, linear_model):
-    nlp  = non_linear_model
+
+def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
+    i_angles["ab"] =  i_angles.a - i_angles.b
+    i_angles["bc"] =  i_angles.b - i_angles.c
+    i_angles["ca"] =  i_angles.c - i_angles.a
+    i_angles["ba"] = -i_angles.ab
+    i_angles["cb"] = -i_angles.bc
+    i_angles["ac"] = -i_angles.ca
+    i_angles["aa"] =  i_angles.a - i_angles.a
+    i_angles["bb"] =  i_angles.b - i_angles.b
+    i_angles["cc"] =  i_angles.c - i_angles.c
+    data = {
+        (_id, phases): float(i_angles.loc[i_angles.id == _id, phases].tolist()[0])
+        * pi
+        / 180
+        for _id, phases in m2.bus_phase_pair_set
+    }
+    for key in m2.d:
+        m2.d[key] = data[key]
+    nlp = non_linear_model
     lp = linear_model
     nlp.v2.set_values(lp.v2.get_values())
     nlp.v2_reg.set_values(lp.v2_reg.get_values())
@@ -62,6 +77,7 @@ def initialize_non_linear_model(non_linear_model, linear_model):
 # case = create_case(opf.CASES_DIR / "csv/ieee123_alternate", start_step=12)
 # case = create_case(opf.CASES_DIR / "cim/IEEE13.xml", start_step=12)
 case = create_case(opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss", start_step=12)
+# case = create_case(opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS", start_step=12)
 case.gen_data.control_variable = ""
 dss_parser = opf.DSSToCSVConverter(opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss")
 v_dss = dss_parser.v_solved
@@ -84,15 +100,6 @@ case.gen_data = case.gen_data.iloc[0:0]
 case.bat_data = case.bat_data.iloc[0:0]
 fbs_results = fbs_solve(case)
 i_ang = fbs_results["current_angles"]
-i_ang["ab"] = i_ang.a - i_ang.b
-i_ang["bc"] = i_ang.b - i_ang.c
-i_ang["ca"] = i_ang.c - i_ang.a
-i_ang["ba"] = -i_ang.ab
-i_ang["cb"] = -i_ang.bc
-i_ang["ac"] = -i_ang.ca
-i_ang["aa"] = i_ang.a - i_ang.a
-i_ang["bb"] = i_ang.b - i_ang.b
-i_ang["cc"] = i_ang.c - i_ang.c
 v_fbs = fbs_results["voltages"]
 v_fbs["algorithm"] = "fbs"
 cur = fbs_results["currents"]
@@ -124,40 +131,14 @@ q_flow_fbs = fbs_results["q_flows"]
 p_flow_fbs["algorithm"] = "fbs"
 q_flow_fbs["algorithm"] = "fbs"
 lindist = LinDistPyoMPL(case)
-nlbf_rel = NLBranchFlowRelaxed(case)
 nlbf = NLBranchFlow(case)
 
 m1: pyo.ConcreteModel = lindist.model
-mr: pyo.ConcreteModel = nlbf_rel.model
 m2: pyo.ConcreteModel = nlbf.model
-data = {
-    (_id, phases): float(i_ang.loc[i_ang.id == _id, phases].tolist()[0]) * pi / 180
-    for _id, phases in m2.bus_phase_pair_set
-}
-for key in m2.d:
-    m2.d[key] = data[key]
-
-
-def objective_rule(m: pyo.ConcreteModel) -> pyo.Expression:
-    total = 0
-    for _id, phases, t in m.bus_phase_pair_set * m.time_set:
-        ph = phases[0]
-        ph2 = phases[1]
-        if ph == ph2:
-            continue
-        total += (
-            m.l_flow[_id, ph + ph2, t] ** 2
-            - m.l_flow[_id, ph + ph, t] * m.l_flow[_id, ph2 + ph2, t]
-        ) ** 2 * 1000
-    return total
 
 
 m1.objective = pyo.Objective(
     rule=loss_objective_rule,
-    sense=pyo.minimize,
-)
-mr.objective = pyo.Objective(
-    rule=objective_rule,  # loss_objective_rule,
     sense=pyo.minimize,
 )
 m2.objective = pyo.Objective(
@@ -214,48 +195,8 @@ if results1.solver.status == pyo.SolverStatus.ok:
 else:
     print("Linear Optimization failed!")
 
-# Initialize relaxed nlp with lp solution
-mr = initialize_non_linear_model(mr, m1)
 
-# Solve relaxed nlp
-results_r = opt.solve(mr, tee=False)
-if results_r.solver.status == pyo.SolverStatus.ok:
-    print("Optimization successful!")
-    print(f"Objective value: {pyo.value(mr.objective)}")
-    # data = get_all_results(model, case)
-    v_nlp = get_voltages(mr.v2)
-    v2_nlp = get_values(mr.v2)
-    p_flow_nlp = get_values(mr.p_flow)
-    q_flow_nlp = get_values(mr.q_flow)
-    p_gen_nlp = get_values(mr.p_gen)
-    q_gen_nlp = get_values(mr.q_gen)
-    # plot_voltages(v_nlp, t=12).show(renderer="browser")
-    # plot_gens(p_flow, q_flow).show(renderer="browser")
-    # plot_gens(p_gen, q_gen).show(renderer="browser")
-    # plot_polar(p_gen, q_gen).show(renderer="browser")
-    v_nlp["algorithm"] = "nlp_relaxed"
-    v_list.append(v_nlp)
-    # Add fb and from_name columns to flow data
-    p_flow_nlp = p_flow_nlp.merge(
-        case.branch_data.loc[:, ["tb", "fb", "from_name"]].rename(columns={"tb": "id"}),
-        on="id",
-        how="left",
-    )
-    q_flow_nlp = q_flow_nlp.merge(
-        case.branch_data.loc[:, ["tb", "fb", "from_name"]].rename(columns={"tb": "id"}),
-        on="id",
-        how="left",
-    )
-
-    p_flow_nlp["algorithm"] = "nlp_relaxed"
-    p_list.append(p_flow_nlp)
-    q_flow_nlp["algorithm"] = "nlp_relaxed"
-    q_list.append(q_flow_nlp)
-else:
-    print("Relaxed Non-linear Optimization failed!")
-
-# initialize nlp with relaxed nlp solution
-m2 = initialize_non_linear_model(m2, mr)
+m2 = initialize_non_linear_model(m2, m1, i_ang)
 
 
 results2 = opt.solve(m2, tee=False)
@@ -646,4 +587,3 @@ plot_voltage_vs_distance(
 plot_voltage_vs_distance(
     q, case, title="Reactive Power Flow vs Distance from Source"
 ).show(renderer="browser")
-
