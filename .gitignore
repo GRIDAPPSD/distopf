@@ -9,3 +9,5 @@ build/*
 .python-version
 */__marimo__/*
 examples/layouts/*
+.zed/debug.json
+.zed/tasks.json
