@@ -433,7 +433,7 @@ def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 
 
 def _create_angle_parameters(m: pyo.ConcreteModel, case: Case) -> None:
-    m.d = pyo.Param(m.bus_phase_pair_set, initialize=0)
+    m.d = pyo.Param(m.bus_phase_pair_set, initialize=0, mutable=True)
 
 
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
