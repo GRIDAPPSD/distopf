@@ -15,7 +15,7 @@ dependencies = [
     "cvxpy>=1.7.2",
     "networkx>=3.4.2",
     "numpy>=2.2.6",
-    "opendssdirect-py==0.8.4",
+    "opendssdirect-py>=0.9.4",
     "plotly>=6.3.0",
     "scipy>=1.15.3",
     "pyomo>=6.9.4",

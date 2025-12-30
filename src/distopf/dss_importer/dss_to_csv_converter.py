@@ -1,10 +1,9 @@
-from __future__ import annotations
 from typing import Optional
 from functools import cache
 from pathlib import Path
 import networkx as nx
 import numpy as np
-import opendssdirect as dss
+from opendssdirect import dss
 import pandas as pd
 
 
@@ -85,8 +84,8 @@ class DSSToCSVConverter:
                 switch_status = (
                     "OPEN"
                     if (
-                        self.dss.CktElement.IsOpen(1, 0)
-                        or self.dss.CktElement.IsOpen(2, 0)
+                        self.dss.CktElement.IsOpen(1, 1)
+                        or self.dss.CktElement.IsOpen(2, 1)
                     )
                     else "CLOSED"
                 )
@@ -227,7 +226,7 @@ class DSSToCSVConverter:
         while flag:
             element_type = self.dss.CktElement.Name().lower().split(".")[0]
             is_open = [
-                self.dss.CktElement.IsOpen(0, ph)
+                self.dss.CktElement.IsOpen(1, ph + 1)
                 for ph in range(self.dss.CktElement.NumPhases())
             ]
             if all(is_open):
@@ -285,13 +284,14 @@ class DSSToCSVConverter:
             real z_matrix, imag z_matrix (np.ndarray, np.ndarray): 3x3 numpy array of the z_matrix corresponding to the each of the phases(real,imag)
         """
         n_phases = self.dss.Lines.Phases()
-
+        bus1_name = self.dss.Lines.Bus1()
+        bus2_name = self.dss.Lines.Bus1()
         # z_matrix_real = np.zeros((3, 3))
         # z_matrix_imag = np.zeros((3, 3))
         if n_phases > 3:
             pass
-        if (len(self.dss.CktElement.BusNames()[0].split(".")) == 4) or (
-            len(self.dss.CktElement.BusNames()[0].split(".")) == 1
+        if (len(bus1_name.split(".")) == 4) or (
+            len(bus1_name.split(".")) == 1
         ):
             # this is the condition check for three phase since three phase is either represented by bus_name.1.2.3 or bus_name
             z_matrix = (
@@ -306,7 +306,7 @@ class DSSToCSVConverter:
         else:
             # for other than 3 phases
             active_phases = [
-                int(phase) for phase in self.dss.CktElement.BusNames()[0].split(".")[1:]
+                int(phase) for phase in bus1_name.split(".")[1:]
             ]
             z_matrix = np.zeros((3, 3), dtype=complex)
             r_matrix = self.dss.Lines.RMatrix()
@@ -420,14 +420,14 @@ class DSSToCSVConverter:
         s_base_xfmr = kva * 1000 / 3
         z_base_xfmr = v_base_xfmr**2 / s_base_xfmr
 
-        x_xfmr = self.dss.Transformers.Xhl() / 100 * z_base_xfmr
-        r_xfmr = self.dss.Transformers.R() / 100 * z_base_xfmr * 2
-        z_matrix_real[0, 0] = r_xfmr/100
-        z_matrix_real[1, 1] = r_xfmr/100
-        z_matrix_real[2, 2] = r_xfmr/100
-        z_matrix_imag[0, 0] = x_xfmr/100
-        z_matrix_imag[1, 1] = x_xfmr/100
-        z_matrix_imag[2, 2] = x_xfmr/100
+        x_xfmr = self.dss.Transformers.Xhl() * z_base_xfmr
+        r_xfmr = self.dss.Transformers.R() * z_base_xfmr * 2
+        z_matrix_real[0, 0] = r_xfmr
+        z_matrix_real[1, 1] = r_xfmr
+        z_matrix_real[2, 2] = r_xfmr
+        z_matrix_imag[0, 0] = x_xfmr
+        z_matrix_imag[1, 1] = x_xfmr
+        z_matrix_imag[2, 2] = x_xfmr
         return z_matrix_real, z_matrix_imag
 
     def _get_powers(self):
@@ -476,8 +476,8 @@ class DSSToCSVConverter:
                     switch_status = (
                         "OPEN"
                         if (
-                            self.dss.CktElement.IsOpen(1, 0)
-                            or self.dss.CktElement.IsOpen(2, 0)
+                            self.dss.CktElement.IsOpen(1, 1)
+                            or self.dss.CktElement.IsOpen(2, 1)
                         )
                         else "CLOSED"
                     )
@@ -565,7 +565,7 @@ class DSSToCSVConverter:
             .reset_index(drop=True)
         )
         return branch_df
-        
+
     def get_bus_data(self) -> pd.DataFrame:
         """Extract the bus data from the distribution model.
 
