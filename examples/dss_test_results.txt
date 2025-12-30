@@ -1,0 +1,105 @@
+/home/gray/git/distopf_2/src/distopf/cases/dss/ieee13_dss/IEEE13Nodeckt.dss
+0.00: V error %: 0.275%
+0.10: V error %: 0.144%
+0.20: V error %: 0.056%
+0.30: V error %: 0.131%
+0.40: V error %: 0.213%
+0.50: V error %: 0.293%
+0.60: V error %: 0.371%
+0.70: V error %: 0.452%
+0.80: V error %: 0.543%
+0.90: V error %: 0.691%
+1.00: V error %: 0.856%
+/home/gray/git/distopf_2/src/distopf/cases/dss/ieee123_dss/Run_IEEE123Bus.DSS
+0.00: V error %: 0.064%
+0.10: V error %: 0.034%
+0.20: V error %: 0.019%
+0.30: V error %: 0.026%
+0.40: V error %: 0.038%
+0.50: V error %: 0.063%
+0.60: V error %: 0.105%
+0.70: V error %: 0.142%
+0.80: V error %: 0.195%
+0.90: V error %: 0.310%
+1.00: V error %: 0.475%
+/home/gray/git/distopf_2/src/distopf/cases/dss/9500-primary-network/Master.dss
+0.00: V error %: 1.834%
+0.10: V error %: 1.726%
+0.20: V error %: 1.620%
+0.30: V error %: 1.487%
+0.40: V error %: 1.743%
+0.50: V error %: 1.590%
+
+
+--------------------------------------------------------------------------
+without divide by 100  x_xfmr = self.dss.Transformers.Xhl() * z_base_xfmr
+---------------------------------------------------------------------------
+/home/gray/git/distopf_2/src/distopf/cases/dss/ieee13_dss/IEEE13Nodeckt.dss
+0.00: V error %: 30.912%
+0.10: V error %: 19.054%
+/home/gray/git/distopf_2/src/distopf/cases/dss/ieee123_dss/Run_IEEE123Bus.DSS
+0.00: V error %: 0.599%
+0.10: V error %: 0.489%
+0.20: V error %: 0.404%
+0.30: V error %: 0.327%
+0.40: V error %: 0.254%
+0.50: V error %: 0.190%
+0.60: V error %: 0.143%
+0.70: V error %: 0.209%
+0.80: V error %: 0.291%
+0.90: V error %: 0.332%
+1.00: V error %: 0.384%
+/home/gray/git/distopf_2/src/distopf/cases/dss/9500-primary-network/Master.dss
+0.00: V error %: 11.887%
+0.10: V error %: 11.162%
+
+------------------------------
+New version
+------------------------------
+
+/home/gray/git/distopf_2/src/distopf/cases/dss/ieee13_dss/IEEE13Nodeckt.dss
+0.00: V error %: 27.468%
+0.10: V error %: 19.617%
+/home/gray/git/distopf_2/src/distopf/cases/dss/ieee123_dss/Run_IEEE123Bus.DSS
+0.00: V error %: 2.357%
+0.10: V error %: 1.806%
+0.20: V error %: 1.466%
+0.30: V error %: 1.126%
+0.40: V error %: 1.814%
+0.50: V error %: 2.662%
+0.60: V error %: 3.520%
+0.70: V error %: 4.355%
+0.80: V error %: 5.235%
+0.90: V error %: 6.163%
+1.00: V error %: 7.161%
+
+---------------
+New version with /100
+----------------
+/home/gray/git/distopf_2/src/distopf/cases/dss/ieee13_dss/IEEE13Nodeckt.dss
+0.00: V error %: 3.097%
+0.10: V error %: 2.012%
+0.20: V error %: 1.106%
+0.30: V error %: 1.187%
+0.40: V error %: 2.022%
+0.50: V error %: 2.875%
+0.60: V error %: 3.760%
+0.70: V error %: 4.987%
+0.80: V error %: 6.241%
+0.90: V error %: 7.659%
+1.00: V error %: 9.150%
+/home/gray/git/distopf_2/src/distopf/cases/dss/ieee123_dss/Run_IEEE123Bus.DSS
+0.00: V error %: 2.848%
+0.10: V error %: 2.233%
+0.20: V error %: 1.831%
+0.30: V error %: 1.420%
+0.40: V error %: 1.700%
+0.50: V error %: 2.545%
+0.60: V error %: 3.478%
+0.70: V error %: 4.390%
+0.80: V error %: 5.346%
+0.90: V error %: 6.352%
+1.00: V error %: 7.429%
+/home/gray/git/distopf_2/src/distopf/cases/dss/9500-primary-network/Master.dss
+0.00: V error %: 2.046%
+0.10: V error %: 1.895%

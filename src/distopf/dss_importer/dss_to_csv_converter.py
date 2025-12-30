@@ -285,7 +285,7 @@ class DSSToCSVConverter:
         """
         n_phases = self.dss.Lines.Phases()
         bus1_name = self.dss.Lines.Bus1()
-        bus2_name = self.dss.Lines.Bus1()
+        bus2_name = self.dss.Lines.Bus2()
         # z_matrix_real = np.zeros((3, 3))
         # z_matrix_imag = np.zeros((3, 3))
         if n_phases > 3:
@@ -420,8 +420,8 @@ class DSSToCSVConverter:
         s_base_xfmr = kva * 1000 / 3
         z_base_xfmr = v_base_xfmr**2 / s_base_xfmr
 
-        x_xfmr = self.dss.Transformers.Xhl() * z_base_xfmr
-        r_xfmr = self.dss.Transformers.R() * z_base_xfmr * 2
+        x_xfmr = self.dss.Transformers.Xhl()/100 * z_base_xfmr
+        r_xfmr = self.dss.Transformers.R()/100 * z_base_xfmr * 2
         z_matrix_real[0, 0] = r_xfmr
         z_matrix_real[1, 1] = r_xfmr
         z_matrix_real[2, 2] = r_xfmr
