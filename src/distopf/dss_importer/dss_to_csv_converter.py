@@ -354,6 +354,82 @@ class DSSToCSVConverter:
             #
             # return np.real(z_matrix), np.imag(z_matrix)
 
+    def _get_transformer_zmatrix(self) -> tuple[np.ndarray, np.ndarray]:
+        element_type = self.dss.CktElement.Name().lower().split(".")[0]
+        element_name = self.dss.CktElement.Name().lower().split(".")[1]
+        z_matrix_real = np.zeros((3, 3))
+        z_matrix_imag = np.zeros((3, 3))
+
+        # is_delta = self.dss.Transformers.IsDelta()
+        # n_windings = self.dss.Transformers.NumWindings()
+        r_xfmr = 0
+        x_xfmr = 0
+        n_phases = self.dss.CktElement.NumPhases()
+        # n_terminals = self.dss.CktElement.NumTerminals()
+        y_prime_flat = np.array(self.dss.CktElement.YPrim())
+        y_prim = y_prime_flat[::2] + 1j * y_prime_flat[1::2]
+        y_shape = int(np.sqrt(len(y_prim)))
+        y_prim = np.reshape(y_prim, (y_shape, y_shape))
+        # n_y11 = int(y_shape / 2)
+        v_all = np.array(self.dss.CktElement.Voltages())
+        v_all = v_all[::2] + 1j * v_all[1::2]
+        # v1 = v_all[: len(v_all) // 2]
+        # v2 = v_all[len(v_all) // 2 :]
+        i_all = np.array(self.dss.CktElement.Currents())
+        i_all = i_all[::2] + 1j * i_all[1::2]
+        # i1 = i_all[: len(i_all) // 2]
+        # i2 = i_all[len(i_all) // 2 :]
+        self.dss.Transformers.Wdg(1)
+        # v1 = np.array(self.dss.Transformers.WdgVoltages())
+        # v1 = v1[::2] + 1j * v1[1::2]
+        # kv_h = self.dss.Transformers.kV()
+        self.dss.Transformers.Wdg(2)
+        # v2 = np.array(self.dss.Transformers.WdgVoltages())
+        # v2 = v2[::2] + 1j * v2[1::2]
+        # kv_l = self.dss.Transformers.kV()
+        # n = kv_h / kv_l
+        # y11 = y_prim[:n_y11, :n_y11] * n**2
+        # y12 = y_prim[:n_y11, n_y11:] * n
+        # y21 = y_prim[n_y11:, :n_y11]
+        # y22 = y_prim[n_y11:, n_y11:]
+        # y_prim_l = np.r_[np.c_[y11, y12], np.c_[y21, y22]]
+        # z_prim_l = np.linalg.inv(y_prim_l)
+        # z11 = z_prim_l[:n_y11, :n_y11]
+        # z12 = z_prim_l[:n_y11, n_y11:]
+        # z21 = z_prim_l[n_y11:, :n_y11]
+        # z22 = z_prim_l[n_y11:, n_y11:]
+        i_all = np.array(self.dss.Transformers.WdgCurrents())
+        # i_in = i_all[::2]
+        i_all = i_all[::2] + i_all[1::2] * 1j
+        # i_in = i_all[::2]
+        # i_out = i_all[1::2]
+        # i1_in = i_in[::2]
+        # i2_in = i_in[1::2]
+        # i2_out = i_out[1::2]
+        # zabc = (v1[:n_phases] / n - v2[:n_phases]) / -i2[:n_phases]
+        # TODO: tranformer model may be wrong but the 13bus results look better with it.
+        # if is_delta:
+        #     raise Warning("Delta transformer not implemented")
+        # if n_windings != 2:
+        #
+        # for i_wdg in range(1, n_windings + 1):
+        # self.dss.Transformers.Wdg(i_wdg)
+        kv = self.dss.Transformers.kV()
+        v_base_xfmr = kv / np.sqrt(3) * 1000
+        kva = self.dss.Transformers.kVA()
+        s_base_xfmr = kva * 1000 / 3
+        z_base_xfmr = v_base_xfmr**2 / s_base_xfmr
+
+        x_xfmr = self.dss.Transformers.Xhl() / 100 * z_base_xfmr
+        r_xfmr = self.dss.Transformers.R() / 100 * z_base_xfmr * 2
+        z_matrix_real[0, 0] = r_xfmr/100
+        z_matrix_real[1, 1] = r_xfmr/100
+        z_matrix_real[2, 2] = r_xfmr/100
+        z_matrix_imag[0, 0] = x_xfmr/100
+        z_matrix_imag[1, 1] = x_xfmr/100
+        z_matrix_imag[2, 2] = x_xfmr/100
+        return z_matrix_real, z_matrix_imag
+
     def _get_powers(self):
         n_phases = self.dss.CktElement.NumPhases()
         pq = np.array(self.dss.CktElement.Powers())
@@ -390,73 +466,7 @@ class DSSToCSVConverter:
                 flag = self.dss.PDElements.Next()
                 continue
             if element_type == "transformer":
-                # is_delta = self.dss.Transformers.IsDelta()
-                # n_windings = self.dss.Transformers.NumWindings()
-                r_xfmr = 0
-                x_xfmr = 0
-                n_phases = self.dss.CktElement.NumPhases()
-                # n_terminals = self.dss.CktElement.NumTerminals()
-                y_prime_flat = np.array(self.dss.CktElement.YPrim())
-                y_prim = y_prime_flat[::2] + 1j * y_prime_flat[1::2]
-                y_shape = int(np.sqrt(len(y_prim)))
-                y_prim = np.reshape(y_prim, (y_shape, y_shape))
-                # n_y11 = int(y_shape / 2)
-                v_all = np.array(self.dss.CktElement.Voltages())
-                v_all = v_all[::2] + 1j * v_all[1::2]
-                # v1 = v_all[: len(v_all) // 2]
-                # v2 = v_all[len(v_all) // 2 :]
-                i_all = np.array(self.dss.CktElement.Currents())
-                i_all = i_all[::2] + 1j * i_all[1::2]
-                # i1 = i_all[: len(i_all) // 2]
-                # i2 = i_all[len(i_all) // 2 :]
-                self.dss.Transformers.Wdg(1)
-                # v1 = np.array(self.dss.Transformers.WdgVoltages())
-                # v1 = v1[::2] + 1j * v1[1::2]
-                # kv_h = self.dss.Transformers.kV()
-                self.dss.Transformers.Wdg(2)
-                # v2 = np.array(self.dss.Transformers.WdgVoltages())
-                # v2 = v2[::2] + 1j * v2[1::2]
-                # kv_l = self.dss.Transformers.kV()
-                # n = kv_h / kv_l
-                # y11 = y_prim[:n_y11, :n_y11] * n**2
-                # y12 = y_prim[:n_y11, n_y11:] * n
-                # y21 = y_prim[n_y11:, :n_y11]
-                # y22 = y_prim[n_y11:, n_y11:]
-                # y_prim_l = np.r_[np.c_[y11, y12], np.c_[y21, y22]]
-                # z_prim_l = np.linalg.inv(y_prim_l)
-                # z11 = z_prim_l[:n_y11, :n_y11]
-                # z12 = z_prim_l[:n_y11, n_y11:]
-                # z21 = z_prim_l[n_y11:, :n_y11]
-                # z22 = z_prim_l[n_y11:, n_y11:]
-                i_all = np.array(self.dss.Transformers.WdgCurrents())
-                # i_in = i_all[::2]
-                i_all = i_all[::2] + i_all[1::2] * 1j
-                # i_in = i_all[::2]
-                # i_out = i_all[1::2]
-                # i1_in = i_in[::2]
-                # i2_in = i_in[1::2]
-                # i2_out = i_out[1::2]
-                # zabc = (v1[:n_phases] / n - v2[:n_phases]) / -i2[:n_phases]
-                # TODO: tranformer model may be wrong but the 13bus results look better with it.
-                # if is_delta:
-                #     raise Warning("Delta transformer not implemented")
-                # if n_windings != 2:
-                #
-                # for i_wdg in range(1, n_windings + 1):
-                # self.dss.Transformers.Wdg(i_wdg)
-                v_base_xfmr = self.dss.Transformers.kV() / np.sqrt(3) * 1000
-                s_base_xfmr = self.dss.Transformers.kVA() * 1000 / 3
-                z_base_xfmr = v_base_xfmr**2 / s_base_xfmr
-
-                x_xfmr = self.dss.Transformers.Xhl() / 100 * z_base_xfmr
-                r_xfmr = self.dss.Transformers.R() / 100 * z_base_xfmr * 2
-                z_matrix_real[0, 0] = r_xfmr
-                z_matrix_real[1, 1] = r_xfmr
-                z_matrix_real[2, 2] = r_xfmr
-                z_matrix_imag[0, 0] = x_xfmr
-                z_matrix_imag[1, 1] = x_xfmr
-                z_matrix_imag[2, 2] = x_xfmr
-                pass
+                z_matrix_real, z_matrix_imag = self._get_transformer_zmatrix()
             if element_type == "line":
                 element_name = self.dss.Lines.Name()
                 z_matrix_real, z_matrix_imag = self._get_line_zmatrix()
