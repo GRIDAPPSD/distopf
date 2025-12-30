@@ -1,3 +1,4 @@
+from genericpath import samestat
 import numpy as np
 import pandas as pd
 from distopf.importer import Case
@@ -218,47 +219,80 @@ class FBS:
 
         # Load current
         if node in self.node_loads:
-            S_load = self.node_loads[node]
-            # Avoid division by zero
+            s_load_nom = self.node_loads[node]
+            cvr_p = self.bus_data.loc[self.bus_data.id == node, "cvr_p"].tolist()[0]
+            cvr_q = self.bus_data.loc[self.bus_data.id == node, "cvr_q"].tolist()[0]
             for ph in connected_phases:
-                if abs(v_node[ph]) > 1e-10 and abs(S_load[ph]) > 1e-10:
-                    I_injection[ph] -= np.conj(S_load[ph] / v_node[ph])
+                p_nom = s_load_nom[ph].real
+                q_nom = s_load_nom[ph].imag
+                p_load = p_nom + cvr_p * p_nom / 2 * (abs(v_node[ph]) ** 2 - 1)
+                q_load = q_nom + cvr_q * q_nom / 2 * (abs(v_node[ph]) ** 2 - 1)
+                s_load = p_load + 1j * q_load
+                if abs(v_node[ph]) > 1e-10 and abs(s_load) > 1e-10:
+                    I_injection[ph] -= np.conj(s_load / v_node[ph])
 
         # Generation current
         if node in self.node_generations:
-            S_gen = self.node_generations[node]
+            s_gen = self.node_generations[node]
             for ph in connected_phases:
-                if abs(v_node[ph]) > 1e-10 and abs(S_gen[ph]) > 1e-10:
-                    I_injection[ph] += np.conj(S_gen[ph] / v_node[ph])
+                if abs(v_node[ph]) > 1e-10 and abs(s_gen[ph]) > 1e-10:
+                    I_injection[ph] += np.conj(s_gen[ph] / v_node[ph])
 
         # Capacitor current
         if node in self.node_capacitors:
             Q_cap_nom = self.node_capacitors[node]
             for ph in connected_phases:
                 if abs(v_node[ph]) > 1e-10 and abs(Q_cap_nom[ph]) > 1e-10:
-                    I_injection[ph] += np.conj(1j * Q_cap_nom[ph] / v_node[ph])
-
-                    # Mathematically more correct (?) but matches OpenDSS and DistOPF worse.
-                    # S_cap = -1j * abs(v_node[ph]) ** 2 * Q_cap_nom[ph]
-                    # I_injection[ph] -= np.conj(S_cap / v_node[ph])
+                    S_cap = -1j * abs(v_node[ph]) ** 2 * Q_cap_nom[ph]
+                    I_injection[ph] -= np.conj(S_cap / v_node[ph])
         return I_injection
 
-    def _apply_voltage_regulator(self, v_sending: np.ndarray, tb: int) -> np.ndarray:
-        """Apply voltage regulator transformation."""
+    # def _apply_voltage_regulator(self, v_sending: np.ndarray, tb: int) -> np.ndarray:
+    #     """Apply voltage regulator transformation."""
+    #     if tb in self.reg_data.tb.array:
+    #         reg_index = self.reg_data.loc[self.reg_data.tb == tb].index[0]
+    #         phases_str = self.reg_data.at[reg_index, "phases"].lower()
+
+    #         # Apply tap ratios to appropriate phases
+    #         v_regulated = v_sending.copy()
+    #         for ph in phases_str:
+    #             i_ph = "abc".index(ph)
+    #             v_regulated[i_ph] *= self.reg_data.at[reg_index, f"ratio_{ph}"]
+
+    #         return v_regulated
+
+    #     return v_sending
+
+    def _get_tap_ratio_matrix(self, tb: int) -> np.ndarray:
+        """Get tap ratio matrix for a given branch."""
+        a_t = np.eye(3, dtype=complex)
+
         if tb in self.reg_data.tb.array:
             reg_index = self.reg_data.loc[self.reg_data.tb == tb].index[0]
             phases_str = self.reg_data.at[reg_index, "phases"].lower()
 
-            # Apply tap ratios to appropriate phases
-            v_regulated = v_sending.copy()
             for ph in phases_str:
                 i_ph = "abc".index(ph)
-                v_regulated[i_ph] *= self.reg_data.at[reg_index, f"ratio_{ph}"]
+                tap_ratio = self.reg_data.at[reg_index, f"ratio_{ph}"]
+                a_t[i_ph, i_ph] = tap_ratio
 
-            return v_regulated
+        return a_t
+    
+    def _get_tap_current_ratio_matrix(self, tb: int) -> np.ndarray:
+        """Get tap current ratio matrix for a given branch."""
+        d_t = np.eye(3, dtype=complex)
 
-        return v_sending
+        if tb in self.reg_data.tb.array:
+            reg_index = self.reg_data.loc[self.reg_data.tb == tb].index[0]
+            phases_str = self.reg_data.at[reg_index, "phases"].lower()
 
+            for ph in phases_str:
+                i_ph = "abc".index(ph)
+                tap_ratio = self.reg_data.at[reg_index, f"ratio_{ph}"]
+                d_t[i_ph, i_ph] = 1/tap_ratio
+
+        return d_t
+    
     def _backward_sweep(self, v_nodes: dict[int, np.ndarray]) -> dict[int, np.ndarray]:
         """Backward sweep: Calculate branch currents from loads to source."""
         I_branches = {}
@@ -278,12 +312,30 @@ class FBS:
             if node in self.topology["children"]:
                 for child in self.topology["children"][node]:
                     if child in I_branches:
-                        I_total += I_branches[child]
+                        child_current = I_branches[child].copy()
+
+                        # Transform child current through regulator/transformer
+                        # Current is inverse-transformed by tap ratio (opposite of voltage)
+                        # if child in self.reg_data.tb.array:
+                        #     reg_index = self.reg_data.loc[
+                        #         self.reg_data.tb == child
+                        #     ].index[0]
+                        #     phases_str = self.reg_data.at[reg_index, "phases"].lower()
+
+                            # for ph in phases_str:
+                            #     i_ph = "abc".index(ph)
+                            #     tap_ratio = self.reg_data.at[reg_index, f"ratio_{ph}"]
+                            #     # Inverse transform: divide by tap ratio
+                            #     child_current[i_ph] /= tap_ratio
+
+                        I_total += child_current
 
             # Store current in upstream branch
             parent = self.topology["parent"].get(node)
             if parent is not None:
-                I_branches[node] = I_total
+                d_t = self._get_tap_ratio_matrix(node)
+                I_branches[node] = d_t @ I_total
+                # I_branches[node] = I_total
 
         return I_branches
 
@@ -305,19 +357,23 @@ class FBS:
             branch_key = node
 
             if branch_key in I_branches and branch_key in self.line_impedances:
-                z_branch = self.line_impedances[branch_key]
+                B_t = self.line_impedances[branch_key]
                 i_branch = I_branches[branch_key]
 
                 # Voltage drop calculation: v_node = v_parent - Z * I
-                v_before_reg = v_nodes[parent] - z_branch @ i_branch
+                A_t = self._get_tap_ratio_matrix(branch_key)
+                # if branch_key in self.reg_data.tb.array:
+                #     B_t = np.zeros((3,3), dtype=complex)
+                v_nodes[node] = A_t @ v_nodes[parent] - B_t @ i_branch
 
                 # Apply voltage regulator if present
-                v_nodes[node] = self._apply_voltage_regulator(v_before_reg, branch_key)
+                # v_nodes[node] = self._apply_voltage_regulator(v_before_reg, branch_key)
             else:
                 # If no current calculated, maintain parent voltage
                 v_nodes[node] = v_nodes[parent].copy()
 
         return v_nodes
+
 
     def _get_nodes_reverse_order(self) -> list[int]:
         """Get nodes in reverse topological order (leaves to root)."""
