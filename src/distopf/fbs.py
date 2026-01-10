@@ -316,26 +316,18 @@ class FBS:
 
                         # Transform child current through regulator/transformer
                         # Current is inverse-transformed by tap ratio (opposite of voltage)
-                        # if child in self.reg_data.tb.array:
-                        #     reg_index = self.reg_data.loc[
-                        #         self.reg_data.tb == child
-                        #     ].index[0]
-                        #     phases_str = self.reg_data.at[reg_index, "phases"].lower()
-
-                            # for ph in phases_str:
-                            #     i_ph = "abc".index(ph)
-                            #     tap_ratio = self.reg_data.at[reg_index, f"ratio_{ph}"]
-                            #     # Inverse transform: divide by tap ratio
-                            #     child_current[i_ph] /= tap_ratio
+                        if child in self.reg_data.tb.array:
+                            d_t = self._get_tap_ratio_matrix(child)
+                            child_current = d_t @ child_current
 
                         I_total += child_current
 
             # Store current in upstream branch
             parent = self.topology["parent"].get(node)
             if parent is not None:
-                d_t = self._get_tap_ratio_matrix(node)
-                I_branches[node] = d_t @ I_total
-                # I_branches[node] = I_total
+                # d_t = self._get_tap_ratio_matrix(node)
+                # I_branches[node] = d_t @ I_total
+                I_branches[node] = I_total
 
         return I_branches
 
@@ -611,26 +603,26 @@ class FBS:
             fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb_id}"
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
 
-            if fb in self.voltages:
-                S = self.voltages[fb] * np.conj(current)
+            # if fb in self.voltages:
+            s = self.voltages[tb] * np.conj(current)
 
-                # Get connected phases for the branch
-                fb_phases = self.phase_connections.get(fb, [0, 1, 2])
-                tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-                branch_phases = list(set(fb_phases) & set(tb_phases))
+            # Get connected phases for the branch
+            fb_phases = self.phase_connections.get(fb, [0, 1, 2])
+            tb_phases = self.phase_connections.get(tb, [0, 1, 2])
+            branch_phases = list(set(fb_phases) & set(tb_phases))
 
-                flow_data.append(
-                    {
-                        "fb": fb_id,
-                        "id": tb_id,
-                        "from_name": fb_name,
-                        "name": tb_name,
-                        "t": 0,  # Time step
-                        "a": S[0].real if 0 in branch_phases else np.nan,
-                        "b": S[1].real if 1 in branch_phases else np.nan,
-                        "c": S[2].real if 2 in branch_phases else np.nan,
-                    }
-                )
+            flow_data.append(
+                {
+                    "fb": fb_id,
+                    "id": tb_id,
+                    "from_name": fb_name,
+                    "name": tb_name,
+                    "t": 0,  # Time step
+                    "a": s[0].real if 0 in branch_phases else np.nan,
+                    "b": s[1].real if 1 in branch_phases else np.nan,
+                    "c": s[2].real if 2 in branch_phases else np.nan,
+                }
+            )
 
         return pd.DataFrame(flow_data).sort_values(["id", "fb"]).reset_index(drop=True)
 
@@ -659,26 +651,25 @@ class FBS:
             fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb_id}"
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
 
-            if fb in self.voltages:
-                S = self.voltages[fb] * np.conj(current)
+            s = self.voltages[tb] * np.conj(current)
 
-                # Get connected phases for the branch
-                fb_phases = self.phase_connections.get(fb, [0, 1, 2])
-                tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-                branch_phases = list(set(fb_phases) & set(tb_phases))
+            # Get connected phases for the branch
+            fb_phases = self.phase_connections.get(fb, [0, 1, 2])
+            tb_phases = self.phase_connections.get(tb, [0, 1, 2])
+            branch_phases = list(set(fb_phases) & set(tb_phases))
 
-                flow_data.append(
-                    {
-                        "fb": fb_id,
-                        "id": tb_id,
-                        "from_name": fb_name,
-                        "name": tb_name,
-                        "t": 0,  # Time step
-                        "a": S[0].imag if 0 in branch_phases else np.nan,
-                        "b": S[1].imag if 1 in branch_phases else np.nan,
-                        "c": S[2].imag if 2 in branch_phases else np.nan,
-                    }
-                )
+            flow_data.append(
+                {
+                    "fb": fb_id,
+                    "id": tb_id,
+                    "from_name": fb_name,
+                    "name": tb_name,
+                    "t": 0,  # Time step
+                    "a": s[0].imag if 0 in branch_phases else np.nan,
+                    "b": s[1].imag if 1 in branch_phases else np.nan,
+                    "c": s[2].imag if 2 in branch_phases else np.nan,
+                }
+            )
 
         return pd.DataFrame(flow_data).sort_values(["id", "fb"]).reset_index(drop=True)
 
