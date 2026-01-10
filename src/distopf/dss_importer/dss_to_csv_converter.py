@@ -1,10 +1,9 @@
-from __future__ import annotations
 from typing import Optional
 from functools import cache
 from pathlib import Path
 import networkx as nx
 import numpy as np
-import opendssdirect as dss
+from opendssdirect import dss
 import pandas as pd
 
 
@@ -85,8 +84,8 @@ class DSSToCSVConverter:
                 switch_status = (
                     "OPEN"
                     if (
-                        self.dss.CktElement.IsOpen(1, 0)
-                        or self.dss.CktElement.IsOpen(2, 0)
+                        self.dss.CktElement.IsOpen(1, 1)
+                        or self.dss.CktElement.IsOpen(2, 1)
                     )
                     else "CLOSED"
                 )
@@ -163,12 +162,9 @@ class DSSToCSVConverter:
     @property
     # @cache
     def load_buses(self) -> set[str]:
-        flag = self.dss.Loads.First()
-        load_buses = set()
-        while flag:
-            load_buses.add(self.dss.CktElement.BusNames()[0].split(".")[0])
-            flag = self.dss.Loads.Next()
-        return load_buses
+        return set(
+            [self.dss.CktElement.BusNames()[0].split(".")[0] for line in self.dss.Loads]
+        )
 
     @property
     def num_phase_map(self) -> dict[str, str]:
@@ -220,27 +216,50 @@ class DSSToCSVConverter:
         v_df = v_df.sort_index()
         return v_df
 
-    def get_apparent_power_flows(self) -> pd.DataFrame:
-        # s_base = self.s_base
-        flag = self.dss.PDElements.First()
+    def get_apparent_power_flows(self):
+        all_names = self.dss.PDElements.AllNames()
+        all_n_conductors = self.dss.PDElements.AllNumConductors()
+        all_n_terminals = self.dss.PDElements.AllNumTerminals()
+        all_n_phases = self.dss.PDElements.AllNumPhases()
+        all_powers = self.dss.PDElements.AllPowers()
         power_data = []
-        while flag:
-            element_type = self.dss.CktElement.Name().lower().split(".")[0]
-            is_open = [
-                self.dss.CktElement.IsOpen(0, ph)
-                for ph in range(self.dss.CktElement.NumPhases())
-            ]
-            if all(is_open):
-                flag = self.dss.PDElements.Next()
+        i = 0
+        for name, n_cond, n_phases, n_term in zip(
+            all_names, all_n_conductors, all_n_phases, all_n_terminals
+        ):
+            element_type = name.split(".")[0]
+            element_name = name.split(".")[1]
+            i_end = i + n_cond * n_term * 2
+            pq = np.array(all_powers[i:i_end]).reshape(n_cond * n_term, 2)
+            i = i_end
+            if element_type not in ["Line", "Transformer", "Reactor"]:
                 continue
-            s_out = self._get_powers() * 1000 / self.s_base
-            if element_type not in ["line", "transformer", "reactor"]:
-                flag = self.dss.PDElements.Next()
-                continue
-            bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
-            bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
+            if element_type == "Line":
+                self.dss.Lines.Name(element_name)
+            if element_type == "Transformer":
+                self.dss.Transformers.Name(element_name)
+            if element_type == "Reactor":
+                self.dss.Reactors.Name(element_name)
+            bus_names = self.dss.CktElement.BusNames()
+            bus1 = bus_names[0].split(".")[0]
+            bus2 = bus_names[1].split(".")[0]
+            active_phases = np.array([0, 1, 2])
+            if n_phases < 3:
+                active_phases = (
+                    np.array(self.dss.CktElement.BusNames()[0].split(".")[1:]).astype(
+                        int
+                    )
+                    - 1
+                )
+            # pq_in = pq[:n_phases, :]
+            pq_out = -pq[n_cond : n_cond + n_phases, :]
+            s_out_ = pq_out[:, 0] + 1j * pq_out[:, 1]
+            s_out = np.array(
+                [np.nan + 1j * np.nan, np.nan + 1j * np.nan, np.nan + 1j * np.nan]
+            )
+            s_out[active_phases] = s_out_[:n_phases]
+            s_out = s_out * 1000 / self.s_base
             self.dss.Circuit.SetActiveBus(bus2)
-
             each_power = dict(
                 fb=self.bus_names_to_index_map[bus1],
                 tb=self.bus_names_to_index_map[bus2],
@@ -249,11 +268,9 @@ class DSSToCSVConverter:
                 a=s_out[0],
                 b=s_out[1],
                 c=s_out[2],
+                nodes=self.dss.Bus.Nodes(),
             )
-
             power_data.append(each_power)
-            flag = self.dss.PDElements.Next()
-
         # combine lines between identical buses.
         power_df = pd.DataFrame(power_data)
         power_df.fb = power_df.fb.astype(int)
@@ -269,15 +286,36 @@ class DSSToCSVConverter:
                     "a": "sum",
                     "b": "sum",
                     "c": "sum",
+                    "nodes": "first",
                 }
             )
             .reset_index(drop=True)
             .sort_values(by=["fb"], ignore_index=True)
             .sort_values(by=["tb"], ignore_index=True)
         )
+        for i, row in power_df.iterrows():
+            if 1 not in row.nodes:
+                power_df.loc[i, "a"] = pd.NA
+            if 2 not in row.nodes:
+                power_df.loc[i, "b"] = pd.NA
+            if 3 not in row.nodes:
+                power_df.loc[i, "c"] = pd.NA
+        return power_df.loc[:, ["fb", "tb", "from_name", "to_name", "a", "b", "c"]]
 
-        return power_df
+    def get_p_flows(self):
+        s_flows = self.get_apparent_power_flows()
+        p_flows = s_flows.loc[:, ["fb", "tb", "from_name", "to_name"]].copy()
+        p_flows.loc[:, ["a", "b", "c"]] =  np.real(s_flows.loc[:, ["a", "b", "c"]])
+        return p_flows
 
+    def get_q_flows(self):
+        s_flows = self.get_apparent_power_flows()
+        q_flows = s_flows.loc[:, ["fb", "tb", "from_name", "to_name"]].copy()
+        q_flows.loc[:, ["a", "b", "c"]] =  np.imag(s_flows.loc[:, ["a", "b", "c"]])
+        q_flows.loc[s_flows.isna().a, "a"] = np.nan
+        q_flows.loc[s_flows.isna().b, "b"] = np.nan
+        q_flows.loc[s_flows.isna().c, "c"] = np.nan
+        return q_flows
     def _get_line_zmatrix(self) -> tuple[np.ndarray, np.ndarray]:
         """Returns the z_matrix of a specified line element.
 
@@ -285,14 +323,11 @@ class DSSToCSVConverter:
             real z_matrix, imag z_matrix (np.ndarray, np.ndarray): 3x3 numpy array of the z_matrix corresponding to the each of the phases(real,imag)
         """
         n_phases = self.dss.Lines.Phases()
-
-        # z_matrix_real = np.zeros((3, 3))
-        # z_matrix_imag = np.zeros((3, 3))
+        bus1_name = self.dss.Lines.Bus1()
+        bus2_name = self.dss.Lines.Bus2()
         if n_phases > 3:
             pass
-        if (len(self.dss.CktElement.BusNames()[0].split(".")) == 4) or (
-            len(self.dss.CktElement.BusNames()[0].split(".")) == 1
-        ):
+        if (len(bus1_name.split(".")) == 4) or (len(bus1_name.split(".")) == 1):
             # this is the condition check for three phase since three phase is either represented by bus_name.1.2.3 or bus_name
             z_matrix = (
                 np.array(self.dss.Lines.RMatrix())
@@ -305,9 +340,7 @@ class DSSToCSVConverter:
 
         else:
             # for other than 3 phases
-            active_phases = [
-                int(phase) for phase in self.dss.CktElement.BusNames()[0].split(".")[1:]
-            ]
+            active_phases = [int(phase) for phase in bus1_name.split(".")[1:]]
             z_matrix = np.zeros((3, 3), dtype=complex)
             r_matrix = self.dss.Lines.RMatrix()
             x_matrix = self.dss.Lines.XMatrix()
@@ -355,65 +388,10 @@ class DSSToCSVConverter:
             # return np.real(z_matrix), np.imag(z_matrix)
 
     def _get_transformer_zmatrix(self) -> tuple[np.ndarray, np.ndarray]:
-        element_type = self.dss.CktElement.Name().lower().split(".")[0]
-        element_name = self.dss.CktElement.Name().lower().split(".")[1]
-        z_matrix_real = np.zeros((3, 3))
-        z_matrix_imag = np.zeros((3, 3))
-
-        # is_delta = self.dss.Transformers.IsDelta()
-        # n_windings = self.dss.Transformers.NumWindings()
-        r_xfmr = 0
-        x_xfmr = 0
-        n_phases = self.dss.CktElement.NumPhases()
-        # n_terminals = self.dss.CktElement.NumTerminals()
-        y_prime_flat = np.array(self.dss.CktElement.YPrim())
-        y_prim = y_prime_flat[::2] + 1j * y_prime_flat[1::2]
-        y_shape = int(np.sqrt(len(y_prim)))
-        y_prim = np.reshape(y_prim, (y_shape, y_shape))
-        # n_y11 = int(y_shape / 2)
-        v_all = np.array(self.dss.CktElement.Voltages())
-        v_all = v_all[::2] + 1j * v_all[1::2]
-        # v1 = v_all[: len(v_all) // 2]
-        # v2 = v_all[len(v_all) // 2 :]
-        i_all = np.array(self.dss.CktElement.Currents())
-        i_all = i_all[::2] + 1j * i_all[1::2]
-        # i1 = i_all[: len(i_all) // 2]
-        # i2 = i_all[len(i_all) // 2 :]
+        r_matrix = np.zeros((3, 3))
+        x_matrix = np.zeros((3, 3))
         self.dss.Transformers.Wdg(1)
-        # v1 = np.array(self.dss.Transformers.WdgVoltages())
-        # v1 = v1[::2] + 1j * v1[1::2]
-        # kv_h = self.dss.Transformers.kV()
         self.dss.Transformers.Wdg(2)
-        # v2 = np.array(self.dss.Transformers.WdgVoltages())
-        # v2 = v2[::2] + 1j * v2[1::2]
-        # kv_l = self.dss.Transformers.kV()
-        # n = kv_h / kv_l
-        # y11 = y_prim[:n_y11, :n_y11] * n**2
-        # y12 = y_prim[:n_y11, n_y11:] * n
-        # y21 = y_prim[n_y11:, :n_y11]
-        # y22 = y_prim[n_y11:, n_y11:]
-        # y_prim_l = np.r_[np.c_[y11, y12], np.c_[y21, y22]]
-        # z_prim_l = np.linalg.inv(y_prim_l)
-        # z11 = z_prim_l[:n_y11, :n_y11]
-        # z12 = z_prim_l[:n_y11, n_y11:]
-        # z21 = z_prim_l[n_y11:, :n_y11]
-        # z22 = z_prim_l[n_y11:, n_y11:]
-        i_all = np.array(self.dss.Transformers.WdgCurrents())
-        # i_in = i_all[::2]
-        i_all = i_all[::2] + i_all[1::2] * 1j
-        # i_in = i_all[::2]
-        # i_out = i_all[1::2]
-        # i1_in = i_in[::2]
-        # i2_in = i_in[1::2]
-        # i2_out = i_out[1::2]
-        # zabc = (v1[:n_phases] / n - v2[:n_phases]) / -i2[:n_phases]
-        # TODO: tranformer model may be wrong but the 13bus results look better with it.
-        # if is_delta:
-        #     raise Warning("Delta transformer not implemented")
-        # if n_windings != 2:
-        #
-        # for i_wdg in range(1, n_windings + 1):
-        # self.dss.Transformers.Wdg(i_wdg)
         kv = self.dss.Transformers.kV()
         v_base_xfmr = kv / np.sqrt(3) * 1000
         kva = self.dss.Transformers.kVA()
@@ -422,13 +400,13 @@ class DSSToCSVConverter:
 
         x_xfmr = self.dss.Transformers.Xhl() / 100 * z_base_xfmr
         r_xfmr = self.dss.Transformers.R() / 100 * z_base_xfmr * 2
-        z_matrix_real[0, 0] = r_xfmr
-        z_matrix_real[1, 1] = r_xfmr
-        z_matrix_real[2, 2] = r_xfmr
-        z_matrix_imag[0, 0] = x_xfmr
-        z_matrix_imag[1, 1] = x_xfmr
-        z_matrix_imag[2, 2] = x_xfmr
-        return z_matrix_real, z_matrix_imag
+        r_matrix[0, 0] = r_xfmr
+        r_matrix[1, 1] = r_xfmr
+        r_matrix[2, 2] = r_xfmr
+        x_matrix[0, 0] = x_xfmr
+        x_matrix[1, 1] = x_xfmr
+        x_matrix[2, 2] = x_xfmr
+        return r_matrix, x_matrix
 
     def _get_powers(self):
         n_phases = self.dss.CktElement.NumPhases()
@@ -436,7 +414,9 @@ class DSSToCSVConverter:
         n_terminals = self.dss.CktElement.NumTerminals()
         n_pq_phases = len(pq) // n_terminals // 2
         pq = pq.reshape(int(n_pq_phases * n_terminals), 2)
-        s_out = np.zeros(3, dtype=complex)
+        s_out = np.array(
+            [np.nan + 1j * np.nan, np.nan + 1j * np.nan, np.nan + 1j * np.nan]
+        )
         active_phases = np.array([0, 1, 2])
         if n_phases < 3:
             active_phases = (
@@ -451,84 +431,133 @@ class DSSToCSVConverter:
         s_out[active_phases] = s_out_[:n_phases]
         return s_out
 
-    def get_branch_data(self) -> pd.DataFrame:
-        s_base = self.s_base
-        flag = self.dss.PDElements.First()
-        line_data = []
-        # power_data = []
-        while flag:
+    def _create_branch_row(
+        self, r_matrix, x_matrix, element_type, element_name, switch_status
+    ):
+        bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
+        bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
+        fb = self.bus_names_to_index_map[bus1]
+        tb = self.bus_names_to_index_map[bus2]
+        if fb > tb:
+            fb, tb = tb, fb
+            bus1, bus2 = bus2, bus1
+        self.dss.Circuit.SetActiveBus(bus2)
+        base_kv_ln = self.dss.Bus.kVBase()
+        z_base = (base_kv_ln * 1000) ** 2 / self.s_base
+        line_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
+        line_phases = sorted(line_phases)
+        phases = "abc"
+        n_phases = self.dss.CktElement.NumPhases()
+        if n_phases < 3:
+            active_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
+            active_phases = np.array(active_phases).astype(int) - 1
+            phases = "".join("abc"[i] for i in active_phases)
+        return dict(
+            fb=fb,
+            tb=tb,
+            from_name=bus1,
+            to_name=bus2,
+            raa=r_matrix[0, 0] / z_base,
+            rab=r_matrix[0, 1] / z_base,
+            rac=r_matrix[0, 2] / z_base,
+            rbb=r_matrix[1, 1] / z_base,
+            rbc=r_matrix[1, 2] / z_base,
+            rcc=r_matrix[2, 2] / z_base,
+            xaa=x_matrix[0, 0] / z_base,
+            xab=x_matrix[0, 1] / z_base,
+            xac=x_matrix[0, 2] / z_base,
+            xbb=x_matrix[1, 1] / z_base,
+            xbc=x_matrix[1, 2] / z_base,
+            xcc=x_matrix[2, 2] / z_base,
+            type=element_type,
+            name=element_name,
+            status=switch_status,
+            s_base=self.s_base,
+            v_ln_base=base_kv_ln * 1000,
+            z_base=z_base,
+            phases=phases,
+        )
+
+    def append_lines(self, line_data):
+        for line in self.dss.Lines:
             switch_status = None
             element_type = self.dss.CktElement.Name().lower().split(".")[0]
             element_name = self.dss.CktElement.Name().lower().split(".")[1]
-            z_matrix_real = np.zeros((3, 3))
-            z_matrix_imag = np.zeros((3, 3))
-            if element_type not in ["line", "transformer", "reactor"]:
-                flag = self.dss.PDElements.Next()
-                continue
-            if element_type == "transformer":
-                z_matrix_real, z_matrix_imag = self._get_transformer_zmatrix()
-            if element_type == "line":
-                element_name = self.dss.Lines.Name()
-                z_matrix_real, z_matrix_imag = self._get_line_zmatrix()
+            element_name = self.dss.Lines.Name()
+            r_matrix, x_matrix = self._get_line_zmatrix()
 
-                if self.dss.Lines.IsSwitch():
-                    element_type = "switch"
-                    switch_status = (
-                        "OPEN"
-                        if (
-                            self.dss.CktElement.IsOpen(1, 0)
-                            or self.dss.CktElement.IsOpen(2, 0)
-                        )
-                        else "CLOSED"
+            if self.dss.Lines.IsSwitch():
+                element_type = "switch"
+                switch_status = (
+                    "OPEN"
+                    if (
+                        self.dss.CktElement.IsOpen(1, 1)
+                        or self.dss.CktElement.IsOpen(2, 1)
                     )
-            if element_type == "reactor":
-                element_name = self.dss.Reactors.Name()
-                z_matrix_real, z_matrix_imag = self._get_reactor_zmatrix()
-            bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
-            bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
-            fb = self.bus_names_to_index_map[bus1]
-            tb = self.bus_names_to_index_map[bus2]
-            if fb > tb:
-                fb, tb = tb, fb
-                bus1, bus2 = bus2, bus1
-            self.dss.Circuit.SetActiveBus(bus2)
-            base_kv_ln = self.dss.Bus.kVBase()
-            z_base = (base_kv_ln * 1000) ** 2 / s_base
-            line_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
-            line_phases = sorted(line_phases)
-            phases = "abc"
-            n_phases = self.dss.CktElement.NumPhases()
-            if n_phases < 3:
-                active_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
-                active_phases = np.array(active_phases).astype(int) - 1
-                phases = "".join("abc"[i] for i in active_phases)
-            each_line = dict(
-                fb=fb,
-                tb=tb,
-                from_name=bus1,
-                to_name=bus2,
-                raa=z_matrix_real[0, 0] / z_base,
-                rab=z_matrix_real[0, 1] / z_base,
-                rac=z_matrix_real[0, 2] / z_base,
-                rbb=z_matrix_real[1, 1] / z_base,
-                rbc=z_matrix_real[1, 2] / z_base,
-                rcc=z_matrix_real[2, 2] / z_base,
-                xaa=z_matrix_imag[0, 0] / z_base,
-                xab=z_matrix_imag[0, 1] / z_base,
-                xac=z_matrix_imag[0, 2] / z_base,
-                xbb=z_matrix_imag[1, 1] / z_base,
-                xbc=z_matrix_imag[1, 2] / z_base,
-                xcc=z_matrix_imag[2, 2] / z_base,
-                type=element_type,
-                name=element_name,
-                status=switch_status,
-                s_base=s_base,
-                v_ln_base=base_kv_ln * 1000,
-                z_base=z_base,
-                phases=phases,
+                    else "CLOSED"
+                )
+
+            line_data.append(
+                self._create_branch_row(
+                    r_matrix,
+                    x_matrix,
+                    element_type=element_type,
+                    element_name=element_name,
+                    switch_status=switch_status,
+                )
             )
-            line_data.append(each_line)
-            flag = self.dss.PDElements.Next()
+
+    def append_transformers(self, line_data):
+        for transformer in self.dss.Transformers:
+            switch_status = None
+            element_type = self.dss.CktElement.Name().lower().split(".")[0]
+            element_name = self.dss.CktElement.Name().lower().split(".")[1]
+            r_matrix, x_matrix = self._get_transformer_zmatrix()
+            switch_status = (
+                "OPEN"
+                if (
+                    self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(2, 1)
+                )
+                else "CLOSED"
+            )
+            line_data.append(
+                self._create_branch_row(
+                    r_matrix,
+                    x_matrix,
+                    element_type=element_type,
+                    element_name=element_name,
+                    switch_status=switch_status,
+                )
+            )
+
+    def append_reactors(self, line_data):
+        for reactor in self.dss.Reactors:
+            element_type = self.dss.CktElement.Name().lower().split(".")[0]
+            element_name = self.dss.Reactors.Name()
+            r_matrix, x_matrix = self._get_reactor_zmatrix()
+
+            switch_status = (
+                "OPEN"
+                if (
+                    self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(2, 1)
+                )
+                else "CLOSED"
+            )
+            line_data.append(
+                self._create_branch_row(
+                    r_matrix,
+                    x_matrix,
+                    element_type=element_type,
+                    element_name=element_name,
+                    switch_status=switch_status,
+                )
+            )
+
+    def get_branch_data(self) -> pd.DataFrame:
+        line_data = []
+        self.append_lines(line_data)
+        self.append_transformers(line_data)
+        self.append_reactors(line_data)
 
         # combine lines between identical buses.
         branch_df = pd.DataFrame(line_data)
@@ -565,7 +594,7 @@ class DSSToCSVConverter:
             .reset_index(drop=True)
         )
         return branch_df
-        
+
     def get_bus_data(self) -> pd.DataFrame:
         """Extract the bus data from the distribution model.
 
