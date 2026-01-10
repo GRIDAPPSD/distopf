@@ -20,6 +20,7 @@ dependencies = [
     "scipy>=1.15.3",
     "pyomo>=6.9.4",
     "pandas>=2.3.3",
+    "altdss[all]>=0.2.4",
 ]
 
 [build-system]
