@@ -305,17 +305,18 @@ class DSSToCSVConverter:
     def get_p_flows(self):
         s_flows = self.get_apparent_power_flows()
         p_flows = s_flows.loc[:, ["fb", "tb", "from_name", "to_name"]].copy()
-        p_flows.loc[:, ["a", "b", "c"]] =  np.real(s_flows.loc[:, ["a", "b", "c"]])
+        p_flows.loc[:, ["a", "b", "c"]] = np.real(s_flows.loc[:, ["a", "b", "c"]])
         return p_flows
 
     def get_q_flows(self):
         s_flows = self.get_apparent_power_flows()
         q_flows = s_flows.loc[:, ["fb", "tb", "from_name", "to_name"]].copy()
-        q_flows.loc[:, ["a", "b", "c"]] =  np.imag(s_flows.loc[:, ["a", "b", "c"]])
+        q_flows.loc[:, ["a", "b", "c"]] = np.imag(s_flows.loc[:, ["a", "b", "c"]])
         q_flows.loc[s_flows.isna().a, "a"] = np.nan
         q_flows.loc[s_flows.isna().b, "b"] = np.nan
         q_flows.loc[s_flows.isna().c, "c"] = np.nan
         return q_flows
+
     def _get_line_zmatrix(self) -> tuple[np.ndarray, np.ndarray]:
         """Returns the z_matrix of a specified line element.
 
