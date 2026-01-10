@@ -76,10 +76,12 @@ def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
 
 # case = create_case(opf.CASES_DIR / "csv/ieee123_alternate", start_step=12)
 # case = create_case(opf.CASES_DIR / "cim/IEEE13.xml", start_step=12)
-case = create_case(opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss", start_step=12)
+case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
+# case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
+case = create_case(case_path, start_step=12)
 # case = create_case(opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS", start_step=12)
 case.gen_data.control_variable = ""
-dss_parser = opf.DSSToCSVConverter(opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss")
+dss_parser = opf.DSSToCSVConverter(case_path)
 v_dss = dss_parser.v_solved
 v_dss = v_dss.reset_index(drop=True)
 v_dss = pd.merge(case.bus_data.loc[:, ["id", "name"]], v_dss, on=["name"])
@@ -87,6 +89,13 @@ v_dss["algorithm"] = "dss"
 s_dss = dss_parser.s_solved
 s_dss["name"] = s_dss["to_name"]
 s_dss["id"] = s_dss["tb"]
+# p_dss = dss_parser.get_p_flows()
+# p_dss["name"] = p_dss["to_name"]
+# p_dss["id"] = p_dss["tb"]
+# q_dss = dss_parser.get_q_flows()
+# q_dss["name"] = q_dss["to_name"]
+# q_dss["id"] = q_dss["tb"]
+
 p_dss = s_dss.loc[:, ["fb", "id", "from_name", "name"]].copy()
 q_dss = s_dss.loc[:, ["fb", "id", "from_name", "name"]].copy()
 p_dss.loc[:, ["a", "b", "c"]] = np.real(s_dss.loc[:, ["a", "b", "c"]])
