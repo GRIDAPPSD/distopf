@@ -579,14 +579,16 @@ class TestDSSToCSVConverterZMatrices:
         """Test 3-phase line Z-matrix extraction."""
         mock_dss_module.Text.Command = MagicMock()
         mock_dss_module.Lines.Phases = MagicMock(return_value=3)
+        mock_dss_module.Lines.Bus1 = MagicMock(return_value="bus1.1.2.3")
+        mock_dss_module.Lines.Bus2 = MagicMock(return_value="bus2.1.2.3")
         mock_dss_module.CktElement.BusNames = MagicMock(
             return_value=["bus1.1.2.3", "bus2.1.2.3"]
         )
         mock_dss_module.Lines.RMatrix = MagicMock(
-            return_value=[0.1, 0.01, 0.01, 0.1, 0.01, 0.01, 0.1, 0.01, 0.01]
+            return_value=[0.1, 0.01, 0.01, 0.01, 0.1, 0.01, 0.01, 0.01, 0.1]
         )
         mock_dss_module.Lines.XMatrix = MagicMock(
-            return_value=[0.2, 0.05, 0.05, 0.2, 0.05, 0.05, 0.2, 0.05, 0.05]
+            return_value=[0.2, 0.05, 0.05, 0.05, 0.2, 0.05, 0.05, 0.05, 0.2]
         )
         mock_dss_module.Lines.Length = MagicMock(return_value=1.0)
         mock_dss_module.PDElements.First = MagicMock(return_value=False)

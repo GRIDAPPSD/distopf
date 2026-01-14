@@ -1,9 +1,37 @@
-# fmt: on
-from distopf.dss_importer.dss_to_csv_converter import DSSToCSVConverter
+# fmt: off
+"""
+DistOPF - Multi-phase unbalanced optimal power flow for distribution systems.
+
+This package provides tools for optimal power flow analysis including:
+- Matrix-based models (CVXPY/CLARABEL) for convex problems
+- Pyomo models (IPOPT) for non-linear problems  
+- Forward-backward sweep power flow solver
+- OpenDSS and CIM importers
+
+Quick Start:
+    >>> import distopf as opf
+    >>> case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
+    >>> v, pf = case.run_pf()  # Power flow
+    >>> v, pf, pg, qg = case.run_opf("loss_min", control_variable="Q")  # OPF
+    
+For Pyomo (NLP) workflows:
+    >>> model = case.to_pyomo_model()
+    >>> from distopf.pyomo_models import add_standard_constraints, solve_model
+    >>> add_standard_constraints(model)
+    >>> results = solve_model(model)
+"""
+
+# =============================================================================
+# Lightweight imports (always loaded) - these are fast
+# =============================================================================
+from distopf.cases import CASES_DIR
+from distopf.importer import Case, create_case
+
+# =============================================================================
+# Matrix models and solvers - loaded eagerly as they're commonly used
+# =============================================================================
 from distopf.matrix_models.lindist_loads import LinDistModelL
 from distopf.matrix_models.lindist_capacitor_mi import LinDistModelCapMI
-
-# from distopf.lindist_fast_base import LinDistBase
 from distopf.matrix_models.lindist_capacitor_regulator_mi import (
     LinDistModelCapacitorRegulatorMI,
 )
@@ -38,9 +66,8 @@ from distopf.plot import (
     plot_batteries,
 )
 
-from distopf.cases import CASES_DIR
-
-from distopf.distOPF import DistOPFCase, create_model, auto_solve
+from distopf.distOPF import DistOPFCase, create_model, auto_solve, OBJECTIVE_ALIASES, resolve_objective_alias
+from distopf.fbs import fbs_solve, FBS
 
 from distopf.utils import (
     get,
@@ -63,10 +90,42 @@ CONSTANT_PQ = ""
 CONSTANT_P = "Q"
 CONSTANT_Q = "P"
 CONTROL_PQ = "PQ"
+
+# Note: pyomo_models is NOT imported here to keep startup fast.
+# Users access it via `import distopf.pyomo_models` or `from distopf import pyomo_models`
+# which triggers lazy loading only when needed.
+
+# =============================================================================
+# Lazy-loaded imports (heavy dependencies loaded on first access)
+# =============================================================================
+_lazy_imports = {
+    "DSSToCSVConverter": "distopf.dss_importer.dss_to_csv_converter",
+    "pyomo_models": "distopf.pyomo_models",
+}
+
+def __getattr__(name: str):
+    """Lazy load heavy modules on first access."""
+    if name in _lazy_imports:
+        import importlib
+        module_path = _lazy_imports[name]
+        if name == "pyomo_models":
+            return importlib.import_module(module_path)
+        else:
+            module = importlib.import_module(module_path)
+            return getattr(module, name)
+    raise AttributeError(f"module 'distopf' has no attribute {name!r}")
+
 # fmt: on
 
 
 __all__ = [
+    # Data containers
+    "Case",
+    "create_case",
+    # Power flow solver
+    "fbs_solve",
+    "FBS",
+    # Matrix model classes
     "DSSToCSVConverter",
     "LinDistModelL",
     "LinDistModelCapMI",
