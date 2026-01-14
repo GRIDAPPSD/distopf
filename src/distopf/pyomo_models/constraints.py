@@ -71,7 +71,7 @@ def add_voltage_drop_constraints(m: LindistModelProtocol) -> None:
     """
 
     def voltage_drop_rule(m: LindistModelProtocol, _id, ph, t):
-        if (_id, ph, t) in m.v2_reg:
+        if (_id, ph) in m.reg_phase_set:
             return pyo.Constraint.Skip
         # here, "a" represents the current phase,
         # b an c represent next and previous phase

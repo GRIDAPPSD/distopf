@@ -141,7 +141,7 @@ def add_voltage_drop_nlp_constraints(m: LindistModelProtocol) -> None:
     """
 
     def voltage_drop_rule(m: LindistModelProtocol, _id, ph, t):
-        if (_id, ph, t) in m.v2_reg:
+        if (_id, ph) in m.reg_phase_set:
             return pyo.Constraint.Skip
         # here, "a" represents the current phase,
         # b an c represent next and previous phase
@@ -220,7 +220,7 @@ def add_regulator_nlp_constraints(m: LindistModelProtocol) -> None:
     def regulator_v_drop(m: LindistModelProtocol, _id, ph, t):
         raa = m.r[_id, ph + ph]
         xaa = m.x[_id, ph + ph]
-        
+
         a = ph
         _i = "abc".index(a)
         b = "abc"[(_i + 1) % 3]  # next phase. If phase is "a" then "b"
@@ -273,7 +273,13 @@ def add_regulator_nlp_constraints(m: LindistModelProtocol) -> None:
                 if q1 != q2 and q1 in m.phase_map[_id] and q2 in m.phase_map[_id]
             ]
         )
-        return m.v2[_id, ph, t] == m.v2_reg[_id, ph, t] - voltage_drop - voltage_drop_term2 - voltage_drop_term3
+        return (
+            m.v2[_id, ph, t]
+            == m.v2_reg[_id, ph, t]
+            - voltage_drop
+            - voltage_drop_term2
+            - voltage_drop_term3
+        )
 
     def regulator_rule(m: LindistModelProtocol, _id, ph, t):
         return (

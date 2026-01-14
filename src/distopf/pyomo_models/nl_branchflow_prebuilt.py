@@ -18,7 +18,7 @@ class NLBranchFlow:
         # Loads, Capacitors and Regulators
         constraints_nlp.add_cvr_load_constraints(model)
         constraints_nlp.add_capacitor_constraints(model)
-        constraints_nlp.add_regulator_constraints(model)
+        constraints_nlp.add_regulator_nlp_constraints(model)
         # Generators
         constraints_nlp.add_generator_limits(model)
         constraints_nlp.add_generator_constant_p_constraints_q_control(model)

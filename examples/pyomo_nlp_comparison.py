@@ -61,7 +61,7 @@ def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
     for _id, ph, t in lp.branch_phase_set * lp.time_set:
         l_data[(_id, ph + ph, t)] = (
             lp.p_flow[_id, ph, t].value ** 2 + lp.q_flow[_id, ph, t].value ** 2
-        ) / lp.v2[lp.from_bus_map[_id], ph, t].value
+        ) / lp.v2[_id, ph, t].value
     for _id, phases, t in nlp.bus_phase_pair_set * nlp.time_set:
         ph1 = phases[0]
         ph2 = phases[1]
@@ -76,8 +76,8 @@ def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
 
 # case = create_case(opf.CASES_DIR / "csv/ieee123_alternate", start_step=12)
 # case = create_case(opf.CASES_DIR / "cim/IEEE13.xml", start_step=12)
-case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
-# case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
+# case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
+case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
 case = create_case(case_path, start_step=12)
 # case = create_case(opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS", start_step=12)
 case.gen_data.control_variable = ""
