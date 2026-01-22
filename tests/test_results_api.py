@@ -19,14 +19,12 @@ def test_run_opf_returns_powerflowresult_and_unpacking_matrix():
     assert hasattr(res, "objective_value")
 
 
-
 def test_run_opf_returns_powerflowresult_and_unpacking_pyomo():
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 
     res = case.run_opf("loss", backend="pyomo")
     assert isinstance(res, PowerFlowResult)
     assert res.voltages is not None
-
 
 
 def test_result_save_and_summary(tmp_path):

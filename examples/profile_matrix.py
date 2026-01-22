@@ -2,6 +2,7 @@ import distopf as opf
 from distopf.api import create_case
 from distopf.matrix_models.multiperiod.objectives import cp_obj_loss
 from distopf.matrix_models.multiperiod.solvers import cvxpy_solve
+
 # from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP
 from distopf.matrix_models.multiperiod.base_mp import LinDistBaseMP
 from time import perf_counter
@@ -14,15 +15,15 @@ profiler = cProfile.Profile()
 profiler.enable()
 
 t0 = perf_counter()
-case = create_case(data_path=opf.CASES_DIR / "csv" / "ieee123_30der", n_steps=1, start_step=12)
+case = create_case(
+    data_path=opf.CASES_DIR / "csv" / "ieee123_30der", n_steps=1, start_step=12
+)
 # case.bus_data.v_max = 2
 # case.bus_data.v_min = 0
 case.schedules.default = 1
 case.schedules.PV = 1
 case.gen_data.control_variable = "PQ"
-matrix_model = LinDistBaseMP(
-    case=case
-)
+matrix_model = LinDistBaseMP(case=case)
 matrix_model.build()
 t1 = perf_counter()
 results_matrix = cvxpy_solve(matrix_model, obj_func=cp_obj_loss)

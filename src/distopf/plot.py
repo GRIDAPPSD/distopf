@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 from distopf.matrix_models.base import LinDistBase
 from distopf.api import Case
 
+
 def _choose_t(df, t=None):
     df = df.copy()
     if t is None:

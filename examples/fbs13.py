@@ -15,13 +15,19 @@ i_ang.index = i_ang.id
 v_ang.index = v_ang.id
 v.index = v.id
 v_phasor = v.loc[:, ["id", "name", "t"]].copy()
-v_phasor.loc[:, ["a", "b", "c"]] = v.loc[:, ["a", "b", "c"]] * np.exp(1j * np.radians(v_ang.loc[:, ["a", "b", "c"]]))
+v_phasor.loc[:, ["a", "b", "c"]] = v.loc[:, ["a", "b", "c"]] * np.exp(
+    1j * np.radians(v_ang.loc[:, ["a", "b", "c"]])
+)
 
 i_phasor = cur.loc[:, ["fb", "id", "from_name", "name", "t"]].copy()
-i_phasor.loc[:, ["a", "b", "c"]] = cur.loc[:, ["a", "b", "c"]] * np.exp(1j * np.radians(i_ang.loc[:, ["a", "b", "c"]]))
+i_phasor.loc[:, ["a", "b", "c"]] = cur.loc[:, ["a", "b", "c"]] * np.exp(
+    1j * np.radians(i_ang.loc[:, ["a", "b", "c"]])
+)
 
 s = cur.loc[:, ["fb", "id", "from_name", "name", "t"]].copy()
-s.loc[:, ["a", "b", "c"]] = v_phasor.loc[:, ["a", "b", "c"]] * np.conj(i_phasor.loc[:, ["a", "b", "c"]])
+s.loc[:, ["a", "b", "c"]] = v_phasor.loc[:, ["a", "b", "c"]] * np.conj(
+    i_phasor.loc[:, ["a", "b", "c"]]
+)
 
 print("Voltages:")
 print(v)

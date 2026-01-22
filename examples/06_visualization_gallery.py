@@ -37,4 +37,3 @@ result.plot_power_flows().show(renderer="browser")
 print("\n4. Generator Output Plot")
 print("   Shows active and reactive power from each DER")
 result.plot_gens().show(renderer="browser")
-

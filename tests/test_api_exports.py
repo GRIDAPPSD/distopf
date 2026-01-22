@@ -6,8 +6,6 @@ are accessible from the main distopf package without requiring deep imports.
 """
 
 
-
-
 class TestCoreExports:
     """Test that core classes and functions are exported from distopf package."""
 

@@ -15,15 +15,15 @@ from math import pi
 
 
 def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
-    i_angles["ab"] =  i_angles.a - i_angles.b
-    i_angles["bc"] =  i_angles.b - i_angles.c
-    i_angles["ca"] =  i_angles.c - i_angles.a
+    i_angles["ab"] = i_angles.a - i_angles.b
+    i_angles["bc"] = i_angles.b - i_angles.c
+    i_angles["ca"] = i_angles.c - i_angles.a
     i_angles["ba"] = -i_angles.ab
     i_angles["cb"] = -i_angles.bc
     i_angles["ac"] = -i_angles.ca
-    i_angles["aa"] =  i_angles.a - i_angles.a
-    i_angles["bb"] =  i_angles.b - i_angles.b
-    i_angles["cc"] =  i_angles.c - i_angles.c
+    i_angles["aa"] = i_angles.a - i_angles.a
+    i_angles["bb"] = i_angles.b - i_angles.b
+    i_angles["cc"] = i_angles.c - i_angles.c
     data = {
         (_id, phases): float(i_angles.loc[i_angles.id == _id, phases].tolist()[0])
         * pi

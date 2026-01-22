@@ -808,7 +808,7 @@ class LinDistBase(BaseModel):
                 x[self.x_maps[ph].pij] + 1j * x[self.x_maps[ph].qij]
             )
         return s_df
-    
+
     def get_p_flows(self, x):
         df = pd.DataFrame(
             columns=["fb", "tb", "from_name", "to_name", "a", "b", "c"],
@@ -828,7 +828,7 @@ class LinDistBase(BaseModel):
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, "to_name"] = tb_names
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, ph] = x[self.x_maps[ph].pij]
         return df
-    
+
     def get_q_flows(self, x):
         df = pd.DataFrame(
             columns=["fb", "tb", "from_name", "to_name", "a", "b", "c"],
