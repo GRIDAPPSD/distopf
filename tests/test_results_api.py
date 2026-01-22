@@ -1,3 +1,8 @@
+import pytest
+import pyomo.environ as pyo
+
+_ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
+
 import distopf as opf
 from distopf.results import PowerFlowResult
 
@@ -19,6 +24,12 @@ def test_run_opf_returns_powerflowresult_and_unpacking_matrix():
     assert hasattr(res, "objective_value")
 
 
+import pyomo.environ as pyo
+
+_ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
+
+
+@pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
 def test_run_opf_returns_powerflowresult_and_unpacking_pyomo():
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 

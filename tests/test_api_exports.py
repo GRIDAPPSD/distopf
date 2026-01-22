@@ -521,6 +521,12 @@ class TestObjectiveAliases:
         assert resolve_objective_alias("MIN_LOSS") == "loss_min"
 
 
+import pytest
+import pyomo.environ as pyo
+
+_ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
+
+
 class TestBackendSelection:
     """Test backend auto-selection and explicit backend usage."""
 
@@ -546,6 +552,7 @@ class TestBackendSelection:
         r = case.run_opf("loss", backend="matrix")
         assert r is not None
 
+    @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
     def test_explicit_pyomo_backend(self):
         """Can explicitly use pyomo backend."""
         import distopf as opf
@@ -593,6 +600,7 @@ class TestBackendConsistency:
         # Time value should be 0 for single-period
         assert (r.voltages["t"] == 0).all()
 
+    @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
     def test_pyomo_results_have_time_column(self):
         """Pyomo backend results should include 't' column."""
         import distopf as opf
@@ -616,6 +624,7 @@ class TestBackendConsistency:
             assert len(w) >= 1
             assert "control_regulators" in str(w[0].message)
 
+    @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
     def test_pyomo_warns_on_control_capacitors(self):
         """Pyomo backend should warn when control_capacitors is used."""
         import distopf as opf
@@ -628,6 +637,7 @@ class TestBackendConsistency:
             assert len(w) >= 1
             assert "control_capacitors" in str(w[0].message)
 
+    @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
     def test_pyomo_warns_on_solver_kwarg(self):
         """Pyomo backend should warn when solver kwarg is passed."""
         import distopf as opf
@@ -649,6 +659,7 @@ class TestBackendConsistency:
         with pytest.raises(ValueError, match="not supported by pyomo"):
             case.run_opf("curtail", backend="pyomo")
 
+    @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
     def test_voltage_columns_consistent(self):
         """Voltage DataFrames should have consistent columns across backends."""
         import distopf as opf

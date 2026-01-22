@@ -1,4 +1,4 @@
-from typing import Optional, override
+from typing import Optional
 import pandas as pd
 from distopf.api import Case
 from distopf.matrix_models.multiperiod.base_mp import LinDistBaseMP
