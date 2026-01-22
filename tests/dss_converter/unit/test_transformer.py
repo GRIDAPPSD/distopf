@@ -5,7 +5,6 @@ import tempfile
 from pathlib import Path
 import logging
 from distopf.dss_importer.dss_to_csv_converter import DSSToCSVConverter
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)

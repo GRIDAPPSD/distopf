@@ -72,7 +72,7 @@ from distopf.plot import (
     plot_batteries,
 )
 
-from distopf.distOPF import DistOPFCase, create_model, auto_solve, OBJECTIVE_ALIASES, resolve_objective_alias
+from distopf.distOPF import DistOPFCase, create_model, auto_solve
 from distopf.fbs import fbs_solve, FBS
 
 from distopf.utils import (

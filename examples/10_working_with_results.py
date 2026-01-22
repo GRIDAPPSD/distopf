@@ -36,9 +36,9 @@ print(f"Objective function value (pu): {result.objective_value:.6f}")
 print(f"Total losses (MW): {result.objective_value * s_base / 1e6:.6f}")
 
 print(f"\nVoltages DataFrame shape: {voltages.shape}")
-print(f"  - Rows: buses")
-print(f"  - Columns: phases")
-print(f"Sample voltages (first 5 buses):")
+print("  - Rows: buses")
+print("  - Columns: phases")
+print("Sample voltages (first 5 buses):")
 print(voltages.head())
 
 print(f"\nActive Power Flows DataFrame shape: {p_flows.shape}")

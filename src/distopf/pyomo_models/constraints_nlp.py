@@ -5,7 +5,7 @@ Each function takes a Pyomo ConcreteModel and data, and adds constraints to the 
 Functions are designed to work with models created by create_lindist_model().
 """
 
-from itertools import product, combinations
+from itertools import combinations
 import pyomo.environ as pyo  # type: ignore
 from distopf.pyomo_models.lindist import ControlVariable
 from distopf.pyomo_models.protocol import LindistModelProtocol

@@ -290,7 +290,7 @@ def main():
         parsed = parser.parse_query(question)
 
         if parsed:
-            print(f"Parsed successfully:")
+            print("Parsed successfully:")
             print(f"  Type: {parsed.query_type.value}")
             print(f"  Element: {parsed.element_type}")
             print(f"  Scope: {parsed.scope.value}")

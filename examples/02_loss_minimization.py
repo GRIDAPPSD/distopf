@@ -8,7 +8,6 @@ Shows how easy it is to optimize a network with a single function call.
 """
 
 import distopf as opf
-import pandas as pd
 
 # Load the IEEE 123-bus network with DERs
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")

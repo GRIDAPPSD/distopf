@@ -1,4 +1,3 @@
-import distopf as opf
 import pyomo.environ as pyo
 from distopf.pyomo_models.objectives import loss_objective
 from distopf.pyomo_models.solvers import solve

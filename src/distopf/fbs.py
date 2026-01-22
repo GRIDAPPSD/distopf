@@ -1,9 +1,11 @@
-from genericpath import samestat
 import numpy as np
 import pandas as pd
 from distopf.api import Case
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from distopf.utils import get
+
+if TYPE_CHECKING:
+    from distopf.results import PowerFlowResult
 
 
 class FBS:
@@ -1075,7 +1077,7 @@ def compare_with_reference(
                 dss_pflow_df[dss_pflow_df["type"] == "Q"]
             )
 
-            print(f"\nCOMPARISON WITH OPENDSS:")
+            print("\nCOMPARISON WITH OPENDSS:")
             print(
                 f"  Voltage - Max Abs Diff: {dss_voltage_stats['max_abs_diff']:.6f} pu"
             )
@@ -1105,7 +1107,7 @@ def compare_with_reference(
                 worst_p_flow = dss_pflow_df[dss_pflow_df["type"] == "P"].nlargest(
                     3, "abs_diff"
                 )
-                print(f"\n  Largest P flow differences vs OpenDSS:")
+                print("\n  Largest P flow differences vs OpenDSS:")
                 for _, row in worst_p_flow.iterrows():
                     print(
                         f"    Branch {row['from_bus']}->{row['to_bus']} Phase {row['phase'].upper()}: "
@@ -1234,12 +1236,9 @@ def _apply_gen_setpoints_to_case(
 
 
 if __name__ == "__main__":
-    from pathlib import Path
     from distopf.api import create_case
     from distopf import CASES_DIR
     from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP
-    from distopf.matrix_models.multiperiod.solvers import pf, cvxpy_solve
-    from distopf.matrix_models.multiperiod.objectives import cp_obj_none
     from distopf.dss_importer import DSSToCSVConverter
 
     # Load case from CSV files

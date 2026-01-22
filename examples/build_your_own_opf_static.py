@@ -12,7 +12,6 @@ def _(mo):
 
 @app.cell
 def _():
-    import plotly.express as px
     import distopf as opf
     import pyomo.environ as pyo
     from distopf.pyomo_models.lindist import create_lindist_model

@@ -1,15 +1,7 @@
 import distopf as opf
-import pandas as pd
 import numpy as np
 from distopf.api import create_case
-from distopf import (
-    plot_voltages,
-    plot_gens,
-    # plot_network,
-    plot_polar,
-)
 from distopf.fbs import fbs_solve
-from math import pi
 
 case = create_case(data_path=opf.CASES_DIR / "csv" / "ieee13", start_step=12)
 case.gen_data.control_variable = ""

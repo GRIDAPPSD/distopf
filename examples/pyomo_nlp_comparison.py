@@ -1,10 +1,8 @@
-from pyomo.solvers.tests.solvers import initialize
 import distopf as opf
 import pyomo.environ as pyo
 import pandas as pd
 import numpy as np
 from distopf.pyomo_models.objectives import loss_objective_rule
-from distopf.pyomo_models.lindist import create_lindist_model
 from distopf.api import create_case
 from distopf.pyomo_models.nl_branchflow_prebuilt import NLBranchFlow
 from distopf.pyomo_models.lindist_loads import LinDistPyoMPL
@@ -12,15 +10,8 @@ from distopf.pyomo_models.results import (
     get_voltages,
     get_values,
 )
-from distopf import (
-    plot_voltages,
-    plot_gens,
-    # plot_network,
-    plot_polar,
-)
 from distopf.fbs import fbs_solve
 from math import pi
-import plotly.express as px
 
 
 def initialize_non_linear_model(non_linear_model, linear_model, i_angles):

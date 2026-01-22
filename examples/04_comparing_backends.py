@@ -8,7 +8,6 @@ for your problem.
 """
 
 import distopf as opf
-import pandas as pd
 
 # Load the small IEEE 13-bus test case (fast to solve)
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
@@ -25,7 +24,7 @@ print("Running Matrix Backend (CVXPY + CLARABEL)...")
 result_matrix = case.run_opf("loss_min", backend="matrix")
 v_matrix = result_matrix.voltages[["a", "b", "c"]]
 s_base = case.bus_data["s_base"].iloc[0]
-print(f"  Status: Success")
+print("  Status: Success")
 print(f"  Voltage min: {v_matrix.min().min():.4f} p.u.")
 print(f"  Voltage max: {v_matrix.max().max():.4f} p.u.")
 print(
@@ -36,7 +35,7 @@ print(
 print("\nRunning Pyomo Backend (Pyomo + IPOPT)...")
 result_pyomo = case.run_opf("loss_min", backend="pyomo")
 v_pyomo = result_pyomo.voltages[["a", "b", "c"]]
-print(f"  Status: Success")
+print("  Status: Success")
 print(f"  Voltage min: {v_pyomo.min().min():.4f} p.u.")
 print(f"  Voltage max: {v_pyomo.max().max():.4f} p.u.")
 if result_pyomo.objective_value is not None:

@@ -1,7 +1,6 @@
 from distopf.pyomo_models.protocol import LindistModelProtocol
 from distopf.pyomo_models.results import PyoResult
 import pyomo.environ as pyo
-from time import perf_counter
 
 
 def solve(model: LindistModelProtocol) -> PyoResult:

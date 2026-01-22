@@ -7,8 +7,6 @@ from collections.abc import Callable
 # Lazy imports for heavy dependencies (CIM/DSS converters, models)
 # These are only imported when actually needed to improve startup time
 if TYPE_CHECKING:
-    from distopf.dss_importer import DSSToCSVConverter
-    from distopf.cim_importer import CIMToCSVConverter
     from distopf.matrix_models.base import LinDistBase
 
 from distopf.utils import (
@@ -107,7 +105,6 @@ class Case:
             For non-critical issues that may indicate problems (voltage limits,
             phase consistency)
         """
-        import warnings
         from distopf.validators import CaseValidator
 
         # Use centralized validator

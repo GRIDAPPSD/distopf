@@ -8,7 +8,6 @@ No optimization - just physics-based analysis.
 """
 
 import distopf as opf
-import pandas as pd
 
 # Load the IEEE 13-bus test network (smallest, fastest)
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")

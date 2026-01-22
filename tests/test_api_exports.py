@@ -6,7 +6,6 @@ are accessible from the main distopf package without requiring deep imports.
 """
 
 
-from scipy.constants import R
 
 
 class TestCoreExports:
