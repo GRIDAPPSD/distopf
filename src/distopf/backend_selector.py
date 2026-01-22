@@ -101,7 +101,6 @@ class BackendSelector:
         control_capacitors=False,
         backend=None,
         raw_result=False,
-        return_result_object=True,
         **kwargs,
     ):
         """Route run_opf to the appropriate backend implementation.
@@ -120,18 +119,14 @@ class BackendSelector:
             Override backend selection
         raw_result : bool
             Return raw backend result if True
-        return_result_object : bool, default True
-            If True, return OpfResult; if False, return tuple (backward compat)
         **kwargs
             Additional backend-specific arguments
 
         Returns
         -------
-        OpfResult or tuple
-            OpfResult if return_result_object=True, else (voltages, power_flows, p_gens, q_gens)
+        PowerFlowResult
+            Unified result object with all OPF outputs
         """
-        from distopf.result import OpfResult
-
         # Validate and select backend
         if backend is None:
             backend = self.select()
@@ -142,34 +137,18 @@ class BackendSelector:
         backend_class = self.BACKEND_FACTORY[backend]
         backend_obj = backend_class(self.case)
 
-        # Solve using backend
-        result_tuple = backend_obj.solve(
+        # Set control variable if specified (updates gen_data)
+        if control_variable is not None:
+            backend_obj.set_control_variable(control_variable)
+
+        # Solve using backend - returns PowerFlowResult directly
+        return backend_obj.solve(
             objective=objective,
-            control_variable=control_variable,
             control_regulators=control_regulators,
             control_capacitors=control_capacitors,
             raw_result=raw_result,
             **kwargs,
         )
-
-        # If raw_result requested, return as-is
-        if raw_result:
-            return result_tuple
-
-        # Unpack tuple and create OpfResult
-        if return_result_object:
-            voltages, power_flows, p_gens, q_gens = result_tuple
-            return OpfResult(
-                voltages=voltages,
-                power_flows=power_flows,
-                p_gens=p_gens,
-                q_gens=q_gens,
-                case=self.case,
-                model=backend_obj.model,
-            )
-        else:
-            # Backward compatibility: return tuple
-            return result_tuple
 
 
 __all__ = ["BackendSelector"]

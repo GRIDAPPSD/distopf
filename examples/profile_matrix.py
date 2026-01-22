@@ -1,5 +1,5 @@
 import distopf as opf
-from distopf.importer import create_case
+from distopf.api import create_case
 from distopf.matrix_models.multiperiod.objectives import cp_obj_loss
 from distopf.matrix_models.multiperiod.solvers import cvxpy_solve
 # from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP

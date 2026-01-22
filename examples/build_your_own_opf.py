@@ -17,9 +17,10 @@ def _():
     import pyomo.environ as pyo
     from distopf.pyomo_models.lindist import create_lindist_model
     from distopf.pyomo_models import constraints
-    from distopf.pyomo_models.results import OpfResult
-    from distopf.importer import create_case
-    return OpfResult, constraints, create_case, create_lindist_model, opf, pyo
+    from distopf.pyomo_models.results import PyoResult
+    from distopf.api import create_case
+
+    return PyoResult, constraints, create_case, create_lindist_model, opf, pyo
 
 
 @app.cell(hide_code=True)
@@ -230,7 +231,10 @@ def _():
 @app.cell
 def _(model, pyo):
     from pyomo.core.expr.calculus.derivatives import differentiate
-    control_variables = [model.q_gen[i, "a", 12] for i, ph in model.gen_phase_set if ph == "a"]
+
+    control_variables = [
+        model.q_gen[i, "a", 12] for i, ph in model.gen_phase_set if ph == "a"
+    ]
 
     obj_expr = model.objective.expr
     gradients = {}
@@ -274,7 +278,7 @@ app._unparsable_cell(
     
         
     """,
-    name="_"
+    name="_",
 )
 
 
@@ -285,7 +289,9 @@ def _(model, pyo):
         if _var.is_indexed():
             for _i in _var:
                 if _var[_i] in model.rc:
-                    print(f"Reduced cost (∂obj/∂{_var.name}[{_i}]): {model.rc[_var[_i]]}")
+                    print(
+                        f"Reduced cost (∂obj/∂{_var.name}[{_i}]): {model.rc[_var[_i]]}"
+                    )
         else:
             if _var in model.rc:
                 print(f"Reduced cost (∂obj/∂{_var.name}): {model.rc[_var]}")

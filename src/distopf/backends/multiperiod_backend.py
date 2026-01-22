@@ -1,8 +1,13 @@
 """Multiperiod backend for time-series OPF (batteries, schedules)."""
 
-from typing import Any, Optional, Tuple
-import pandas as pd
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Optional, Union
 from distopf.backends.base import Backend
+
+if TYPE_CHECKING:
+    import pandas as pd
+    from distopf.results import PowerFlowResult
 
 
 class MultiperiodBackend(Backend):
@@ -11,19 +16,34 @@ class MultiperiodBackend(Backend):
     def solve(
         self,
         objective: Optional[Any] = None,
-        control_variable: Optional[str] = None,
         control_regulators: bool = False,
         control_capacitors: bool = False,
         raw_result: bool = False,
-        **kwargs,
-    ) -> Tuple[
-        Optional[pd.DataFrame],
-        Optional[pd.DataFrame],
-        Optional[pd.DataFrame],
-        Optional[pd.DataFrame],
-    ]:
-        """Run OPF using multi-period matrix model."""
+        **kwargs: Any,
+    ) -> Union[PowerFlowResult, Any]:
+        """Run OPF using multi-period matrix model.
+
+        Parameters
+        ----------
+        objective : str, callable, or None
+            Optimization objective function
+        control_regulators : bool
+            Not supported in multiperiod backend (ignored with warning)
+        control_capacitors : bool
+            Not supported in multiperiod backend (ignored with warning)
+        raw_result : bool
+            If True, return raw solver result instead of PowerFlowResult
+        **kwargs
+            Additional solver options
+
+        Returns
+        -------
+        PowerFlowResult or raw result
+            If raw_result=False: PowerFlowResult with all results
+            If raw_result=True: Raw scipy OptimizeResult object
+        """
         from distopf.matrix_models.multiperiod import LinDistMPL, cvxpy_solve
+        from distopf.results import PowerFlowResult
 
         # Warn about unsupported parameters
         if control_regulators:
@@ -31,20 +51,11 @@ class MultiperiodBackend(Backend):
         if control_capacitors:
             self._warn_unsupported("multiperiod", "control_capacitors")
 
-        # Determine control variable
-        control_variable = self._get_control_variable(control_variable)
-
-        # Update gen_data control variable if specified
-        gen_data = self.case.gen_data
-        if control_variable and gen_data is not None:
-            gen_data = gen_data.copy()
-            gen_data.control_variable = control_variable
-
-        # Create multiperiod model
+        # Create multiperiod model (uses gen_data.control_variable per-row)
         self.model = LinDistMPL(
             branch_data=self.case.branch_data,
             bus_data=self.case.bus_data,
-            gen_data=gen_data,
+            gen_data=self.case.gen_data,
             cap_data=self.case.cap_data,
             reg_data=self.case.reg_data,
             bat_data=self.case.bat_data,
@@ -60,18 +71,32 @@ class MultiperiodBackend(Backend):
         # Solve
         self.result = cvxpy_solve(self.model, obj_func, **kwargs)
 
-        # Extract results
-        voltages_df = self.get_voltages()
-        power_flows_df = self.get_power_flows()
-        p_gens = self.get_p_gens()
-        q_gens = self.get_q_gens()
-
         if raw_result:
             return self.result
 
-        return voltages_df, power_flows_df, p_gens, q_gens
+        # Extract results
+        voltages_df = self.get_voltages()
+        p_flows_df = self.get_p_flows()
+        q_flows_df = self.get_q_flows()
+        p_gens = self.get_p_gens()
+        q_gens = self.get_q_gens()
 
-    def _resolve_objective(self, objective):
+        return PowerFlowResult(
+            voltages=voltages_df,
+            p_flows=p_flows_df,
+            q_flows=q_flows_df,
+            p_gens=p_gens,
+            q_gens=q_gens,
+            objective_value=self.result.fun if hasattr(self.result, "fun") else None,
+            converged=self.result.success if hasattr(self.result, "success") else True,
+            solver="clarabel",
+            result_type="opf",
+            raw_result=self.result,
+            model=self.model,
+            case=self.case,
+        )
+
+    def _resolve_objective(self, objective: Any) -> Any:
         """Resolve objective string to multiperiod objective function."""
         from distopf.matrix_models.multiperiod import objectives as mp_obj
 
@@ -107,8 +132,16 @@ class MultiperiodBackend(Backend):
         return self.model.get_voltages(self.result.x)
 
     def get_power_flows(self) -> pd.DataFrame:
-        """Extract branch power flow results from solved model."""
+        """Extract branch power flow results (complex apparent power)."""
         return self.model.get_apparent_power_flows(self.result.x)
+
+    def get_p_flows(self) -> pd.DataFrame:
+        """Extract active power flow results from solved model."""
+        return self.model.get_p_flows(self.result.x)
+
+    def get_q_flows(self) -> pd.DataFrame:
+        """Extract reactive power flow results from solved model."""
+        return self.model.get_q_flows(self.result.x)
 
     def get_p_gens(self) -> pd.DataFrame:
         """Extract active power generation results from solved model."""
@@ -117,3 +150,29 @@ class MultiperiodBackend(Backend):
     def get_q_gens(self) -> pd.DataFrame:
         """Extract reactive power generation results from solved model."""
         return self.model.get_q_gens(self.result.x)
+
+    def get_q_caps(self) -> Optional[pd.DataFrame]:
+        """Extract capacitor reactive power results from solved model."""
+        return self.model.get_q_caps(self.result.x)
+
+    # Battery-specific result methods
+
+    def get_p_batt(self) -> pd.DataFrame:
+        """Extract battery active power results from solved model."""
+        return self.model.get_p_batt(self.result.x)
+
+    def get_q_batt(self) -> pd.DataFrame:
+        """Extract battery reactive power results from solved model."""
+        return self.model.get_q_batt(self.result.x)
+
+    def get_p_charge(self) -> pd.DataFrame:
+        """Extract battery charging power results from solved model."""
+        return self.model.get_p_charge(self.result.x)
+
+    def get_p_discharge(self) -> pd.DataFrame:
+        """Extract battery discharging power results from solved model."""
+        return self.model.get_p_discharge(self.result.x)
+
+    def get_soc(self) -> pd.DataFrame:
+        """Extract battery state of charge results from solved model."""
+        return self.model.get_soc(self.result.x)

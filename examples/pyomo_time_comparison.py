@@ -1,9 +1,9 @@
 import distopf as opf
 import pyomo.environ as pyo
 from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.importer import create_case
+from distopf.api import create_case
 from distopf.pyomo_models import constraints
-from distopf.pyomo_models.results import OpfResult
+from distopf.pyomo_models.results import PyoResult
 from distopf import (
     plot_voltages,
     # plot_gens,
@@ -11,20 +11,21 @@ from distopf import (
     # plot_polar,
 )
 from distopf.matrix_models.multiperiod.solvers import cp_obj_loss, cvxpy_solve
+
 # from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP
 from distopf.matrix_models.multiperiod.lindist_loads_mp import LinDistMPL
 from time import perf_counter
 
 t0 = perf_counter()
-case = create_case(data_path=opf.CASES_DIR / "csv" / "ieee123_30der", n_steps=1, start_step=12)
+case = create_case(
+    data_path=opf.CASES_DIR / "csv" / "ieee123_30der", n_steps=1, start_step=12
+)
 # case.bus_data.v_max = 2
 # case.bus_data.v_min = 0
 case.schedules.default = 1
 case.schedules.PV = 1
 case.gen_data.control_variable = "PQ"
-matrix_model = LinDistMPL(
-    case=case
-)
+matrix_model = LinDistMPL(case=case)
 t1 = perf_counter()
 results_matrix = cvxpy_solve(matrix_model, obj_func=cp_obj_loss)
 t2 = perf_counter()
@@ -90,7 +91,7 @@ if results.solver.status == pyo.SolverStatus.ok:
     print("Optimization successful!")
     print(f"Objective value: {pyo.value(model.objective)}")
     # # data = get_all_results(model, case)
-    res = OpfResult(model)
+    res = PyoResult(model)
     # s = res.p_flow.copy()
     # s = s.drop(["a", "b", "c"], axis=1)
     # s["a"] = res.p_flow.a + 1j * res.q_flow.a

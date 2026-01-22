@@ -1,9 +1,15 @@
 """Abstract base class for optimization backends."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Union
 import warnings
 import pandas as pd
+
+if TYPE_CHECKING:
+    from distopf.api import Case
+    from distopf.results import PowerFlowResult
 
 
 class Backend(ABC):
@@ -13,36 +19,11 @@ class Backend(ABC):
     for a particular optimization approach (matrix convex, multiperiod, NLP).
     """
 
-    def __init__(self, case):
+    def __init__(self, case: Case) -> None:
         """Initialize backend with a Case instance."""
         self.case = case
-        self.model = None
-        self.result = None
-
-    def _get_control_variable(self, control_variable: Optional[str]) -> str:
-        """Determine control variable from gen_data if not specified.
-
-        Parameters
-        ----------
-        control_variable : str or None
-            Explicit control variable, or None to auto-detect
-
-        Returns
-        -------
-        str
-            Control variable ("", "P", "Q", or "PQ")
-        """
-        if control_variable is not None:
-            return control_variable
-
-        if self.case.gen_data is None or len(self.case.gen_data) == 0:
-            return ""
-
-        cv = self.case.gen_data.control_variable.unique()
-        if len(cv) == 1 and cv[0] != "":
-            return cv[0]
-
-        return ""
+        self.model: Any = None
+        self.result: Any = None
 
     def _warn_unsupported(self, backend_name: str, parameter: str) -> None:
         """Warn about unsupported parameters.
@@ -60,19 +41,21 @@ class Backend(ABC):
             stacklevel=4,
         )
 
-    def _add_time_column(self, df: pd.DataFrame, position: int = 2) -> pd.DataFrame:
+    def _add_time_column(
+        self, df: Optional[pd.DataFrame], position: int = 2
+    ) -> Optional[pd.DataFrame]:
         """Add time column to DataFrame if not present.
 
         Parameters
         ----------
-        df : pd.DataFrame
+        df : pd.DataFrame or None
             DataFrame to modify
         position : int
             Column position to insert 't' column (default 2)
 
         Returns
         -------
-        pd.DataFrame
+        pd.DataFrame or None
             DataFrame with time column added (if not already present)
         """
         if df is None or "t" in df.columns:
@@ -82,42 +65,97 @@ class Backend(ABC):
         df.insert(position, "t", 0)
         return df
 
+    def set_control_variable(self, control_variable: str) -> None:
+        """Set control variable for all generators.
+
+        This is a convenience method to update all generators to use
+        the same control variable. Individual generator control variables
+        can still be set directly via case.gen_data.loc[idx, 'control_variable'].
+
+        Parameters
+        ----------
+        control_variable : {"", "P", "Q", "PQ"}
+            Control mode for all generators:
+            - "": No control (constant power)
+            - "P": Active power control
+            - "Q": Reactive power control
+            - "PQ": Both active and reactive power control
+        """
+        if self.case.gen_data is not None and len(self.case.gen_data) > 0:
+            self.case.gen_data["control_variable"] = control_variable
+
+    def power_flow(
+        self,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+        verbose: bool = False,
+    ) -> dict[str, Any]:
+        """Run power flow using Forward-Backward Sweep solver.
+
+        This method provides non-optimization power flow analysis using
+        the iterative FBS method.
+
+        Parameters
+        ----------
+        max_iterations : int
+            Maximum iterations for convergence (default 100)
+        tolerance : float
+            Convergence tolerance (default 1e-6)
+        verbose : bool
+            Print progress information (default False)
+
+        Returns
+        -------
+        dict
+            Power flow results dictionary containing:
+            - voltages: Bus voltage magnitudes
+            - voltage_angles: Bus voltage angles
+            - p_flows: Active power flows
+            - q_flows: Reactive power flows
+            - currents: Branch current magnitudes
+            - current_angles: Branch current angles
+            - converged: Whether solution converged
+            - iterations: Number of iterations
+        """
+        from distopf.fbs import FBS
+
+        pf = FBS(self.case)
+        results = pf.solve(
+            max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+        )
+        # Store for get_* method access
+        self._fbs_solver = pf
+        return results
+
     @abstractmethod
     def solve(
         self,
         objective: Optional[Any] = None,
-        control_variable: Optional[str] = None,
+        control_regulators: bool = False,
+        control_capacitors: bool = False,
         raw_result: bool = False,
-        **kwargs,
-    ) -> Tuple[
-        Optional[pd.DataFrame],
-        Optional[pd.DataFrame],
-        Optional[pd.DataFrame],
-        Optional[pd.DataFrame],
-    ]:
+        **kwargs: Any,
+    ) -> Union[PowerFlowResult, Any]:
         """Solve the OPF problem using this backend.
 
         Parameters
         ----------
         objective : str, callable, or None
             Optimization objective function
-        control_variable : {"", "P", "Q", "PQ"}, optional
-            Generator control mode
+        control_regulators : bool
+            Whether to include regulator tap control (backend-specific support)
+        control_capacitors : bool
+            Whether to include capacitor switching control (backend-specific support)
         raw_result : bool
-            If True, return raw solver result instead of normalized DataFrames
+            If True, return raw solver result instead of PowerFlowResult
         **kwargs
             Backend-specific solver options
 
         Returns
         -------
-        voltages_df : pd.DataFrame or raw result
-            Bus voltage results
-        power_flows_df : pd.DataFrame
-            Branch power flow results
-        p_gens : pd.DataFrame
-            Active power generation by bus
-        q_gens : pd.DataFrame
-            Reactive power generation by bus
+        PowerFlowResult or raw result
+            If raw_result=False: PowerFlowResult with all results
+            If raw_result=True: Raw solver-specific result object
         """
         pass
 
@@ -127,8 +165,13 @@ class Backend(ABC):
         pass
 
     @abstractmethod
-    def get_power_flows(self) -> pd.DataFrame:
-        """Extract branch power flow results from solved model."""
+    def get_p_flows(self) -> pd.DataFrame:
+        """Extract active power flow results from solved model."""
+        pass
+
+    @abstractmethod
+    def get_q_flows(self) -> pd.DataFrame:
+        """Extract reactive power flow results from solved model."""
         pass
 
     @abstractmethod
@@ -140,3 +183,10 @@ class Backend(ABC):
     def get_q_gens(self) -> pd.DataFrame:
         """Extract reactive power generation results from solved model."""
         pass
+
+    def get_q_caps(self) -> Optional[pd.DataFrame]:
+        """Extract capacitor reactive power results from solved model.
+
+        Returns None if not available for this backend/model.
+        """
+        return None

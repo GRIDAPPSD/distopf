@@ -1,9 +1,9 @@
 import distopf as opf
 import pyomo.environ as pyo
 from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.importer import  create_case
+from distopf.api import create_case
 from distopf.pyomo_models import constraints
-from distopf.pyomo_models.results import OpfResult
+from distopf.pyomo_models.results import PyoResult
 from distopf import (
     plot_voltages,
     plot_gens,
@@ -65,7 +65,7 @@ if results.solver.status == pyo.SolverStatus.ok:
     print("Optimization successful!")
     print(f"Objective value: {pyo.value(model.objective)}")
     # data = get_all_results(model, case)
-    sol = OpfResult(model)
+    sol = PyoResult(model)
     plot_voltages(sol.voltages, t=0).show(renderer="browser")
     plot_gens(sol.p_flow, sol.q_flow).show(renderer="browser")
     plot_polar(sol.p_flow, sol.q_flow).show(renderer="browser")
@@ -74,9 +74,9 @@ if results.solver.status == pyo.SolverStatus.ok:
     # plot_gens(res.p_bat, res.q_bat).show(renderer="browser")
     plot_network(
         case,
-        v = sol.voltages,
-        p_flow = sol.p_flow,
-        q_flow = sol.q_flow,
+        v=sol.voltages,
+        p_flow=sol.p_flow,
+        q_flow=sol.q_flow,
         p_gen=sol.p_gen,
         q_gen=sol.q_gen,
         show_reactive_power=True,

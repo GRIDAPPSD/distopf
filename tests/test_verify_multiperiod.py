@@ -1,6 +1,6 @@
 import distopf as opf
 import distopf.matrix_models.multiperiod as mpopf
-from distopf.importer import create_case
+from distopf.api import create_case
 from distopf import CASES_DIR
 
 case = create_case(

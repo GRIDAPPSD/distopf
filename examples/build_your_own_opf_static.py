@@ -17,9 +17,10 @@ def _():
     import pyomo.environ as pyo
     from distopf.pyomo_models.lindist import create_lindist_model
     from distopf.pyomo_models import constraints
-    from distopf.pyomo_models.results import OpfResult
-    from distopf.importer import  create_case
-    return OpfResult, constraints, create_case, create_lindist_model, opf, pyo
+    from distopf.pyomo_models.results import PyoResult
+    from distopf.api import create_case
+
+    return PyoResult, constraints, create_case, create_lindist_model, opf, pyo
 
 
 @app.cell(hide_code=True)
@@ -30,11 +31,13 @@ def _(mo):
 
 @app.cell
 def _(add_loss_objective, constraints, create_case, create_lindist_model, opf):
-    case = create_case(data_path=opf.CASES_DIR / "csv" / "ieee123_30der", start_step=0, n_steps=1)
+    case = create_case(
+        data_path=opf.CASES_DIR / "csv" / "ieee123_30der", start_step=0, n_steps=1
+    )
     # Make any modifications to the case dataframes using Pandas APIs
     # Here we ensure that active and reactive power from generators are control variables.
-    case.gen_data.control_variable = "PQ" 
-    # Create the pyomo ConcreteModel containint all of the 
+    case.gen_data.control_variable = "PQ"
+    # Create the pyomo ConcreteModel containint all of the
     # necessary parameters, sets, and variables for the LinDist model.
     model = create_lindist_model(case)
     # Now we need to add the constraints
@@ -49,7 +52,7 @@ def _(add_loss_objective, constraints, create_case, create_lindist_model, opf):
     constraints.add_cvr_load_constraints(model)
     constraints.add_capacitor_constraints(model)
     constraints.add_regulator_constraints(model)
-    # Generators 
+    # Generators
     constraints.add_generator_limits(model)
     constraints.add_generator_constant_p_constraints_q_control(model)
     constraints.add_generator_constant_q_constraints_p_control(model)
@@ -93,10 +96,11 @@ def _(pyo):
     def add_final_constraint(model):
         t_final = model.start_step + model.n_steps - 1
         model.final_soc_constraint = pyo.Constraint(
-            model.bat_set, # Set of all battery ids. 2nd argument in rule.
-            [t_final], # final time step. 3rd argument in rule
-            rule=lambda m, i, t: m.soc[i, t] == 0.75, 
+            model.bat_set,  # Set of all battery ids. 2nd argument in rule.
+            [t_final],  # final time step. 3rd argument in rule
+            rule=lambda m, i, t: m.soc[i, t] == 0.75,
         )
+
     return
 
 
@@ -131,12 +135,14 @@ def _(pyo):
     def add_loss_objective(model):
         model.objective = pyo.Objective(
             rule=pyo.quicksum(
-                (model.p_flow[j, p, t] ** 2 + model.q_flow[j, p, t] ** 2) * model.r[j, p + p]
+                (model.p_flow[j, p, t] ** 2 + model.q_flow[j, p, t] ** 2)
+                * model.r[j, p + p]
                 for j, p in model.branch_phase_set
                 for t in model.time_set
             ),
             sense=pyo.minimize,
         )
+
     return (add_loss_objective,)
 
 
@@ -157,8 +163,8 @@ def _(OpfResult, model, pyo):
 
 @app.cell
 def _(results):
-    print(results.solver.status) 
-    t_plot = 0 # Time step for plots to show.
+    print(results.solver.status)
+    t_plot = 0  # Time step for plots to show.
     return (t_plot,)
 
 
@@ -179,13 +185,13 @@ def _(mo, opf, sol):
 def _(case, mo, opf, sol, t_plot):
     _fig = opf.plot_network(
         case,
-        v = sol.voltages,
-        p_flow = sol.p_flow,
-        q_flow = sol.q_flow,
+        v=sol.voltages,
+        p_flow=sol.p_flow,
+        q_flow=sol.q_flow,
         p_gen=sol.p_gen,
         q_gen=sol.q_gen,
         show_reactive_power=True,
-        t=t_plot
+        t=t_plot,
     )
 
     mo.vstack([_fig])
@@ -237,7 +243,10 @@ def _(mo, opf, sol, t_plot):
 @app.cell
 def _():
     import marimo as mo
-    slider = mo.ui.slider(start=0, stop=23, step=1, label="Time Step", full_width=True, show_value=True)
+
+    slider = mo.ui.slider(
+        start=0, stop=23, step=1, label="Time Step", full_width=True, show_value=True
+    )
     return (mo,)
 
 

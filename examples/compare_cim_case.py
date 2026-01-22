@@ -1,7 +1,7 @@
 import distopf as opf
 import pandas as pd
 import numpy as np
-from distopf.importer import create_case
+from distopf.api import create_case
 from distopf.fbs import fbs_solve
 from math import pi
 

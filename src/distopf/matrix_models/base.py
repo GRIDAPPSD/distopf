@@ -823,9 +823,9 @@ class LinDistBase(BaseModel):
             tb_idxs = self.x_maps[ph].bj.to_numpy()
             tb_names = self.bus.name[tb_idxs].to_numpy()
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, "fb"] = fb_idxs + 1
-            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "id"] = tb_idxs + 1
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "tb"] = tb_idxs + 1
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, "from_name"] = fb_names
-            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "name"] = tb_names
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "to_name"] = tb_names
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, ph] = x[self.x_maps[ph].pij]
         return df
     
@@ -843,9 +843,9 @@ class LinDistBase(BaseModel):
             tb_idxs = self.x_maps[ph].bj.to_numpy()
             tb_names = self.bus.name[tb_idxs].to_numpy()
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, "fb"] = fb_idxs + 1
-            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "id"] = tb_idxs + 1
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "tb"] = tb_idxs + 1
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, "from_name"] = fb_names
-            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "name"] = tb_names
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "to_name"] = tb_names
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, ph] = x[self.x_maps[ph].qij]
         return df
 

@@ -6,6 +6,9 @@ are accessible from the main distopf package without requiring deep imports.
 """
 
 
+from scipy.constants import R
+
+
 class TestCoreExports:
     """Test that core classes and functions are exported from distopf package."""
 
@@ -14,7 +17,7 @@ class TestCoreExports:
         import distopf as opf
 
         assert hasattr(opf, "Case")
-        from distopf.importer import Case
+        from distopf.api import Case
 
         assert opf.Case is Case
 
@@ -23,7 +26,7 @@ class TestCoreExports:
         import distopf as opf
 
         assert hasattr(opf, "create_case")
-        from distopf.importer import create_case
+        from distopf.api import create_case
 
         assert opf.create_case is create_case
 
@@ -97,36 +100,104 @@ class TestCaseMethods:
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        voltages, power_flows = case.run_pf()
+        result = case.run_pf()
 
-        assert voltages is not None
-        assert power_flows is not None
-        assert len(voltages) > 0
-        assert len(power_flows) > 0
+        # Test as PowerFlowResult object
+        assert isinstance(result, opf.PowerFlowResult)
+        assert result.voltages is not None
+        assert result.p_flows is not None
+        assert result.q_flows is not None
+        assert len(result.voltages) > 0
+        assert len(result.p_flows) > 0
+        assert len(result.q_flows) > 0
+
+        assert result.p_gens is not None
+        assert "t" in result.p_gens.columns
+        assert result.q_gens is not None
+        assert "t" in result.q_gens.columns
+        # p_gens/q_gens and p/q flows should be present
+        assert result.p_flows is not None
+        assert result.q_flows is not None
 
     def test_case_run_pf_returns_results(self):
-        """Test that Case.run_pf() populates result properties."""
+        """Test that Case.run_pf() returns a PowerFlowResult and Case has no result attrs."""
+        import distopf as opf
+        from distopf.results import PowerFlowResult
+
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
+        res = case.run_pf()
+
+        assert isinstance(res, PowerFlowResult)
+        assert res.voltages is not None
+        assert res.p_flows is not None
+        assert res.q_flows is not None
+        assert res.p_gens is not None
+        assert res.q_gens is not None
+
+        # Case should NOT expose result properties
+        assert not hasattr(case, "voltages")
+        assert not hasattr(case, "p_flows")
+        assert not hasattr(case, "p_gens")
+
+    def test_case_run_fbs(self):
+        """Test Case.run_fbs() method."""
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        case.run_pf()
+        result = case.run_fbs(verbose=False)
 
-        assert case.voltages is not None
-        assert case.power_flows is not None
-        assert case.p_gens is not None
-        assert case.q_gens is not None
+        # Test as PowerFlowResult object
+        assert isinstance(result, opf.PowerFlowResult)
+        assert result.voltages is not None
+        assert result.voltage_angles is not None
+        assert result.p_flows is not None
+        assert result.q_flows is not None
+        assert result.currents is not None
+        assert result.current_angles is not None
+        assert result.solver == "fbs"
+
+        assert len(result.voltages) > 0
+        assert len(result.currents) > 0
+
+        # Test backward-compatible dict-like access via to_dict()
+        results_dict = result.to_dict()
+        assert "voltages" in results_dict
+        assert "voltage_angles" in results_dict
+        assert "p_flows" in results_dict
+        assert "q_flows" in results_dict
+        assert "currents" in results_dict
+        assert "current_angles" in results_dict
+
+    def test_case_run_fbs_returns_results(self):
+        """Test that Case.run_fbs() returns a PowerFlowResult and Case has no result attrs."""
+        import distopf as opf
+        from distopf.results import PowerFlowResult
+
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
+        res = case.run_fbs(verbose=False)
+
+        assert isinstance(res, PowerFlowResult)
+        assert res.voltages is not None
+        assert res.voltage_angles is not None
+        assert res.p_flows is not None
+        assert res.q_flows is not None
+        assert res.currents is not None
+        assert res.current_angles is not None
+
+        # Case should NOT expose result properties
+        assert not hasattr(case, "voltages")
+        assert not hasattr(case, "voltage_angles")
+        assert not hasattr(case, "p_flows")
+        assert not hasattr(case, "currents")
 
     def test_case_run_opf(self):
         """Test Case.run_opf() method."""
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-        v, pf, pg, qg = case.run_opf("loss_min", control_variable="Q")
+        r = case.run_opf("loss_min", control_variable="Q")
 
-        assert v is not None
-        assert pf is not None
-        assert pg is not None
-        assert qg is not None
+        assert r is not None
 
     def test_case_to_matrix_model(self):
         """Test Case.to_matrix_model() method."""
@@ -175,31 +246,32 @@ class TestCaseMethods:
         assert not (case.bus_data["pl_a"] == copy.bus_data["pl_a"]).all()
 
     def test_case_plot_without_results_raises(self):
-        """Test that plotting without results raises RuntimeError."""
-        import distopf as opf
+        """Test that plotting without results raises RuntimeError on result object."""
         import pytest
+        from distopf.results import PowerFlowResult
 
-        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-
-        with pytest.raises(RuntimeError, match="No results available"):
-            case.plot_network()
-
-        with pytest.raises(RuntimeError, match="No results available"):
-            case.plot_voltages()
+        # An empty result object should raise when plotting
+        res = PowerFlowResult()
 
         with pytest.raises(RuntimeError, match="No results available"):
-            case.plot_power_flows()
+            res.plot_network()
+
+        with pytest.raises(RuntimeError, match="No voltage results available"):
+            res.plot_voltages()
+
+        with pytest.raises(RuntimeError, match="No results available"):
+            res.plot_power_flows()
 
     def test_case_result_properties_before_run(self):
-        """Test result properties are None before running analysis."""
+        """Test Case does not expose result properties before running analysis."""
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 
-        assert case.voltages is None
-        assert case.power_flows is None
-        assert case.p_gens is None
-        assert case.q_gens is None
+        assert not hasattr(case, "voltages")
+        assert not hasattr(case, "power_flows")
+        assert not hasattr(case, "p_gens")
+        assert not hasattr(case, "q_gens")
         assert case.model is None
 
 
@@ -261,7 +333,7 @@ class TestPyomoModelsExports:
         """OpfResult class should be exported from pyomo_models."""
         import distopf as opf
 
-        assert hasattr(opf.pyomo_models, "OpfResult")
+        assert hasattr(opf.pyomo_models, "PyoResult")
 
     def test_loss_objective_exported(self):
         """loss_objective should be exported from pyomo_models."""
@@ -399,7 +471,7 @@ class TestAllExports:
         assert "create_lindist_model" in pyo_opf.__all__
         assert "add_standard_constraints" in pyo_opf.__all__
         assert "solve" in pyo_opf.__all__
-        assert "OpfResult" in pyo_opf.__all__
+        assert "PyoResult" in pyo_opf.__all__
         assert "add_p_flow_constraints" in pyo_opf.__all__
         assert "loss_objective" in pyo_opf.__all__
 
@@ -428,13 +500,13 @@ class TestObjectiveAliases:
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 
         # All these should work and produce same result
-        v1, _, _, _ = case.run_opf("loss_min", control_variable="Q")
+        r1 = case.run_opf("loss_min", control_variable="Q")
 
         case2 = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-        v2, _, _, _ = case2.run_opf("loss", control_variable="Q")
+        r2 = case2.run_opf("loss", control_variable="Q")
 
         # Results should be identical (column names are 'a', 'b', 'c')
-        assert (v1["a"] - v2["a"]).abs().max() < 1e-6
+        assert (r1.voltages["a"] - r2.voltages["a"]).abs().max() < 1e-6
 
     def test_curtail_aliases_work(self):
         """Curtailment aliases should work."""
@@ -443,8 +515,8 @@ class TestObjectiveAliases:
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 
         # Should not raise - explicitly use matrix backend for this test
-        v, pf, pg, qg = case.run_opf("curtail", control_variable="P", backend="matrix")
-        assert v is not None
+        r = case.run_opf("curtail", control_variable="P", backend="matrix")
+        assert r is not None
 
     def test_unknown_objective_passes_through(self):
         """Unknown objectives should pass through unchanged."""
@@ -488,16 +560,16 @@ class TestBackendSelection:
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        v, pf, pg, qg = case.run_opf("loss", backend="matrix")
-        assert v is not None
+        r = case.run_opf("loss", backend="matrix")
+        assert r is not None
 
     def test_explicit_pyomo_backend(self):
         """Can explicitly use pyomo backend."""
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        v, pf, pg, qg = case.run_opf("loss", backend="pyomo")
-        assert v is not None
+        r = case.run_opf("loss", backend="pyomo")
+        assert r is not None
 
     def test_multiperiod_model_creation(self):
         """to_matrix_model with multiperiod=True creates multiperiod model."""
@@ -526,25 +598,26 @@ class TestBackendConsistency:
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        v, pf, pg, qg = case.run_opf("loss", backend="matrix")
+        r = case.run_opf("loss", backend="matrix")
 
         # All DataFrames should have 't' column
-        assert "t" in v.columns, "voltages missing 't' column"
-        assert "t" in pf.columns, "power_flows missing 't' column"
-        assert "t" in pg.columns, "p_gens missing 't' column"
-        assert "t" in qg.columns, "q_gens missing 't' column"
+        assert "t" in r.voltages.columns, "voltages missing 't' column"
+        assert "t" in r.p_flows.columns, "power_flows missing 't' column"
+        assert "t" in r.q_flows.columns, "power_flows missing 't' column"
+        assert "t" in r.p_gens.columns, "p_gens missing 't' column"
+        assert "t" in r.q_gens.columns, "q_gens missing 't' column"
 
         # Time value should be 0 for single-period
-        assert (v["t"] == 0).all()
+        assert (r.voltages["t"] == 0).all()
 
     def test_pyomo_results_have_time_column(self):
         """Pyomo backend results should include 't' column."""
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        v, pf, pg, qg = case.run_opf("loss", backend="pyomo")
+        r = case.run_opf("loss", backend="pyomo")
 
-        assert "t" in v.columns, "voltages missing 't' column"
+        assert "t" in r.voltages.columns, "voltages missing 't' column"
 
     def test_multiperiod_warns_on_control_regulators(self):
         """Multiperiod backend should warn when control_regulators is used."""
@@ -599,10 +672,10 @@ class TestBackendConsistency:
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 
-        v_matrix, _, _, _ = case.run_opf("loss", backend="matrix")
-        v_pyomo, _, _, _ = case.run_opf("loss", backend="pyomo")
+        r_matrix = case.run_opf("loss", backend="matrix")
+        r_pyomo = case.run_opf("loss", backend="pyomo")
 
         # Both should have core columns
         required_cols = {"id", "name", "t", "a", "b", "c"}
-        assert required_cols.issubset(set(v_matrix.columns))
-        assert required_cols.issubset(set(v_pyomo.columns))
+        assert required_cols.issubset(set(r_matrix.voltages.columns))
+        assert required_cols.issubset(set(r_pyomo.voltages.columns))

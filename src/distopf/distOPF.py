@@ -270,8 +270,11 @@ class DistOPFCase(object):
 
         >>> from distopf import Case, create_case, CASES_DIR
         >>> case = create_case(CASES_DIR / "csv" / "ieee13")
-        >>> v, pf = case.run_pf()  # Power flow
-        >>> v, pf, pg, qg = case.run_opf("loss_min")  # Optimal power flow
+        >>> result = case.run_pf()
+        >>> print(result.voltages.head())
+        >>> # OPF returns a PowerFlowResult too:
+        >>> result = case.run_opf("loss_min")
+        >>> print(result.summary())
 
     Parameters
     ----------
@@ -489,7 +492,9 @@ class DistOPFCase(object):
             return result
 
         self.voltages_df = self.model.get_voltages(result.x)
-        self.power_flows_df = self.model.get_apparent_power_flows(result.x)
+        # Get separate real/reactive flows (p/q) instead of apparent power
+        self.p_flows_df = self.model.get_p_flows(result.x)
+        self.q_flows_df = self.model.get_q_flows(result.x)
         self.p_gens = self.model.get_p_gens(result.x)
         self.q_gens = self.model.get_q_gens(result.x)
 
@@ -499,7 +504,7 @@ class DistOPFCase(object):
             self.save_result_data()
         if self.save_plots or self.show_plots:
             self.make_plots()
-        return self.voltages_df, self.power_flows_df
+        return self.voltages_df, self.p_flows_df, self.q_flows_df
 
     def run(
         self,
@@ -535,7 +540,9 @@ class DistOPFCase(object):
         result = auto_solve(self.model, self.objective_function, **kwargs)
         self.results = result
         self.voltages_df = self.model.get_voltages(result.x)
-        self.power_flows_df = self.model.get_apparent_power_flows(result.x)
+        # Get separate real/reactive flows (p/q) instead of apparent power
+        self.p_flows_df = self.model.get_p_flows(result.x)
+        self.q_flows_df = self.model.get_q_flows(result.x)
         self.p_gens = self.model.get_p_gens(result.x)
         self.q_gens = self.model.get_q_gens(result.x)
 
@@ -548,7 +555,13 @@ class DistOPFCase(object):
             self.save_result_data()
         if self.save_plots or self.show_plots:
             self.make_plots()
-        return self.voltages_df, self.power_flows_df, self.p_gens, self.q_gens
+        return (
+            self.voltages_df,
+            self.p_flows_df,
+            self.q_flows_df,
+            self.p_gens,
+            self.q_gens,
+        )
 
     def save_result_data(self):
         if not self.output_dir.exists():
@@ -556,9 +569,9 @@ class DistOPFCase(object):
         self.voltages_df.to_csv(
             Path(self.output_dir) / "node_voltages.csv", index=False
         )
-        self.power_flows_df.to_csv(
-            Path(self.output_dir) / "power_flows.csv", index=False
-        )
+        # Save separate active/reactive flow files
+        self.p_flows_df.to_csv(Path(self.output_dir) / "p_flows.csv", index=False)
+        self.q_flows_df.to_csv(Path(self.output_dir) / "q_flows.csv", index=False)
         self.p_gens.to_csv(Path(self.output_dir) / "p_gens.csv", index=False)
         self.q_gens.to_csv(Path(self.output_dir) / "q_gens.csv", index=False)
 
@@ -598,7 +611,12 @@ class DistOPFCase(object):
         fig1 = plot_network(
             self.model, self.voltages_df, self.power_flows_df, show_reactive_power=False
         )
-        fig2 = plot_power_flows(self.power_flows_df)
+        # Construct complex apparent power DataFrame for plotting from p/q flows
+        s = self.p_flows_df.copy()
+        s["a"] = self.p_flows_df.a + 1j * self.q_flows_df.a
+        s["b"] = self.p_flows_df.b + 1j * self.q_flows_df.b
+        s["c"] = self.p_flows_df.c + 1j * self.q_flows_df.c
+        fig2 = plot_power_flows(s)
         fig3 = plot_voltages(self.voltages_df)
         fig4 = plot_gens(self.p_gens, self.q_gens)
         fig1.show()

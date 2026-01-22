@@ -57,8 +57,8 @@ class Case:
     --------
     >>> from distopf import Case, create_case, CASES_DIR
     >>> case = create_case(CASES_DIR / "csv" / "ieee13")
-    >>> v, pf = case.run_pf()  # Run power flow
-    >>> v, pf, p_gen, q_gen = case.run_opf("loss_min")  # Run optimal power flow
+    >>> result = case.run_pf()
+    >>> print(result.voltages.head())
     """
 
     def __init__(
@@ -88,10 +88,6 @@ class Case:
         # Result storage (populated after running analysis)
         self._model: Optional["LinDistBase"] = None
         self._result = None
-        self._voltages_df: Optional[pd.DataFrame] = None
-        self._power_flows_df: Optional[pd.DataFrame] = None
-        self._p_gens: Optional[pd.DataFrame] = None
-        self._q_gens: Optional[pd.DataFrame] = None
 
         self._validate_case()
 
@@ -129,30 +125,6 @@ class Case:
                 + "\n  - ".join(errors)
             )
 
-    # -------------------------------------------------------------------------
-    # Result Properties
-    # -------------------------------------------------------------------------
-
-    @property
-    def voltages(self) -> Optional[pd.DataFrame]:
-        """Bus voltage results from last analysis (None if not yet run)."""
-        return self._voltages_df
-
-    @property
-    def power_flows(self) -> Optional[pd.DataFrame]:
-        """Branch power flow results from last analysis (None if not yet run)."""
-        return self._power_flows_df
-
-    @property
-    def p_gens(self) -> Optional[pd.DataFrame]:
-        """Generator active power outputs from last analysis (None if not yet run)."""
-        return self._p_gens
-
-    @property
-    def q_gens(self) -> Optional[pd.DataFrame]:
-        """Generator reactive power outputs from last analysis (None if not yet run)."""
-        return self._q_gens
-
     @property
     def model(self) -> Optional["LinDistBase"]:
         """The optimization model from last analysis (None if not yet run)."""
@@ -174,21 +146,24 @@ class Case:
         ----------
         raw_result : bool, default False
             If True, return the raw scipy.optimize.OptimizeResult object
-            instead of DataFrames.
+            instead of PowerFlowResult.
 
         Returns
         -------
-        tuple[pd.DataFrame, pd.DataFrame] or OptimizeResult
-            If raw_result=False: (voltages_df, power_flows_df)
+        PowerFlowResult or OptimizeResult
+            If raw_result=False: PowerFlowResult with voltages, p_flows, q_flows, etc.
             If raw_result=True: scipy OptimizeResult object
 
         Examples
         --------
         >>> case = create_case(CASES_DIR / "csv" / "ieee13")
-        >>> voltages, power_flows = case.run_pf()
-        >>> print(voltages.head())
+        >>> result = case.run_pf()
+        >>> print(result.voltages.head())
+        >>> # Backward-compatible tuple unpacking still works if needed:
+        >>> voltages, p_flows, q_flows = case.run_pf()  # (same as unpacking result)
         """
         from distopf.distOPF import create_model, auto_solve
+        from distopf.results import PowerFlowResult
 
         # Create unconstrained power flow (wide voltage limits)
         bus_data = self.bus_data.copy()
@@ -217,11 +192,130 @@ class Case:
             return result
 
         self._voltages_df = self._model.get_voltages(result.x)
-        self._power_flows_df = self._model.get_apparent_power_flows(result.x)
+        self._p_flows_df = self._model.get_p_flows(result.x)
+        self._q_flows_df = self._model.get_q_flows(result.x)
         self._p_gens = self._model.get_p_gens(result.x)
         self._q_gens = self._model.get_q_gens(result.x)
 
-        return self._voltages_df, self._power_flows_df
+        # Ensure single-period results have a time column 't' for consistency
+        if self._p_gens is not None and "t" not in self._p_gens.columns:
+            self._p_gens = self._p_gens.copy()
+            self._p_gens.insert(2, "t", 0)
+        if self._q_gens is not None and "t" not in self._q_gens.columns:
+            self._q_gens = self._q_gens.copy()
+            self._q_gens.insert(2, "t", 0)
+
+        result = PowerFlowResult(
+            voltages=self._voltages_df,
+            p_flows=self._p_flows_df,
+            q_flows=self._q_flows_df,
+            p_gens=self._p_gens,
+            q_gens=self._q_gens,
+            objective_value=result.fun if hasattr(result, "fun") else None,
+            converged=result.success if hasattr(result, "success") else True,
+            solver="clarabel",
+            result_type="pf",  # Power flow - iteration returns 3 values
+            raw_result=result,
+            model=self._model,
+            case=self,
+        )
+        return result
+
+    def run_fbs(
+        self, max_iterations: int = 100, tolerance: float = 1e-6, verbose: bool = False
+    ):
+        """
+        Run Forward-Backward Sweep (FBS) power flow analysis.
+
+        FBS is a traditional power flow solver specifically designed for
+        3-phase unbalanced radial distribution networks. It's fast and
+        robust for this class of problems.
+
+        Parameters
+        ----------
+        max_iterations : int, default 100
+            Maximum number of iterations for convergence
+        tolerance : float, default 1e-6
+            Convergence tolerance (voltage change in p.u.)
+        verbose : bool, default False
+            Print iteration information
+
+        Returns
+        -------
+        PowerFlowResult
+            Result object with all power flow outputs:
+            - voltages: Bus voltage magnitudes (p.u.)
+            - voltage_angles: Bus voltage angles (degrees)
+            - p_flows: Branch active power flows (p.u.)
+            - q_flows: Branch reactive power flows (p.u.)
+            - currents: Branch currents (p.u.)
+            - current_angles: Branch current angles (degrees)
+
+        Examples
+        --------
+        >>> case = create_case(CASES_DIR / "csv" / "ieee13")
+        >>> result = case.run_fbs()
+        >>> print(result.voltages.head())
+        >>> print(result.currents.head())
+        """
+        from distopf.fbs import FBS
+        from distopf.results import PowerFlowResult
+
+        # Create and solve with FBS
+        fbs = FBS(self)
+        converged = fbs.solve(
+            max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+        )
+
+        # Extract and store all results
+        self._voltages_df = fbs.get_voltages()
+        self._voltage_angles_df = fbs.get_voltage_angles()
+        self._p_flows_df = fbs.get_p_flows()
+        self._q_flows_df = fbs.get_q_flows()
+        self._currents_df = fbs.get_currents()
+        self._current_angles_df = fbs.get_current_angles()
+
+        # Build generator output DataFrames from gen_data for API consistency
+        p_gens_df = None
+        q_gens_df = None
+        if self.gen_data is not None and len(self.gen_data) > 0:
+            gen_df = self.gen_data.copy()
+            # Map pa/pb/pc -> a/b/c and qa/qb/qc -> a/b/c with a time column t=0
+            p_cols = {"pa": "a", "pb": "b", "pc": "c"}
+            q_cols = {"qa": "a", "qb": "b", "qc": "c"}
+
+            # p_gens
+            p_present = [c for c in ["pa", "pb", "pc"] if c in gen_df.columns]
+            if p_present:
+                p_gens_df = gen_df[
+                    ["id"] + (["name"] if "name" in gen_df.columns else []) + p_present
+                ].rename(columns=p_cols)
+                # Insert time column at position 2 for single-period compatibility
+                p_gens_df.insert(2, "t", 0)
+
+            # q_gens
+            q_present = [c for c in ["qa", "qb", "qc"] if c in gen_df.columns]
+            if q_present:
+                q_gens_df = gen_df[
+                    ["id"] + (["name"] if "name" in gen_df.columns else []) + q_present
+                ].rename(columns=q_cols)
+                q_gens_df.insert(2, "t", 0)
+
+        result = PowerFlowResult(
+            voltages=self._voltages_df,
+            voltage_angles=self._voltage_angles_df,
+            p_flows=self._p_flows_df,
+            q_flows=self._q_flows_df,
+            currents=self._currents_df,
+            current_angles=self._current_angles_df,
+            p_gens=p_gens_df,
+            q_gens=q_gens_df,
+            converged=converged if isinstance(converged, bool) else True,
+            solver="fbs",
+            result_type="fbs",  # FBS - iteration returns 6 values
+            case=self,
+        )
+        return result
 
     def run_opf(
         self,
@@ -275,19 +369,6 @@ class Case:
             If raw_result=False: (voltages_df, power_flows_df, p_gens_df, q_gens_df)
             If raw_result=True: backend-specific result object
 
-        Examples
-        --------
-        >>> # Single-period OPF (auto-selects matrix backend)
-        >>> case = create_case(CASES_DIR / "csv" / "ieee123_30der")
-        >>> v, pf, pg, qg = case.run_opf("loss_min", control_variable="Q")
-
-        >>> # Multi-period OPF with batteries
-        >>> case = create_case(CASES_DIR / "csv" / "ieee13_bat", n_steps=24)
-        >>> v, pf, pg, qg = case.run_opf("loss", backend="multiperiod")
-
-        >>> # Pyomo NLP backend
-        >>> case = create_case(CASES_DIR / "csv" / "ieee13")
-        >>> v, pf, pg, qg = case.run_opf("loss", backend="pyomo")
         """
         from distopf.backend_selector import BackendSelector
 
@@ -299,7 +380,7 @@ class Case:
 
         # Route to appropriate backend using BackendSelector
         selector = BackendSelector(self)
-        return selector.route_opf(
+        result = selector.route_opf(
             objective=objective,
             control_variable=control_variable,
             control_regulators=control_regulators,
@@ -309,320 +390,21 @@ class Case:
             **kwargs,
         )
 
-    def _select_backend(self) -> str:
-        """Auto-select the best backend based on case properties.
+        return result
 
-        This is a wrapper around BackendSelector for backward compatibility.
+    def _select_backend(self) -> str:
+        """
+        Convenience wrapper to determine the best backend for this Case.
+
+        Returns
+        -------
+        str
+            Selected backend name as determined by :class:`BackendSelector`.
         """
         from distopf.backend_selector import BackendSelector
 
         selector = BackendSelector(self)
         return selector.select()
-
-    def _normalize_results(
-        self, voltages_df, power_flows_df, p_gens, q_gens, backend: str
-    ):
-        """
-        Normalize result DataFrames for consistency across backends.
-
-        Ensures all backends return DataFrames with consistent column structure:
-        - Adds 't' column to single-period results
-        - Normalizes column names across backends
-        """
-        # Add time column to single-period matrix results
-        if backend == "matrix":
-            if "t" not in voltages_df.columns:
-                voltages_df = voltages_df.copy()
-                voltages_df.insert(2, "t", 0)
-            if "t" not in power_flows_df.columns:
-                power_flows_df = power_flows_df.copy()
-                power_flows_df.insert(4, "t", 0)
-            if p_gens is not None and "t" not in p_gens.columns:
-                p_gens = p_gens.copy()
-                p_gens.insert(2, "t", 0)
-            if q_gens is not None and "t" not in q_gens.columns:
-                q_gens = q_gens.copy()
-                q_gens.insert(2, "t", 0)
-
-        return voltages_df, power_flows_df, p_gens, q_gens
-
-    def _run_opf_matrix(
-        self,
-        objective=None,
-        control_variable=None,
-        control_regulators=False,
-        control_capacitors=False,
-        raw_result=False,
-        **kwargs,
-    ):
-        """Run OPF using single-period matrix model (CVXPY/CLARABEL)."""
-        from distopf.distOPF import create_model, auto_solve
-
-        # Note: objective is already resolved at entry point (run_opf method)
-        # Determine control variable from gen_data if not specified
-        if control_variable is None and self.gen_data is not None:
-            cv = self.gen_data.control_variable.unique()
-            if len(cv) == 1 and cv[0] != "":
-                control_variable = cv[0]
-
-        self._model = create_model(
-            control_variable=control_variable or "",
-            control_regulators=control_regulators,
-            control_capacitors=control_capacitors,
-            branch_data=self.branch_data,
-            bus_data=self.bus_data,
-            gen_data=self.gen_data,
-            cap_data=self.cap_data,
-            reg_data=self.reg_data,
-        )
-
-        result = auto_solve(self._model, objective, **kwargs)
-        self._result = result
-
-        self._voltages_df = self._model.get_voltages(result.x)
-        self._power_flows_df = self._model.get_apparent_power_flows(result.x)
-        self._p_gens = self._model.get_p_gens(result.x)
-        self._q_gens = self._model.get_q_gens(result.x)
-
-        # Normalize results for consistency
-        self._voltages_df, self._power_flows_df, self._p_gens, self._q_gens = (
-            self._normalize_results(
-                self._voltages_df,
-                self._power_flows_df,
-                self._p_gens,
-                self._q_gens,
-                "matrix",
-            )
-        )
-
-        if raw_result:
-            return result
-
-        return self._voltages_df, self._power_flows_df, self._p_gens, self._q_gens
-
-    def _run_opf_multiperiod(
-        self,
-        objective=None,
-        control_variable=None,
-        control_regulators=False,
-        control_capacitors=False,
-        raw_result=False,
-        **kwargs,
-    ):
-        """Run OPF using multi-period matrix model (supports batteries/schedules)."""
-        from distopf.matrix_models.multiperiod import LinDistMPL, cvxpy_solve
-
-        # Warn about unsupported parameters
-        if control_regulators:
-            warnings.warn(
-                "control_regulators is not supported by multiperiod backend; ignoring.",
-                UserWarning,
-                stacklevel=3,
-            )
-        if control_capacitors:
-            warnings.warn(
-                "control_capacitors is not supported by multiperiod backend; ignoring.",
-                UserWarning,
-                stacklevel=3,
-            )
-
-        # Determine control variable from gen_data if not specified
-        if control_variable is None and self.gen_data is not None:
-            cv = self.gen_data.control_variable.unique()
-            if len(cv) == 1 and cv[0] != "":
-                control_variable = cv[0]
-
-        # Update gen_data control variable if specified
-        gen_data = self.gen_data
-        if control_variable is not None and gen_data is not None:
-            gen_data = gen_data.copy()
-            gen_data.control_variable = control_variable
-
-        # Create multiperiod model
-        self._model = LinDistMPL(
-            branch_data=self.branch_data,
-            bus_data=self.bus_data,
-            gen_data=gen_data,
-            cap_data=self.cap_data,
-            reg_data=self.reg_data,
-            bat_data=self.bat_data,
-            schedules=self.schedules,
-            start_step=self.start_step,
-            n_steps=self.n_steps,
-            delta_t=self.delta_t,
-        )
-
-        # Resolve objective function
-        obj_func = self._resolve_multiperiod_objective(objective)
-
-        # Solve
-        result = cvxpy_solve(self._model, obj_func, **kwargs)
-        self._result = result
-
-        self._voltages_df = self._model.get_voltages(result.x)
-        self._power_flows_df = self._model.get_apparent_power_flows(result.x)
-        self._p_gens = self._model.get_p_gens(result.x)
-        self._q_gens = self._model.get_q_gens(result.x)
-
-        if raw_result:
-            return result
-
-        return self._voltages_df, self._power_flows_df, self._p_gens, self._q_gens
-
-    def _resolve_multiperiod_objective(self, objective):
-        """Resolve objective string to multiperiod objective function."""
-        from distopf.matrix_models.multiperiod import objectives as mp_obj
-
-        if objective is None:
-            return mp_obj.cp_obj_loss
-
-        if callable(objective):
-            return objective
-
-        # String objective
-        obj_lower = objective.lower().strip()
-        obj_map = {
-            "loss": mp_obj.cp_obj_loss,
-            "loss_min": mp_obj.cp_obj_loss,
-            "loss_batt": mp_obj.cp_obj_loss_batt,
-            "curtail": mp_obj.cp_obj_curtail,
-            "curtail_min": mp_obj.cp_obj_curtail,
-            "target_p_3ph": mp_obj.cp_obj_target_p_3ph,
-            "target_q_3ph": mp_obj.cp_obj_target_q_3ph,
-            "target_p_total": mp_obj.cp_obj_target_p_total,
-            "target_q_total": mp_obj.cp_obj_target_q_total,
-            "none": mp_obj.cp_obj_none,
-        }
-        if obj_lower in obj_map:
-            return obj_map[obj_lower]
-        raise ValueError(
-            f"Unknown multiperiod objective: '{objective}'. "
-            f"Supported objectives: {list(obj_map.keys())}"
-        )
-
-    def _run_opf_pyomo(
-        self,
-        objective=None,
-        control_variable=None,
-        control_regulators=False,
-        control_capacitors=False,
-        raw_result=False,
-        **kwargs,
-    ):
-        """Run OPF using Pyomo/IPOPT backend (NLP-capable)."""
-        from distopf.pyomo_models import (
-            create_lindist_model,
-            add_standard_constraints,
-            solve,
-        )
-        import pyomo.environ as pyo
-
-        # Warn about unsupported parameters
-        if control_regulators:
-            warnings.warn(
-                "control_regulators is not supported by pyomo backend; ignoring.",
-                UserWarning,
-                stacklevel=3,
-            )
-        if control_capacitors:
-            warnings.warn(
-                "control_capacitors is not supported by pyomo backend; ignoring.",
-                UserWarning,
-                stacklevel=3,
-            )
-        if "solver" in kwargs:
-            warnings.warn(
-                "solver kwarg is not supported by pyomo backend (uses IPOPT); ignoring.",
-                UserWarning,
-                stacklevel=3,
-            )
-
-        # Determine control variable from gen_data if not specified
-        if control_variable is None and self.gen_data is not None:
-            cv = self.gen_data.control_variable.unique()
-            if len(cv) == 1 and cv[0] != "":
-                control_variable = cv[0]
-
-        # Update gen_data control variable if specified
-        gen_data = self.gen_data
-        if control_variable is not None and gen_data is not None:
-            gen_data = gen_data.copy()
-            gen_data.control_variable = control_variable
-
-        # Create case copy with updated gen_data
-        case_copy = Case(
-            self.branch_data,
-            self.bus_data,
-            gen_data,
-            self.cap_data,
-            self.reg_data,
-            self.bat_data,
-            self.schedules,
-            start_step=self.start_step,
-            n_steps=self.n_steps,
-            delta_t=self.delta_t,
-        )
-
-        # Create Pyomo model
-        model = create_lindist_model(case_copy)
-        add_standard_constraints(model)
-
-        # Set objective
-        obj_rule = self._resolve_pyomo_objective(objective)
-        model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
-
-        # Solve (solve function doesn't accept solver arg - uses ipopt internally)
-        result = solve(model)
-        self._result = result
-        self._model = model
-
-        # Extract results - result is already OpfResult from solve()
-        self._voltages_df = result.voltages
-        self._power_flows_df = result.p_flow  # Note: Pyomo result structure differs
-        self._p_gens = result.p_gen
-        self._q_gens = result.q_gen
-
-        if raw_result:
-            return result
-
-        return self._voltages_df, self._power_flows_df, self._p_gens, self._q_gens
-
-    def _resolve_pyomo_objective(self, objective):
-        """Resolve objective string to Pyomo objective rule."""
-        from distopf.pyomo_models.objectives import loss_objective_rule
-
-        if objective is None:
-            return loss_objective_rule
-
-        if callable(objective):
-            return objective
-
-        # String objective - map to pyomo objective rules
-        obj_lower = objective.lower().strip()
-        if obj_lower in ("loss", "loss_min"):
-            return loss_objective_rule
-
-        # List unsupported objectives that work with matrix backend
-        matrix_only_objectives = [
-            "curtail",
-            "curtail_min",
-            "gen_max",
-            "target_p_3ph",
-            "target_q_3ph",
-            "target_p_total",
-            "target_q_total",
-        ]
-        if obj_lower in matrix_only_objectives:
-            raise ValueError(
-                f"Objective '{objective}' is not supported by pyomo backend. "
-                f"Use backend='matrix' or backend='multiperiod' for this objective."
-            )
-
-        raise ValueError(
-            f"Unknown Pyomo objective: '{objective}'. "
-            f"Supported objectives: 'loss', 'loss_min'. "
-            f"For custom objectives, pass a callable rule function."
-        )
 
     # -------------------------------------------------------------------------
     # Model Creation Methods (for advanced users)
@@ -741,119 +523,6 @@ class Case:
         return create_lindist_model(self, **kwargs)
 
     # -------------------------------------------------------------------------
-    # Plotting Methods
-    # -------------------------------------------------------------------------
-
-    def plot_network(
-        self,
-        v_min: float = 0.95,
-        v_max: float = 1.05,
-        show_phases: str = "abc",
-        show_reactive_power: bool = False,
-    ):
-        """
-        Plot the distribution network with voltage and power flow results.
-
-        Results must be available from a prior run_pf() or run_opf() call.
-
-        Parameters
-        ----------
-        v_min : float, default 0.95
-            Minimum voltage for color scaling
-        v_max : float, default 1.05
-            Maximum voltage for color scaling
-        show_phases : str, default "abc"
-            Which phases to show: "a", "b", "c", or "abc"
-        show_reactive_power : bool, default False
-            Show reactive power instead of active power
-
-        Returns
-        -------
-        plotly.graph_objects.Figure
-
-        Raises
-        ------
-        RuntimeError
-            If no results are available (run analysis first)
-        """
-        if self._voltages_df is None:
-            raise RuntimeError("No results available. Run run_pf() or run_opf() first.")
-
-        from distopf.plot import plot_network
-
-        return plot_network(
-            self._model,
-            v=self._voltages_df,
-            s=self._power_flows_df,
-            p_gen=self._p_gens,
-            q_gen=self._q_gens,
-            v_min=v_min,
-            v_max=v_max,
-            show_phases=show_phases,
-            show_reactive_power=show_reactive_power,
-        )
-
-    def plot_voltages(self):
-        """
-        Plot bus voltage profile.
-
-        Returns
-        -------
-        plotly.graph_objects.Figure
-
-        Raises
-        ------
-        RuntimeError
-            If no results are available
-        """
-        if self._voltages_df is None:
-            raise RuntimeError("No results available. Run run_pf() or run_opf() first.")
-
-        from distopf.plot import plot_voltages
-
-        return plot_voltages(self._voltages_df)
-
-    def plot_power_flows(self):
-        """
-        Plot branch power flows.
-
-        Returns
-        -------
-        plotly.graph_objects.Figure
-
-        Raises
-        ------
-        RuntimeError
-            If no results are available
-        """
-        if self._power_flows_df is None:
-            raise RuntimeError("No results available. Run run_pf() or run_opf() first.")
-
-        from distopf.plot import plot_power_flows
-
-        return plot_power_flows(self._power_flows_df)
-
-    def plot_gens(self):
-        """
-        Plot generator active and reactive power outputs.
-
-        Returns
-        -------
-        plotly.graph_objects.Figure
-
-        Raises
-        ------
-        RuntimeError
-            If no results are available
-        """
-        if self._p_gens is None:
-            raise RuntimeError("No results available. Run run_pf() or run_opf() first.")
-
-        from distopf.plot import plot_gens
-
-        return plot_gens(self._p_gens, self._q_gens)
-
-    # -------------------------------------------------------------------------
     # Case Modification Methods
     # -------------------------------------------------------------------------
 
@@ -940,34 +609,7 @@ class Case:
     # Save/Export Methods
     # -------------------------------------------------------------------------
 
-    def save_results(self, output_dir: Path | str) -> None:
-        """
-        Save analysis results to CSV files.
-
-        Parameters
-        ----------
-        output_dir : Path or str
-            Directory to save results
-
-        Raises
-        ------
-        RuntimeError
-            If no results are available
-        """
-        if self._voltages_df is None:
-            raise RuntimeError("No results available. Run run_pf() or run_opf() first.")
-
-        output_dir = Path(output_dir)
-        output_dir.mkdir(exist_ok=True)
-
-        self._voltages_df.to_csv(output_dir / "node_voltages.csv", index=False)
-        self._power_flows_df.to_csv(output_dir / "power_flows.csv", index=False)
-        if self._p_gens is not None:
-            self._p_gens.to_csv(output_dir / "p_gens.csv", index=False)
-        if self._q_gens is not None:
-            self._q_gens.to_csv(output_dir / "q_gens.csv", index=False)
-
-    def save_case(self, output_dir: Path | str) -> None:
+    def save(self, output_dir: Path | str) -> None:
         """
         Save case input data to CSV files.
 

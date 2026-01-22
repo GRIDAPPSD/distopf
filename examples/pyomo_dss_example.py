@@ -1,4 +1,4 @@
-from distopf.importer import create_case
+from distopf.api import create_case
 from distopf.pyomo_models.lindist_loads import LinDistPyoMPL
 from distopf import CASES_DIR
 from distopf.pyomo_models.solvers import solve

@@ -61,7 +61,7 @@ from distopf.pyomo_models.constraints import (
 )
 
 # Results extraction
-from distopf.pyomo_models.results import OpfResult, get_values, get_voltages
+from distopf.pyomo_models.results import PyoResult, get_values, get_voltages
 
 # Objectives
 from distopf.pyomo_models.objectives import loss_objective, loss_objective_rule
@@ -153,7 +153,7 @@ __all__ = [
     "add_battery_energy_constraints",
     "add_battery_constant_q_constraints_p_control",
     # Results
-    "OpfResult",
+    "PyoResult",
     "get_values",
     "get_voltages",
     # Objectives

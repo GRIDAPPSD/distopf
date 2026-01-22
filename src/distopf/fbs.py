@@ -1,7 +1,8 @@
 from genericpath import samestat
 import numpy as np
 import pandas as pd
-from distopf.importer import Case
+from distopf.api import Case
+from typing import Optional
 from distopf.utils import get
 
 
@@ -277,7 +278,7 @@ class FBS:
                 a_t[i_ph, i_ph] = tap_ratio
 
         return a_t
-    
+
     def _get_tap_current_ratio_matrix(self, tb: int) -> np.ndarray:
         """Get tap current ratio matrix for a given branch."""
         d_t = np.eye(3, dtype=complex)
@@ -289,10 +290,10 @@ class FBS:
             for ph in phases_str:
                 i_ph = "abc".index(ph)
                 tap_ratio = self.reg_data.at[reg_index, f"ratio_{ph}"]
-                d_t[i_ph, i_ph] = 1/tap_ratio
+                d_t[i_ph, i_ph] = 1 / tap_ratio
 
         return d_t
-    
+
     def _backward_sweep(self, v_nodes: dict[int, np.ndarray]) -> dict[int, np.ndarray]:
         """Backward sweep: Calculate branch currents from loads to source."""
         I_branches = {}
@@ -365,7 +366,6 @@ class FBS:
                 v_nodes[node] = v_nodes[parent].copy()
 
         return v_nodes
-
 
     def _get_nodes_reverse_order(self) -> list[int]:
         """Get nodes in reverse topological order (leaves to root)."""
@@ -1145,9 +1145,97 @@ def fbs_solve(
     return pf.solve(max_iterations=max_iterations, tolerance=tolerance, verbose=verbose)
 
 
+# -------------------------------------------------------------------------
+# Utility: run FBS using OPF setpoints
+# -------------------------------------------------------------------------
+
+
+def run_fbs_with_opf_setpoints(
+    case: Case,
+    opf_result=None,
+    *,
+    p_gens: Optional[pd.DataFrame] = None,
+    q_gens: Optional[pd.DataFrame] = None,
+    max_iterations: int = 100,
+    tolerance: float = 1e-6,
+    verbose: bool = False,
+) -> "PowerFlowResult":
+    """Run FBS using OPF generator setpoints.
+
+    This prefers `p_gens`/`q_gens` if provided, otherwise extracts them
+    from `opf_result` (a :class:`PowerFlowResult`). Returns a
+    :class:`PowerFlowResult` with `result_type='fbs'`.
+    """
+    # Local import to avoid circular import at module import time
+    from distopf.results import PowerFlowResult
+
+    if opf_result is not None:
+        if p_gens is None:
+            p_gens = opf_result.p_gens
+        if q_gens is None:
+            q_gens = opf_result.q_gens
+
+    case_copy = case.copy()
+
+    if p_gens is not None or q_gens is not None:
+        _apply_gen_setpoints_to_case(case_copy, p_gens, q_gens)
+
+    fbs_res = case_copy.run_fbs(
+        max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+    )
+
+    if isinstance(fbs_res, PowerFlowResult):
+        return fbs_res
+
+    result = PowerFlowResult(
+        voltages=fbs_res.get("voltages"),
+        currents=fbs_res.get("currents"),
+        converged=fbs_res.get("converged", True),
+        iterations=fbs_res.get("iterations"),
+        solver="fbs",
+        result_type="fbs",
+        case=case_copy,
+    )
+
+    return result
+
+
+def _apply_gen_setpoints_to_case(
+    case: Case, p_gens: Optional[pd.DataFrame], q_gens: Optional[pd.DataFrame]
+) -> None:
+    """Apply OPF p/q setpoints to `case.gen_data` (vectorized updates)."""
+    gen_indexed = case.gen_data.set_index("id")
+
+    # p_gens
+    if p_gens is not None:
+        if "t" in p_gens.columns:
+            p_gens = p_gens[p_gens["t"] == p_gens["t"].min()]
+        p_col_map = {"a": "pa", "b": "pb", "c": "pc"}
+        p_phases = [c for c in ["a", "b", "c"] if c in p_gens.columns]
+        if p_phases:
+            p_update = (
+                p_gens[["id"] + p_phases].rename(columns=p_col_map).set_index("id")
+            )
+            gen_indexed.update(p_update)
+
+    # q_gens
+    if q_gens is not None:
+        if "t" in q_gens.columns:
+            q_gens = q_gens[q_gens["t"] == q_gens["t"].min()]
+        q_col_map = {"a": "qa", "b": "qb", "c": "qc"}
+        q_phases = [c for c in ["a", "b", "c"] if c in q_gens.columns]
+        if q_phases:
+            q_update = (
+                q_gens[["id"] + q_phases].rename(columns=q_col_map).set_index("id")
+            )
+            gen_indexed.update(q_update)
+
+    case.gen_data = gen_indexed.reset_index()
+
+
 if __name__ == "__main__":
     from pathlib import Path
-    from distopf.importer import create_case
+    from distopf.api import create_case
     from distopf import CASES_DIR
     from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP
     from distopf.matrix_models.multiperiod.solvers import pf, cvxpy_solve

@@ -1,8 +1,13 @@
 """Pyomo backend for NLP-capable OPF (IPOPT solver)."""
 
-from typing import Any, Optional, Tuple
-import pandas as pd
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Optional, Union
 from distopf.backends.base import Backend
+
+if TYPE_CHECKING:
+    import pandas as pd
+    from distopf.results import PowerFlowResult
 
 
 class PyomoBackend(Backend):
@@ -11,25 +16,39 @@ class PyomoBackend(Backend):
     def solve(
         self,
         objective: Optional[Any] = None,
-        control_variable: Optional[str] = None,
         control_regulators: bool = False,
         control_capacitors: bool = False,
         raw_result: bool = False,
-        **kwargs,
-    ) -> Tuple[
-        Optional[pd.DataFrame],
-        Optional[pd.DataFrame],
-        Optional[pd.DataFrame],
-        Optional[pd.DataFrame],
-    ]:
-        """Run OPF using Pyomo/IPOPT backend (NLP-capable)."""
+        **kwargs: Any,
+    ) -> Union[PowerFlowResult, Any]:
+        """Run OPF using Pyomo/IPOPT backend (NLP-capable).
+
+        Parameters
+        ----------
+        objective : str, callable, or None
+            Optimization objective function
+        control_regulators : bool
+            Not supported in pyomo backend (ignored with warning)
+        control_capacitors : bool
+            Not supported in pyomo backend (ignored with warning)
+        raw_result : bool
+            If True, return raw Pyomo OpfResult object instead of PowerFlowResult
+        **kwargs
+            Additional solver options (note: solver is always IPOPT)
+
+        Returns
+        -------
+        PowerFlowResult or raw result
+            If raw_result=False: PowerFlowResult with all results
+            If raw_result=True: Pyomo OpfResult object with all variable results
+        """
         from distopf.pyomo_models import (
             create_lindist_model,
             add_standard_constraints,
             solve,
         )
-        from distopf.importer import Case
-        import pyomo.environ as pyo
+        from distopf.results import PowerFlowResult
+        import pyomo.environ as pyo  # type: ignore[import-untyped]
 
         # Warn about unsupported parameters
         if control_regulators:
@@ -39,31 +58,8 @@ class PyomoBackend(Backend):
         if "solver" in kwargs:
             self._warn_unsupported("pyomo", "solver kwarg (uses IPOPT)")
 
-        # Determine control variable
-        control_variable = self._get_control_variable(control_variable)
-
-        # Update gen_data control variable if specified
-        gen_data = self.case.gen_data
-        if control_variable is not None and gen_data is not None:
-            gen_data = gen_data.copy()
-            gen_data.control_variable = control_variable
-
-        # Create case copy with updated gen_data
-        case_copy = Case(
-            self.case.branch_data,
-            self.case.bus_data,
-            gen_data,
-            self.case.cap_data,
-            self.case.reg_data,
-            self.case.bat_data,
-            self.case.schedules,
-            start_step=self.case.start_step,
-            n_steps=self.case.n_steps,
-            delta_t=self.case.delta_t,
-        )
-
-        # Create Pyomo model
-        self.model = create_lindist_model(case_copy)
+        # Create Pyomo model (uses gen_data.control_variable per-row)
+        self.model = create_lindist_model(self.case)
         add_standard_constraints(self.model)
 
         # Set objective
@@ -73,18 +69,41 @@ class PyomoBackend(Backend):
         # Solve
         self.result = solve(self.model)
 
-        # Extract results (result is OpfResult from solve())
-        voltages_df = self.get_voltages()
-        power_flows_df = self.get_power_flows()
-        p_gens = self.get_p_gens()
-        q_gens = self.get_q_gens()
-
         if raw_result:
             return self.result
 
-        return voltages_df, power_flows_df, p_gens, q_gens
+        # Extract results (result is OpfResult from solve())
+        voltages_df = self.get_voltages()
+        p_flows_df = self.get_p_flows()
+        q_flows_df = self.get_q_flows()
+        p_gens = self.get_p_gens()
+        q_gens = self.get_q_gens()
 
-    def _resolve_objective(self, objective):
+        # Get metadata from pyomo result
+        objective_value = None
+        solve_time = None
+        if hasattr(self.result, "objective_value"):
+            objective_value = self.result.objective_value
+        if hasattr(self.result, "solve_time"):
+            solve_time = self.result.solve_time
+
+        return PowerFlowResult(
+            voltages=voltages_df,
+            p_flows=p_flows_df,
+            q_flows=q_flows_df,
+            p_gens=p_gens,
+            q_gens=q_gens,
+            objective_value=objective_value,
+            converged=True,
+            solver="ipopt",
+            solve_time=solve_time,
+            result_type="opf",
+            raw_result=self.result,
+            model=self.model,
+            case=self.case,
+        )
+
+    def _resolve_objective(self, objective: Any) -> Any:
         """Resolve objective string to Pyomo objective function."""
         from distopf.pyomo_models.objectives import loss_objective_rule
 
@@ -125,8 +144,19 @@ class PyomoBackend(Backend):
         return self.result.voltages
 
     def get_power_flows(self) -> pd.DataFrame:
-        """Extract branch power flow results from solved model."""
+        """Extract branch power flow results (P flows).
+
+        Note: Pyomo backend returns active power flows, not complex apparent power.
+        """
         return self.result.p_flow
+
+    def get_p_flows(self) -> pd.DataFrame:
+        """Extract active power flow results from solved model."""
+        return self.result.p_flow
+
+    def get_q_flows(self) -> pd.DataFrame:
+        """Extract reactive power flow results from solved model."""
+        return self.result.q_flow
 
     def get_p_gens(self) -> pd.DataFrame:
         """Extract active power generation results from solved model."""
@@ -135,3 +165,20 @@ class PyomoBackend(Backend):
     def get_q_gens(self) -> pd.DataFrame:
         """Extract reactive power generation results from solved model."""
         return self.result.q_gen
+
+    def get_all_results(self) -> dict[str, pd.DataFrame]:
+        """Get all variable results from the solved model.
+
+        The OpfResult object dynamically extracts all Pyomo variables
+        from the model. This method returns them as a dictionary.
+
+        Returns
+        -------
+        dict[str, pd.DataFrame]
+            Dictionary mapping variable names to their result DataFrames
+        """
+        return {
+            attr: getattr(self.result, attr)
+            for attr in dir(self.result)
+            if isinstance(getattr(self.result, attr), pd.DataFrame)
+        }

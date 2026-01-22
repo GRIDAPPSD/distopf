@@ -1,7 +1,7 @@
 from typing import Optional, override
 import pandas as pd
 import distopf as opf
-from distopf.importer import Case
+from distopf.api import Case
 from distopf.matrix_models.multiperiod.base_mp import LinDistBaseMP
 
 

@@ -1,5 +1,5 @@
 from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.importer import Case
+from distopf.api import Case
 from distopf.pyomo_models import constraints
 
 class LinDistPyoMPL():

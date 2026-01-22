@@ -4,7 +4,7 @@ from distopf.pyomo_models.objectives import loss_objective
 from distopf.pyomo_models.solvers import solve
 from distopf.pyomo_models.lindist_loads import LinDistPyoMPL
 import distopf.matrix_models.multiperiod as mpopf
-from distopf.importer import create_case
+from distopf.api import create_case
 from distopf import CASES_DIR
 
 case = create_case(

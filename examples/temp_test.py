@@ -3,8 +3,8 @@ import distopf as opf
 import pyomo.environ as pyo
 from distopf.pyomo_models.lindist import create_lindist_model
 from distopf.pyomo_models import constraints
-from distopf.pyomo_models.results import OpfResult
-from distopf.importer import create_case
+from distopf.pyomo_models.results import PyoResult
+from distopf.api import create_case
 from pyomo.core.expr.calculus.derivatives import differentiate
 
 
@@ -38,20 +38,23 @@ def add_loss_objective(model):
         ),
         sense=pyo.minimize,
     )
+
+
 def add_load_objective(model):
     model.objective = pyo.Objective(
-        rule=pyo.quicksum(model.p_flow[model.to_bus_map[j], p, t]
+        rule=pyo.quicksum(
+            model.p_flow[model.to_bus_map[j], p, t]
             for j, p in model.swing_phase_set
             for t in model.time_set
             for i in model.to_bus_map[1]
         ),
         sense=pyo.minimize,
     )
+
+
 def add_no_objective(model):
-    model.objective = pyo.Objective(
-        rule=0,
-        sense=pyo.minimize
-    )
+    model.objective = pyo.Objective(rule=0, sense=pyo.minimize)
+
 
 case = create_case(
     data_path=opf.CASES_DIR / "csv" / "ieee123_30der", start_step=0, n_steps=24
@@ -120,16 +123,16 @@ results = ipopt.solve(model, tee=True)
 add_load_objective(model)
 model.ipopt_zL_in.update(model.ipopt_zL_out)
 model.ipopt_zU_in.update(model.ipopt_zU_out)
-ipopt.options['warm_start_init_point'] = 'yes'
-ipopt.options['warm_start_bound_push'] = 1e-6
-ipopt.options['warm_start_mult_bound_push'] = 1e-6
-ipopt.options['mu_init'] = 1e-6
+ipopt.options["warm_start_init_point"] = "yes"
+ipopt.options["warm_start_bound_push"] = 1e-6
+ipopt.options["warm_start_mult_bound_push"] = 1e-6
+ipopt.options["mu_init"] = 1e-6
 
 ipopt.solve(model, tee=True)
 
 
 # Extract result dataframes from model
-sol = OpfResult(model)
+sol = PyoResult(model)
 
 
 _gradient = {}

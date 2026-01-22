@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from distopf.pyomo_models.objectives import loss_objective_rule
 from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.importer import create_case
+from distopf.api import create_case
 from distopf.pyomo_models.nl_branchflow_prebuilt import NLBranchFlow
 from distopf.pyomo_models.lindist_loads import LinDistPyoMPL
 from distopf.pyomo_models.results import (
@@ -76,8 +76,8 @@ def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
 
 # case = create_case(opf.CASES_DIR / "csv/ieee123_alternate", start_step=12)
 # case = create_case(opf.CASES_DIR / "cim/IEEE13.xml", start_step=12)
-# case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
-case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
+case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
+# case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
 case = create_case(case_path, start_step=12)
 # case = create_case(opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS", start_step=12)
 case.gen_data.control_variable = ""

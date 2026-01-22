@@ -18,7 +18,7 @@ from distopf.utils import (
     handle_schedules_input,
     get,
 )
-from distopf.importer import Case
+from distopf.api import Case
 
 
 class BaseModelMP:

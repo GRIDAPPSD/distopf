@@ -11,8 +11,12 @@ This package provides tools for optimal power flow analysis including:
 Quick Start:
     >>> import distopf as opf
     >>> case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-    >>> v, pf = case.run_pf()  # Power flow
-    >>> v, pf, pg, qg = case.run_opf("loss_min", control_variable="Q")  # OPF
+    >>> # Preferred: get a unified result object
+    >>> result = case.run_pf()
+    >>> print(result.voltages.head())
+    >>> # OPF also returns a PowerFlowResult
+    >>> result = case.run_opf("loss_min", control_variable="Q")  # OPF
+    >>> print(result.summary())
     
 For Pyomo (NLP) workflows:
     >>> model = case.to_pyomo_model()
@@ -25,7 +29,9 @@ For Pyomo (NLP) workflows:
 # Lightweight imports (always loaded) - these are fast
 # =============================================================================
 from distopf.cases import CASES_DIR
-from distopf.importer import Case, create_case
+from distopf.api import Case, create_case
+from distopf.results import PowerFlowResult
+from distopf.fbs import run_fbs_with_opf_setpoints
 
 # =============================================================================
 # Matrix models and solvers - loaded eagerly as they're commonly used
@@ -122,6 +128,9 @@ __all__ = [
     # Data containers
     "Case",
     "create_case",
+    # Result containers
+    "PowerFlowResult",
+    "run_fbs_with_opf_setpoints",
     # Power flow solver
     "fbs_solve",
     "FBS",
