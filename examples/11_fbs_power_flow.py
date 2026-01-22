@@ -34,7 +34,7 @@ print("\n--- Running FBS via Case.run_fbs() ---")
 result = case.run_fbs(max_iterations=100, tolerance=1e-6, verbose=False)
 
 # PowerFlowResult provides direct attribute access
-print(f"\n--- Result Summary ---")
+print("\n--- Result Summary ---")
 print(result.summary())
 
 # Access results directly from PowerFlowResult

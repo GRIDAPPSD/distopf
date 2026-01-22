@@ -53,22 +53,16 @@ without reinstalling.
 ### Unconstrained Power Flow
 ```python
 import distopf as opf
-case = opf.DistOPFCase(data_path="ieee123")
-case.run_pf()  # run an unconstrained power flow
-case.plot_network().show(renderer="browser")
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
+result = case.run_pf()
+result.plot_network().show(renderer="browser")
 ```
 ### DER Curtailment Minimization
 ```python
 import distopf as opf
-case = opf.DistOPFCase(
-    data_path="ieee123_30der",  
-    control_variable="P",  # Control DER active power injection
-    objective_function="curtail_min",  # DER Curtailment Minimization
-    v_max=1.05, v_min=0.95, 
-    gen_mult=10  # multiply generator output by 10
-)
-case.run()
-case.plot_network().show(renderer="browser")
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
+result = case.run_opf(objective="curtail_min", control_variable="P", v_max=1.05, v_min=0.95, gen_mult=10)
+result.plot_network().show(renderer="browser")
 ```
 ## Using a custom model.
 Create CSVs formatted as shown below and store them in a single folder. The csv names must match exactly as shown. 
@@ -83,7 +77,7 @@ Column order is not important.
 ```
 ```python
 import distopf as opf
-case = opf.DistOPFCase(
+case = opf.create_case(
     data_path="path/to/your_model_directory",
 )
 ```
@@ -97,7 +91,7 @@ bus_data = pd.read_csv("path/to/your_model_directory/bus_data.csv", header=0)
 gen_data = pd.read_csv("path/to/your_model_directory/gen_data.csv", header=0)
 cap_data = pd.read_csv("path/to/your_model_directory/cap_data.csv", header=0)
 reg_data = pd.read_csv("path/to/your_model_directory/reg_data.csv", header=0)
-case = opf.DistOPFCase(
+case = opf.Case(
     branch_data=branch_data,
     bus_data=bus_data,
     gen_data=gen_data,
@@ -160,9 +154,9 @@ case = opf.DistOPFCase(
 - name: regulator name 
 - tap_a, tap_b, tap_c: tap position (p.u.) -16 to +16; 0 is no tap change
 
-## DistOPFCase Options
+## Case Options
 ```
-    Use this class to create a distOPF case, run it, and save and plot results.
+    Use `Case` or `create_case()` to create and run a case. Call `run_pf()` or `run_opf()` to obtain a `PowerFlowResult`.
     Parameters
     ----------
     config: str or dict
@@ -233,7 +227,7 @@ You may also run using an OpenDSS model file as input.
 
 ```python
 import distopf as opf
-case = opf.DistOPFCase(
+case = opf.create_case(
     data_path="path/to/your_model_directory/model.dss",
 )
 ```
