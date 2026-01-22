@@ -4,9 +4,14 @@ from math import sqrt
 from distopf.pyomo_models.protocol import LindistModelProtocol
 
 
-class OpfResult:
-    def __init__(self, model: pyo.ConcreteModel | LindistModelProtocol):
+class PyoResult:
+    def __init__(
+        self,
+        model: pyo.ConcreteModel | LindistModelProtocol,
+        objective_value: float | None = None,
+    ):
         self.voltages = get_voltages(model.v2)
+        self.objective_value = objective_value
         vars = [
             att
             for att in model.__dict__.keys()

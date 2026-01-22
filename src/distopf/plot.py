@@ -9,7 +9,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from distopf.matrix_models.base import LinDistBase
-from distopf.importer import Case
+from distopf.api import Case
+
 
 def _choose_t(df, t=None):
     df = df.copy()

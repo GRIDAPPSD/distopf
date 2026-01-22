@@ -1,7 +1,7 @@
 import distopf as opf
 import pyomo.environ as pyo
 from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.importer import create_case
+from distopf.api import create_case
 from distopf.pyomo_models.constraints import (
     add_capacitor_constraints,
     add_circular_generator_constraints_pq_control,

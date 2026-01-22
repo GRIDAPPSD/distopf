@@ -1,3 +1,18 @@
+"""
+Modifying Generators and Running OPF Example (Marimo App)
+
+This example demonstrates how to modify generators using the new Case API.
+It shows loading a case with existing generators, modifying their properties,
+and running optimal power flow.
+
+Note: The old DistOPFCase had add_generator() and add_capacitor() methods
+that are not yet available in the new Case API. For cases without generators,
+users should either:
+1. Create generator data CSV files for their case
+2. Use DistOPFCase (deprecated but still available)
+3. Directly manipulate the gen_data DataFrame (requires understanding internal format)
+"""
+
 import marimo
 
 __generated_with = "0.15.2"
@@ -6,31 +21,58 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    from distopf import DistOPFCase
-    return (DistOPFCase,)
+    from distopf import create_case, CASES_DIR
+    import pandas as pd
+
+    return (create_case, pd, CASES_DIR)
 
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""Run a power flow on the IEEE 123 bus system with no control variables.""")
+    mo.md(r"""## Run OPF on the IEEE 123 bus system with 30 DERs - base case""")
     return
 
 
 @app.cell
-def _(DistOPFCase):
-    _case = DistOPFCase(data_path="ieee123", objective_function="loss_min",v_max=1.1, v_min=0.95)
-    _case.run()
+def _(create_case, CASES_DIR):
+    # Load case with existing generators and run OPF with loss minimization
+    _case = create_case(CASES_DIR / "csv" / "ieee123_30der")
+    _case.modify(v_min=0.95, v_max=1.1)
+    _case.run_opf("loss_min", control_variable="Q")
     _case.plot_network()
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+    ## Modifying generator properties using DataFrame manipulation
+    
+    The Case object exposes gen_data as a pandas DataFrame that can be modified.
+    Common modifications include:
+    - Changing control_variable ("", "P", "Q", "PQ")
+    - Scaling generator power with gen_mult via case.modify()
+    - Adjusting individual generator power limits
+    """
+    )
+    return
+
+
 @app.cell
-def _(DistOPFCase):
-    case = DistOPFCase(data_path="ieee123", objective_function="loss_min",v_max=1.1, v_min=0.95)
-    case.add_generator("66", phases="abc", p=0.1, q=0.0)
-    case.add_capacitor("65", phases="ac", q=0.05)
-    case.control_variable="P"
-    case.run()
+def _(create_case, CASES_DIR):
+    # Load case with existing DERs
+    case = create_case(CASES_DIR / "csv" / "ieee123_30der")
+    case.modify(v_min=0.95, v_max=1.1)
+
+    # Modify generator settings - allow both P and Q control
+    case.gen_data["control_variable"] = "PQ"
+
+    # Scale up generator sizes by 10x
+    case.modify(gen_mult=10)
+
+    # Run OPF with curtailment minimization (keeps voltages in bounds)
+    case.run_opf("curtail_min", control_variable="PQ")
     case.plot_network(show_reactive_power=False)
     return (case,)
 
@@ -43,12 +85,14 @@ def _(case):
 
 @app.cell
 def _(case):
-    case.plot_decision_variables()
+    # Show generator outputs after optimization
+    case.plot_gens()
     return
 
 
 @app.cell
 def _(case):
+    # Show same voltage plot (for comparison)
     case.plot_voltages()
     return
 
@@ -56,6 +100,7 @@ def _(case):
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 

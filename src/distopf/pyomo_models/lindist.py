@@ -2,7 +2,7 @@ from enum import IntEnum
 import pyomo.environ as pyo  # type: ignore
 from typing import Tuple, List
 import pandas as pd
-from distopf.importer import Case
+from distopf.api import Case
 from distopf.pyomo_models.protocol import LindistModelProtocol
 
 

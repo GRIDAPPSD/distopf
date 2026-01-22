@@ -2,6 +2,7 @@
 This module contains high-level helper functions for creating and running provided models, solvers, and objectives.
 """
 
+import warnings
 from typing import Optional
 from collections.abc import Callable
 from pathlib import Path
@@ -10,10 +11,9 @@ import pandas as pd
 import numpy as np
 
 from distopf.matrix_models.base import LinDistBase
-from distopf import (
-    DSSToCSVConverter,
-    CASES_DIR,
-    LinDistModelCapMI,
+from distopf.cases import CASES_DIR
+from distopf.matrix_models.lindist_capacitor_mi import LinDistModelCapMI
+from distopf.matrix_models.lindist_capacitor_regulator_mi import (
     LinDistModelCapacitorRegulatorMI,
 )
 from distopf.matrix_models.lindist_p_gen import LinDistModelPGen
@@ -41,6 +41,53 @@ from distopf.utils import (
     handle_cap_input,
     handle_reg_input,
 )
+
+
+# Objective function aliases for user convenience
+OBJECTIVE_ALIASES: dict[str, str] = {
+    # Loss minimization
+    "loss": "loss_min",
+    "minimize_loss": "loss_min",
+    "min_loss": "loss_min",
+    # Curtailment minimization
+    "curtail": "curtail_min",
+    "minimize_curtail": "curtail_min",
+    "min_curtail": "curtail_min",
+    "curtailment": "curtail_min",
+    # Generation maximization
+    "gen": "gen_max",
+    "maximize_gen": "gen_max",
+    "max_gen": "gen_max",
+    # Load minimization
+    "load": "load_min",
+    "minimize_load": "load_min",
+    "min_load": "load_min",
+    # Target tracking (keep full names, but add alternatives)
+    "target_p": "target_p_total",
+    "target_q": "target_q_total",
+    "p_target": "target_p_total",
+    "q_target": "target_q_total",
+}
+
+
+def resolve_objective_alias(objective: str | None) -> str | None:
+    """
+    Resolve objective function alias to canonical name.
+
+    Parameters
+    ----------
+    objective : str or None
+        User-provided objective name (may be an alias)
+
+    Returns
+    -------
+    str or None
+        Canonical objective name, or None if input was None
+    """
+    if objective is None:
+        return None
+    objective_lower = objective.lower().strip()
+    return OBJECTIVE_ALIASES.get(objective_lower, objective_lower)
 
 
 def create_model(
@@ -117,6 +164,9 @@ def auto_solve(model: LinDistBase, objective_function=None, **kwargs):
         raise TypeError(
             "objective_function must be a function handle, array, or string"
         )
+    # Resolve aliases before looking up in maps
+    if isinstance(objective_function, str):
+        objective_function = resolve_objective_alias(objective_function)
     objective_function_map_gradient: dict[str, Callable] = {
         "gen_max": gradient_curtail,
         "load_min": gradient_load_min,
@@ -185,6 +235,9 @@ def _get_data_from_path(data_path: Path) -> dict:
         if reg_path.exists():
             reg_data = pd.read_csv(data_path / "reg_data.csv", header=0)
     if data_path.suffix.lower() == ".dss":
+        # Lazy import to avoid loading opendssdirect at module load time
+        from distopf.dss_importer.dss_to_csv_converter import DSSToCSVConverter
+
         dss_parser = DSSToCSVConverter(data_path)
         branch_data = dss_parser.branch_data
         bus_data = dss_parser.bus_data
@@ -209,6 +262,20 @@ def _get_data_from_path(data_path: Path) -> dict:
 class DistOPFCase(object):
     """
     Use this class to create a distOPF case, run it, and save and plot results.
+
+    .. deprecated:: 2.0.0
+        Use :class:`distopf.Case` instead. `DistOPFCase` will be removed in a
+        future version. The `Case` class provides the same functionality with
+        a cleaner API:
+
+        >>> from distopf import Case, create_case, CASES_DIR
+        >>> case = create_case(CASES_DIR / "csv" / "ieee13")
+        >>> result = case.run_pf()
+        >>> print(result.voltages.head())
+        >>> # OPF returns a PowerFlowResult too:
+        >>> result = case.run_opf("loss_min")
+        >>> print(result.summary())
+
     Parameters
     ----------
     config: str or dict
@@ -275,6 +342,15 @@ class DistOPFCase(object):
     """
 
     def __init__(self, **kwargs):
+        warnings.warn(
+            "DistOPFCase is deprecated and will be removed in a future version. "
+            "Use distopf.Case with create_case() instead:\n"
+            "  from distopf import Case, create_case, CASES_DIR\n"
+            "  case = create_case(CASES_DIR / 'csv' / 'ieee13')\n"
+            "  v, pf = case.run_pf()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         config = kwargs.get("config")
         if config is not None:
             if len(kwargs) != 1:
@@ -416,7 +492,9 @@ class DistOPFCase(object):
             return result
 
         self.voltages_df = self.model.get_voltages(result.x)
-        self.power_flows_df = self.model.get_apparent_power_flows(result.x)
+        # Get separate real/reactive flows (p/q) instead of apparent power
+        self.p_flows_df = self.model.get_p_flows(result.x)
+        self.q_flows_df = self.model.get_q_flows(result.x)
         self.p_gens = self.model.get_p_gens(result.x)
         self.q_gens = self.model.get_q_gens(result.x)
 
@@ -426,7 +504,7 @@ class DistOPFCase(object):
             self.save_result_data()
         if self.save_plots or self.show_plots:
             self.make_plots()
-        return self.voltages_df, self.power_flows_df
+        return self.voltages_df, self.p_flows_df, self.q_flows_df
 
     def run(
         self,
@@ -462,7 +540,9 @@ class DistOPFCase(object):
         result = auto_solve(self.model, self.objective_function, **kwargs)
         self.results = result
         self.voltages_df = self.model.get_voltages(result.x)
-        self.power_flows_df = self.model.get_apparent_power_flows(result.x)
+        # Get separate real/reactive flows (p/q) instead of apparent power
+        self.p_flows_df = self.model.get_p_flows(result.x)
+        self.q_flows_df = self.model.get_q_flows(result.x)
         self.p_gens = self.model.get_p_gens(result.x)
         self.q_gens = self.model.get_q_gens(result.x)
 
@@ -475,7 +555,13 @@ class DistOPFCase(object):
             self.save_result_data()
         if self.save_plots or self.show_plots:
             self.make_plots()
-        return self.voltages_df, self.power_flows_df, self.p_gens, self.q_gens
+        return (
+            self.voltages_df,
+            self.p_flows_df,
+            self.q_flows_df,
+            self.p_gens,
+            self.q_gens,
+        )
 
     def save_result_data(self):
         if not self.output_dir.exists():
@@ -483,9 +569,9 @@ class DistOPFCase(object):
         self.voltages_df.to_csv(
             Path(self.output_dir) / "node_voltages.csv", index=False
         )
-        self.power_flows_df.to_csv(
-            Path(self.output_dir) / "power_flows.csv", index=False
-        )
+        # Save separate active/reactive flow files
+        self.p_flows_df.to_csv(Path(self.output_dir) / "p_flows.csv", index=False)
+        self.q_flows_df.to_csv(Path(self.output_dir) / "q_flows.csv", index=False)
         self.p_gens.to_csv(Path(self.output_dir) / "p_gens.csv", index=False)
         self.q_gens.to_csv(Path(self.output_dir) / "q_gens.csv", index=False)
 
@@ -525,7 +611,12 @@ class DistOPFCase(object):
         fig1 = plot_network(
             self.model, self.voltages_df, self.power_flows_df, show_reactive_power=False
         )
-        fig2 = plot_power_flows(self.power_flows_df)
+        # Construct complex apparent power DataFrame for plotting from p/q flows
+        s = self.p_flows_df.copy()
+        s["a"] = self.p_flows_df.a + 1j * self.q_flows_df.a
+        s["b"] = self.p_flows_df.b + 1j * self.q_flows_df.b
+        s["c"] = self.p_flows_df.c + 1j * self.q_flows_df.c
+        fig2 = plot_power_flows(s)
         fig3 = plot_voltages(self.voltages_df)
         fig4 = plot_gens(self.p_gens, self.q_gens)
         fig1.show()

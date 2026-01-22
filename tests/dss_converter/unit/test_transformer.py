@@ -5,7 +5,6 @@ import tempfile
 from pathlib import Path
 import logging
 from distopf.dss_importer.dss_to_csv_converter import DSSToCSVConverter
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -17,8 +16,8 @@ kva_xfmr = 3000
 kva_xfmr_phase = kva_xfmr / 3
 kw_load = 600
 kvll = 4.16
-kv_phase = kvll / (3 ** 0.5)
-xhl = 3/100  # percent reactance (p.u./100)
+kv_phase = kvll / (3**0.5)
+xhl_percent = 3  # percent reactance (3%)
 
 SIMPLE_TRANSFORMER_DSS = f"""
 clear
@@ -28,7 +27,7 @@ new circuit.transformer_test basekV=12.47
 new transformer.tx1 phases=3 windings=2
 ~ wdg=1 bus=sourcebus conn=wye kv=12.47 kva={kva_xfmr}
 ~ wdg=2 bus=secondary_node.1.2.3 conn=wye kv={kvll} kva={kva_xfmr}
-~ xhl={xhl}
+~ xhl={xhl_percent}
 
 new load.load1 phases=3 bus1=secondary_node.1.2.3 conn=wye kV={kvll} kW={kw_load} pf=1 model=1
 
@@ -37,20 +36,22 @@ calcvoltagebases
 set loadmult=1
 solve
 """
-z_base_xfmr = ((kv_phase*1000) ** 2) / (kva_xfmr_phase*1000)  # in ohms
-z_base_sys = ((kv_phase*1000) ** 2) / (kva_sys_phase*1000)  # in ohms
-x_pu_xfmr = xhl
+z_base_xfmr = ((kv_phase * 1000) ** 2) / (kva_xfmr_phase * 1000)  # in ohms
+z_base_sys = ((kv_phase * 1000) ** 2) / (kva_sys_phase * 1000)  # in ohms
+x_pu_xfmr = xhl_percent / 100  # convert percent to per-unit
 x_ohm_xfmr = x_pu_xfmr * z_base_xfmr
 x_pu_sys = x_ohm_xfmr / z_base_sys
 print("Test expected values:")
 print(f"  kv_phase = {kv_phase}")
 print(f"  z_base_xfmr = {z_base_xfmr}")
 print(f"  z_base_sys = {z_base_sys}")
-print(f"  xhl (percent) = {xhl * 100}%")
+print(f"  xhl (percent) = {xhl_percent}%")
 print(f"  x_pu_xfmr = {x_pu_xfmr}")
 print(f"  x_ohm_xfmr = {x_ohm_xfmr}")
 print(f"  x_pu_sys = {x_pu_sys}")
 print()
+
+
 class TestTransformerFunctionality:
     """Test transformer-specific functionality using a simple DSS script."""
 
@@ -84,6 +85,7 @@ class TestTransformerFunctionality:
         logger.info("\n%s", transformer_converter.branch_data.head())
         assert transformer_converter.branch_data.loc[0, "xaa"] == x_pu_sys
 
+
 if __name__ == "__main__":
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".dss", delete=False, dir=tempfile.gettempdir()
@@ -93,5 +95,7 @@ if __name__ == "__main__":
     converter = DSSToCSVConverter(temp_path, s_base=1e6)
     print("\n", converter.branch_data.head())
     print(f"Expected transformer reactance (pu): {x_pu_sys}")
-    print(f"Calculated transformer reactance (pu): {converter.branch_data.loc[0, 'xaa']}")
+    print(
+        f"Calculated transformer reactance (pu): {converter.branch_data.loc[0, 'xaa']}"
+    )
     temp_path.unlink(missing_ok=True)

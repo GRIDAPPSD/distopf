@@ -1,6 +1,6 @@
 from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
-from distopf.importer import Case
-from distopf.pyomo_models import constraints_nlp, constraints
+from distopf.api import Case
+from distopf.pyomo_models import constraints_nlp
 
 
 class NLBranchFlow:

@@ -3,7 +3,7 @@ import pandas as pd
 import pyomo.environ as pyo
 import distopf as opf
 from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.importer import Case, create_case
+from distopf.api import Case, create_case
 
 
 @pytest.fixture

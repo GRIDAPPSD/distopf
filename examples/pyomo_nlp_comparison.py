@@ -1,38 +1,29 @@
-from pyomo.solvers.tests.solvers import initialize
 import distopf as opf
 import pyomo.environ as pyo
 import pandas as pd
 import numpy as np
 from distopf.pyomo_models.objectives import loss_objective_rule
-from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.importer import create_case
+from distopf.api import create_case
 from distopf.pyomo_models.nl_branchflow_prebuilt import NLBranchFlow
 from distopf.pyomo_models.lindist_loads import LinDistPyoMPL
 from distopf.pyomo_models.results import (
     get_voltages,
     get_values,
 )
-from distopf import (
-    plot_voltages,
-    plot_gens,
-    # plot_network,
-    plot_polar,
-)
 from distopf.fbs import fbs_solve
 from math import pi
-import plotly.express as px
 
 
 def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
-    i_angles["ab"] =  i_angles.a - i_angles.b
-    i_angles["bc"] =  i_angles.b - i_angles.c
-    i_angles["ca"] =  i_angles.c - i_angles.a
+    i_angles["ab"] = i_angles.a - i_angles.b
+    i_angles["bc"] = i_angles.b - i_angles.c
+    i_angles["ca"] = i_angles.c - i_angles.a
     i_angles["ba"] = -i_angles.ab
     i_angles["cb"] = -i_angles.bc
     i_angles["ac"] = -i_angles.ca
-    i_angles["aa"] =  i_angles.a - i_angles.a
-    i_angles["bb"] =  i_angles.b - i_angles.b
-    i_angles["cc"] =  i_angles.c - i_angles.c
+    i_angles["aa"] = i_angles.a - i_angles.a
+    i_angles["bb"] = i_angles.b - i_angles.b
+    i_angles["cc"] = i_angles.c - i_angles.c
     data = {
         (_id, phases): float(i_angles.loc[i_angles.id == _id, phases].tolist()[0])
         * pi
@@ -76,8 +67,8 @@ def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
 
 # case = create_case(opf.CASES_DIR / "csv/ieee123_alternate", start_step=12)
 # case = create_case(opf.CASES_DIR / "cim/IEEE13.xml", start_step=12)
-# case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
-case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
+case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
+# case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
 case = create_case(case_path, start_step=12)
 # case = create_case(opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS", start_step=12)
 case.gen_data.control_variable = ""

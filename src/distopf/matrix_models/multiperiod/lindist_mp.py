@@ -1,6 +1,6 @@
-from typing import Optional, override
+from typing import Optional
 import pandas as pd
-from distopf.importer import Case
+from distopf.api import Case
 from distopf.matrix_models.multiperiod.base_mp import LinDistBaseMP
 
 
@@ -45,7 +45,6 @@ class LinDistMP(LinDistBaseMP):
     May 2019, doi: 10.1109/TPWRS.2018.2890613.
     """
 
-    @override
     def __init__(
         self,
         branch_data: Optional[pd.DataFrame] = None,

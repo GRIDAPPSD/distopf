@@ -43,11 +43,11 @@ jobs:
         ruff check ./src --select=E9,F63,F7,F821,F822,F823  --statistics
         # exit-zero treats all errors as warnings.
         ruff check ./src --exit-zero --statistics
-    # # Uncomment testing when tests are ready
-    # - name: Test with pytest
-    #   run: |
-    #     pytest ./src/tesp_support/test
-    # # Uncomment type checking when code is ready
+
+    - name: Test with pytest
+      run: |
+        uv run pytest
+        
     # - name: Check types with mypy
     #   run: |
     #     mypy ./src/tesp_support/tesp_support/api

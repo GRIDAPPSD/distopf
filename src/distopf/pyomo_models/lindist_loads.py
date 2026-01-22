@@ -1,8 +1,9 @@
 from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.importer import Case
+from distopf.api import Case
 from distopf.pyomo_models import constraints
 
-class LinDistPyoMPL():
+
+class LinDistPyoMPL:
     def __init__(self, case: Case):
         model = create_lindist_model(case)
         constraints.add_p_flow_constraints(model)

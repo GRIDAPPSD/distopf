@@ -49,7 +49,7 @@ for _dir in dirs:
         loss_percent = s_loss / s_total * 100
         try:
             result = opf.lp_solve(model, np.zeros(model.n_x))
-        except:
+        except Exception:
             continue
         v_df = model.get_voltages(result.x)
         s_df = model.get_apparent_power_flows(result.x)

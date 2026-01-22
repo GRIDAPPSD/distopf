@@ -1,7 +1,7 @@
-from typing import Optional, override
+from typing import Optional
 import pandas as pd
 import distopf as opf
-from distopf.importer import Case
+from distopf.api import Case
 from distopf.matrix_models.multiperiod.base_mp import LinDistBaseMP
 
 
@@ -49,7 +49,6 @@ class LinDistMPL(LinDistBaseMP):
     May 2019, doi: 10.1109/TPWRS.2018.2890613.
     """
 
-    @override
     def __init__(
         self,
         branch_data: Optional[pd.DataFrame] = None,
@@ -81,7 +80,6 @@ class LinDistMPL(LinDistBaseMP):
         self.ql_map: dict[int, dict[str, pd.Series]] = {}
         self.build()
 
-    @override
     def initialize_variable_index_pointers(self):
         # ~~ initialize index pointers ~~
         self.x_maps = {}
@@ -129,7 +127,6 @@ class LinDistMPL(LinDistBaseMP):
                 self.n_x, self.load_buses
             )
 
-    @override
     def additional_variable_idx(self, var, node_j, phase, t=0):
         """
         User added index function. Override this function to add custom variables. Return None if `var` is not found.

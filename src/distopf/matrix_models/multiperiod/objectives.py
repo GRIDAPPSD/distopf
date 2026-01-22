@@ -122,8 +122,8 @@ def cp_battery_efficiency(
         start_step = model.start_step
     else:
         start_step = 0
-    vec1_list:list[float] = []
-    index_list:list[int] = []
+    vec1_list: list[float] = []
+    index_list: list[int] = []
     for t in range(start_step, start_step + model.n_steps):
         for a in "abc":
             if not model.phase_exists(a):
