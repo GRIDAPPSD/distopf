@@ -1,3 +1,4 @@
+import pytest
 import pyomo.environ as pyo
 from distopf.pyomo_models.objectives import loss_objective
 from distopf.pyomo_models.solvers import solve
@@ -15,7 +16,11 @@ case.schedules.PV = 1
 case.bat_data = case.bat_data.head(0)  # delete battery data
 m1 = LinDistPyoMPL(case=case)
 m1.model.objective = loss_objective
-results = pyo.SolverFactory("ipopt").solve(m1.model)
+solver = pyo.SolverFactory("ipopt")
+if not solver.available(exception_flag=False):
+    pytest.skip("Ipopt not available on this system")
+
+results = solver.solve(m1.model)
 r1 = solve(m1.model)
 
 m2 = mpopf.LinDistMPL(case=case)
