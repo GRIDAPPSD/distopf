@@ -1,4 +1,4 @@
-from typing import Optional, override
+from typing import Optional
 import pandas as pd
 import distopf as opf
 from distopf.api import Case
