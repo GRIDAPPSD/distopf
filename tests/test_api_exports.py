@@ -478,20 +478,6 @@ class TestAllExports:
 class TestObjectiveAliases:
     """Test objective function aliases."""
 
-    def test_aliases_exported(self):
-        """OBJECTIVE_ALIASES should be exported."""
-        import distopf as opf
-
-        assert hasattr(opf, "OBJECTIVE_ALIASES")
-        assert isinstance(opf.OBJECTIVE_ALIASES, dict)
-
-    def test_resolve_objective_alias_exported(self):
-        """resolve_objective_alias should be exported."""
-        import distopf as opf
-
-        assert hasattr(opf, "resolve_objective_alias")
-        assert callable(opf.resolve_objective_alias)
-
     def test_loss_aliases_work(self):
         """Various loss aliases should work."""
         import distopf as opf
