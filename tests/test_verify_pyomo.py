@@ -18,7 +18,7 @@ m1 = LinDistPyoMPL(case=case)
 m1.model.objective = loss_objective
 solver = pyo.SolverFactory("ipopt")
 if not solver.available(exception_flag=False):
-    pytest.skip("Ipopt not available on this system")
+    pytest.skip("Ipopt not available on this system", allow_module_level=True)
 
 results = solver.solve(m1.model)
 r1 = solve(m1.model)
