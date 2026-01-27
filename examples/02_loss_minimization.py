@@ -23,7 +23,6 @@ s_base = case.bus_data["s_base"].iloc[0]
 voltages_df = result.voltages
 # Extract numeric voltage data (phases a, b, c)
 voltages = voltages_df[["a", "b", "c"]]
-power_flows = result.power_flows
 p_gens_df = result.p_gens
 q_gens_df = result.q_gens
 # Extract numeric generator power data (phases a, b, c)

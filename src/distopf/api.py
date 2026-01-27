@@ -519,6 +519,32 @@ class Case:
 
         return create_lindist_model(self, **kwargs)
 
+    def plot_network(
+        self,
+        results=None,
+        v_min: float = 0.95,
+        v_max: float = 1.05,
+        show_phases: str = "abc",
+        show_reactive_power: bool = False,
+    ):
+        """Plot network visualization with or without results."""
+        from distopf.plot import plot_network
+
+        if results:
+            return results.plot_network(
+                v_min,
+                v_max,
+                show_phases,
+                show_reactive_power,
+            )
+        return plot_network(
+            self,
+            v_min=v_min,
+            v_max=v_max,
+            show_phases=show_phases,
+            show_reactive_power=show_reactive_power,
+        )
+
     # -------------------------------------------------------------------------
     # Case Modification Methods
     # -------------------------------------------------------------------------

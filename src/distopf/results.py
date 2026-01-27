@@ -94,25 +94,6 @@ class PowerFlowResult:
     model: Any = field(default=None, repr=False)
     case: Any = field(default=None, repr=False)
 
-    # Backward compatibility: power_flows (deprecated)
-    power_flows: Optional[pd.DataFrame] = field(default=None, repr=False)
-
-    def __post_init__(self):
-        """Post-initialization to handle backward compatibility."""
-        # If power_flows provided but p_flows/q_flows not, try to extract
-        if self.power_flows is not None and self.p_flows is None:
-            if hasattr(self.power_flows, "apply"):
-                # Complex-valued: extract real/imag
-                try:
-                    self.p_flows = self.power_flows.apply(
-                        lambda x: x.real if hasattr(x, "real") else x
-                    )
-                    self.q_flows = self.power_flows.apply(
-                        lambda x: x.imag if hasattr(x, "imag") else 0
-                    )
-                except Exception:
-                    pass
-
     # -------------------------------------------------------------------------
     # Convenience methods
     # -------------------------------------------------------------------------
@@ -252,7 +233,8 @@ class PowerFlowResult:
         return plot_network(
             self.model,
             v=self.voltages,
-            s=self.power_flows,
+            p_flow=self.p_flows,
+            q_flow=self.q_flows,
             p_gen=self.p_gens,
             q_gen=self.q_gens,
             v_min=v_min,
@@ -262,16 +244,4 @@ class PowerFlowResult:
         )
 
 
-# NOTE: The helper that applied OPF setpoints and the simple validation
-# function were moved to `distopf.fbs` as `run_fbs_with_opf_setpoints` to keep
-# solver-related utilities located with the FBS implementation.
-
-# If you need the functionality formerly provided by `validate_with_fbs`, import
-# `run_fbs_with_opf_setpoints` from `distopf.fbs`.
-
-
-# Alias for backward compatibility
-OpfResult = PowerFlowResult
-
-
-__all__ = ["PowerFlowResult", "OpfResult"]
+__all__ = ["PowerFlowResult"]

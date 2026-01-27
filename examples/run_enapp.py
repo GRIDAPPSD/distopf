@@ -9,7 +9,7 @@ from distopf.matrix_models.multiperiod.lindist_loads_mp import LinDistMPL
 from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP
 from distopf.matrix_models.multiperiod.objectives import cp_obj_cost_min
 from distopf.matrix_models.multiperiod.spatial_decomposition.enapp import solve_enapp
-from distopf.importer import create_case
+from distopf.api import create_case
 from distopf import CASES_DIR
 import plotly.express as px
 import cvxpy as cp
