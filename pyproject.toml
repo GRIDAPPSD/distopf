@@ -21,6 +21,7 @@ dependencies = [
     "pyomo>=6.9.4",
     "pandas>=2.3.3",
     "altdss[all]>=0.2.4",
+    "pyscipopt>=6.0.0",
 ]
 
 [build-system]
