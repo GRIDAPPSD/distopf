@@ -18,20 +18,6 @@ class BackendSelector:
         "pyomo": PyomoBackend,
     }
 
-    # Backend selection rules: (condition_function, backend_name)
-    # Rules are evaluated in order; first match wins
-    AUTO_SELECT_RULES = [
-        (lambda case: case.n_steps > 1, "multiperiod"),
-        (
-            lambda case: case.bat_data is not None and len(case.bat_data) > 0,
-            "multiperiod",
-        ),
-        (
-            lambda case: case.schedules is not None and len(case.schedules) > 0,
-            "multiperiod",
-        ),
-    ]
-
     SUPPORTED_BACKENDS = set(BACKEND_FACTORY.keys())
 
     def __init__(self, case):
@@ -39,11 +25,8 @@ class BackendSelector:
         self.case = case
         self.backend_override = None
 
-    def select(self) -> str:
+    def select(self, control_regulators=False, control_capacitors=False) -> str:
         """Auto-select the best backend based on case properties.
-
-        Uses AUTO_SELECT_RULES to determine backend. Can be overridden
-        by calling select(backend="explicit_backend").
 
         Returns
         -------
@@ -53,13 +36,9 @@ class BackendSelector:
         if self.backend_override:
             return self.backend_override
 
-        # Apply auto-selection rules
-        for rule_func, backend in self.AUTO_SELECT_RULES:
-            if rule_func(self.case):
-                return backend
-
-        # Default to single-period matrix model
-        return "matrix"
+        if control_regulators or control_capacitors:
+            return "matrix"
+        return "multiperiod"
 
     def validate_backend(self, backend: Optional[str]) -> str:
         """
@@ -93,7 +72,7 @@ class BackendSelector:
 
         return backend
 
-    def route_opf(
+    def solve(
         self,
         objective,
         control_variable=None,
@@ -129,7 +108,10 @@ class BackendSelector:
         """
         # Validate and select backend
         if backend is None:
-            backend = self.select()
+            backend = self.select(
+                control_capacitors=control_capacitors,
+                control_regulators=control_regulators,
+            )
         else:
             backend = self.validate_backend(backend)
 

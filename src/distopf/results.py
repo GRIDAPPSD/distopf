@@ -74,6 +74,17 @@ class PowerFlowResult:
     p_gens: Optional[pd.DataFrame] = None
     q_gens: Optional[pd.DataFrame] = None
 
+    # Battery results
+    p_bats: Optional[pd.DataFrame] = None
+    q_bats: Optional[pd.DataFrame] = None
+    p_discharge: Optional[pd.DataFrame] = None
+    p_charge: Optional[pd.DataFrame] = None
+    soc: Optional[pd.DataFrame] = None
+    
+    # Mixed integer variables
+    reg_taps: Optional[pd.DataFrame] = None
+    z_caps: Optional[pd.DataFrame] = None
+    u_caps: Optional[pd.DataFrame] = None
     # Current results (FBS-specific, but available from any solver if computed)
     currents: Optional[pd.DataFrame] = None
     current_angles: Optional[pd.DataFrame] = None

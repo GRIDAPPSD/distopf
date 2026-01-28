@@ -1,12 +1,13 @@
 import distopf as opf
-from distopf.matrix_models.lindist_regulator_mi import (
-    LinDistModelRegulatorMI,
+from distopf.matrix_models.lindist_capacitor_regulator_mi import (
+    LinDistModelCapacitorRegulatorMI,
 )
+
 
 
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 
-model = LinDistModelRegulatorMI(
+model = LinDistModelCapacitorRegulatorMI(
     branch_data=case.branch_data,
     bus_data=case.bus_data,
     gen_data=case.gen_data,
@@ -16,8 +17,12 @@ model = LinDistModelRegulatorMI(
 
 results = model.solve(opf.cp_obj_loss)
 taps = model.get_regulator_taps()
+v = model.get_voltages(results.x)
 print(taps)
 
+case.reg_data = taps
+fbs_results = opf.fbs_solve(case)
+opf.compare_voltages(v, fbs_results.voltages).show(renderer="browser")
 """
       fb   tb phases  tap_a  tap_b  tap_c  ratio_a  ratio_b  ratio_c
 1      1    2    abc    1.0   -5.0    8.0  1.00625  0.96875  1.05000

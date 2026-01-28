@@ -36,11 +36,6 @@ New Transformer.Reg3 phases=1 XHL=0.01 kVAs=[1666 1666]
 new regcontrol.Reg3  transformer=Reg3 winding=2  vreg=122  band=2  ptratio=20 ctprim=700  R=3   X=9 
 
 
-!TRANSFORMER DEFINITION 
-New Transformer.XFM1  Phases=3   Windings=2  XHL=2
-~ wdg=1 bus=633       conn=Wye kv=4.16    kva=500    %r=.55     XHT=1
-~ wdg=2 bus=634       conn=Wye kv=0.480    kva=500    %r=.55   XLT=1
-
 
 !LINE CODES
 redirect IEEELineCodes.dss
@@ -106,9 +101,9 @@ New linecode.mtx607 nphases=1 BaseFreq=60
 
 
 !LOAD DEFINITIONS 
-New Load.632a Bus1=632.1     Phases=1 Conn=Wye  Model=1 kV=0.277  kW=1223.587   kvar=597.350 
-New Load.632b Bus1=632.2     Phases=1 Conn=Wye  Model=1 kV=0.277  kW=981.595    kvar=347.037 
-New Load.632c Bus1=632.3     Phases=1 Conn=Wye  Model=1 kV=0.277  kW=1289.106   kvar=583.921 
+New Load.632a Bus1=632.1     Phases=1 Conn=Wye  Model=1 kV=2.40177  kW=1230.2   kvar=604.6 
+New Load.632b Bus1=632.2     Phases=1 Conn=Wye  Model=1 kV=2.40177  kW=975.9    kvar=346.5 
+New Load.632c Bus1=632.3     Phases=1 Conn=Wye  Model=1 kV=2.40177  kW=1300.0   kvar=589.2 
 
 !1.223587  0.981595  1.289106
 !0.597350  0.347037  0.583921

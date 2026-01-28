@@ -3,9 +3,7 @@ import pandas as pd
 from distopf.api import Case
 from typing import Optional, TYPE_CHECKING
 from distopf.utils import get
-
-if TYPE_CHECKING:
-    from distopf.results import PowerFlowResult
+from distopf.results import PowerFlowResult
 
 
 class FBS:
@@ -415,7 +413,7 @@ class FBS:
 
     def solve(
         self, max_iterations: int = 100, tolerance: float = 1e-6, verbose: bool = False
-    ) -> dict:
+    ) -> PowerFlowResult:
         """
         Solve the 3-phase unbalanced power flow using Forward Backward Sweep.
 
@@ -773,15 +771,55 @@ class FBS:
 
         return pd.DataFrame(angle_data).sort_values(["id", "fb"]).reset_index(drop=True)
 
-    def results(self):
-        return dict(
+    def results(self) -> PowerFlowResult:
+        
+        p_gens_df = None
+        q_gens_df = None
+        if self.gen_data is not None and len(self.gen_data) > 0:
+            gen_df = self.gen_data.copy()
+            # Map pa/pb/pc -> a/b/c and qa/qb/qc -> a/b/c with a time column t=0
+            p_cols = {"pa": "a", "pb": "b", "pc": "c"}
+            q_cols = {"qa": "a", "qb": "b", "qc": "c"}
+
+            # p_gens
+            p_present = [c for c in ["pa", "pb", "pc"] if c in gen_df.columns]
+            if p_present:
+                p_gens_df = gen_df[
+                    ["id"] + (["name"] if "name" in gen_df.columns else []) + p_present
+                ].rename(columns=p_cols)
+                # Insert time column at position 2 for single-period compatibility
+                p_gens_df.insert(2, "t", 0)
+
+            # q_gens
+            q_present = [c for c in ["qa", "qb", "qc"] if c in gen_df.columns]
+            if q_present:
+                q_gens_df = gen_df[
+                    ["id"] + (["name"] if "name" in gen_df.columns else []) + q_present
+                ].rename(columns=q_cols)
+                q_gens_df.insert(2, "t", 0)
+        results = PowerFlowResult(
             voltages=self.get_voltages(),
             voltage_angles=self.get_voltage_angles(),
             p_flows=self.get_p_flows(),
             q_flows=self.get_q_flows(),
             currents=self.get_currents(),
             current_angles=self.get_current_angles(),
+            p_gens=p_gens_df,
+            q_gens=q_gens_df,
+            converged=self.converged,
+            solver="fbs",
+            result_type="fbs",  # FBS - iteration returns 6 values
+            case=self.case,
         )
+        return results
+        # return dict(
+        #     voltages=self.get_voltages(),
+        #     voltage_angles=self.get_voltage_angles(),
+        #     p_flows=self.get_p_flows(),
+        #     q_flows=self.get_q_flows(),
+        #     currents=self.get_currents(),
+        #     current_angles=self.get_current_angles(),
+        # )
 
 
 def compare_with_reference(
@@ -1123,7 +1161,7 @@ def fbs_solve(
     max_iterations: int = 100,
     tolerance: float = 1e-6,
     verbose: bool = False,
-) -> dict:
+) -> PowerFlowResult:
     """
     Convenience function to solve power flow for a Case object.
 

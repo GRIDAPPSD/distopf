@@ -74,19 +74,17 @@ class MultiperiodBackend(Backend):
         if raw_result:
             return self.result
 
-        # Extract results
-        voltages_df = self.get_voltages()
-        p_flows_df = self.get_p_flows()
-        q_flows_df = self.get_q_flows()
-        p_gens = self.get_p_gens()
-        q_gens = self.get_q_gens()
-
         return PowerFlowResult(
-            voltages=voltages_df,
-            p_flows=p_flows_df,
-            q_flows=q_flows_df,
-            p_gens=p_gens,
-            q_gens=q_gens,
+            voltages=self.get_voltages(),
+            p_flows=self.get_p_flows(),
+            q_flows=self.get_q_flows(),
+            p_gens=self.get_p_gens(),
+            q_gens=self.get_q_gens(),
+            p_bats=self.get_p_batt(),
+            q_bats=self.get_q_batt(),
+            p_charge=self.get_p_charge(),
+            p_discharge=self.get_p_discharge(),
+            soc=self.get_soc(),
             objective_value=self.result.fun if hasattr(self.result, "fun") else None,
             converged=self.result.success if hasattr(self.result, "success") else True,
             solver="clarabel",

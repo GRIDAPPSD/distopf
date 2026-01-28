@@ -83,10 +83,9 @@ class TestCoreExports:
 
         # Check result has expected structure
         assert result is not None
-        assert isinstance(result, dict)
-        assert "voltages" in result
-        assert "p_flows" in result
-        assert "q_flows" in result
+        assert "voltages" in result.to_dict()
+        assert "p_flows" in result.to_dict()
+        assert "q_flows" in result.to_dict()
 
 
 class TestCaseMethods:
@@ -199,12 +198,12 @@ class TestCaseMethods:
     def test_case_to_matrix_model(self):
         """Test Case.to_matrix_model() method."""
         import distopf as opf
-        from distopf.matrix_models.base import LinDistBase
+        from distopf.matrix_models.multiperiod.lindist_loads_mp import LinDistMPL
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         model = case.to_matrix_model()
 
-        assert isinstance(model, LinDistBase)
+        assert isinstance(model, LinDistMPL)
         assert hasattr(model, "n_x")
 
     def test_case_to_pyomo_model(self):
@@ -530,12 +529,15 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 class TestBackendSelection:
     """Test backend auto-selection and explicit backend usage."""
 
-    def test_auto_selects_matrix_for_single_step(self):
-        """Single-step cases should auto-select matrix backend."""
+    def test_auto_selects_matrix_for_control_regulator(self):
+        """
+        Cases that want regulator taps or capacitor switch mixed integer control variables 
+        should auto-select matrix backend.
+        """
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        assert case._select_backend() == "matrix"
+        assert case._select_backend(control_regulators=True) == "matrix"
 
     def test_auto_selects_multiperiod_for_n_steps(self):
         """Cases with n_steps > 1 should auto-select multiperiod."""

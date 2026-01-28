@@ -256,63 +256,12 @@ class Case:
         >>> print(result.currents.head())
         """
         from distopf.fbs import FBS
-        from distopf.results import PowerFlowResult
 
         # Create and solve with FBS
         fbs = FBS(self)
-        converged = fbs.solve(
+        return fbs.solve(
             max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
         )
-
-        # Extract and store all results
-        self._voltages_df = fbs.get_voltages()
-        self._voltage_angles_df = fbs.get_voltage_angles()
-        self._p_flows_df = fbs.get_p_flows()
-        self._q_flows_df = fbs.get_q_flows()
-        self._currents_df = fbs.get_currents()
-        self._current_angles_df = fbs.get_current_angles()
-
-        # Build generator output DataFrames from gen_data for API consistency
-        p_gens_df = None
-        q_gens_df = None
-        if self.gen_data is not None and len(self.gen_data) > 0:
-            gen_df = self.gen_data.copy()
-            # Map pa/pb/pc -> a/b/c and qa/qb/qc -> a/b/c with a time column t=0
-            p_cols = {"pa": "a", "pb": "b", "pc": "c"}
-            q_cols = {"qa": "a", "qb": "b", "qc": "c"}
-
-            # p_gens
-            p_present = [c for c in ["pa", "pb", "pc"] if c in gen_df.columns]
-            if p_present:
-                p_gens_df = gen_df[
-                    ["id"] + (["name"] if "name" in gen_df.columns else []) + p_present
-                ].rename(columns=p_cols)
-                # Insert time column at position 2 for single-period compatibility
-                p_gens_df.insert(2, "t", 0)
-
-            # q_gens
-            q_present = [c for c in ["qa", "qb", "qc"] if c in gen_df.columns]
-            if q_present:
-                q_gens_df = gen_df[
-                    ["id"] + (["name"] if "name" in gen_df.columns else []) + q_present
-                ].rename(columns=q_cols)
-                q_gens_df.insert(2, "t", 0)
-
-        result = PowerFlowResult(
-            voltages=self._voltages_df,
-            voltage_angles=self._voltage_angles_df,
-            p_flows=self._p_flows_df,
-            q_flows=self._q_flows_df,
-            currents=self._currents_df,
-            current_angles=self._current_angles_df,
-            p_gens=p_gens_df,
-            q_gens=q_gens_df,
-            converged=converged if isinstance(converged, bool) else True,
-            solver="fbs",
-            result_type="fbs",  # FBS - iteration returns 6 values
-            case=self,
-        )
-        return result
 
     def run_opf(
         self,
@@ -377,7 +326,7 @@ class Case:
 
         # Route to appropriate backend using BackendSelector
         selector = BackendSelector(self)
-        result = selector.route_opf(
+        result = selector.solve(
             objective=objective,
             control_variable=control_variable,
             control_regulators=control_regulators,
@@ -389,7 +338,9 @@ class Case:
 
         return result
 
-    def _select_backend(self) -> str:
+    def _select_backend(
+        self, control_regulators=False, control_capacitors=False
+    ) -> str:
         """
         Convenience wrapper to determine the best backend for this Case.
 
@@ -401,7 +352,9 @@ class Case:
         from distopf.backend_selector import BackendSelector
 
         selector = BackendSelector(self)
-        return selector.select()
+        return selector.select(
+            control_regulators=control_regulators, control_capacitors=control_capacitors
+        )
 
     # -------------------------------------------------------------------------
     # Model Creation Methods (for advanced users)
@@ -627,6 +580,87 @@ class Case:
             n_steps=self.n_steps,
             delta_t=self.delta_t,
         )
+
+    def add_generator(
+        self,
+        name: str,
+        phases: Optional[str] = None,
+        p=0,
+        q=0,
+        s_rated=None,
+        q_max=None,
+        q_min=None,
+    ):
+        gen = self.gen_data.copy()
+        i = gen.shape[0]
+        _ids = self.bus_data.loc[self.bus_data.name == name, "id"].to_numpy()
+        if len(_ids) == 0:
+            raise ValueError(f"Bus {name} (type: {type(name)}) not found in bus_data.")
+        _id = _ids[0]
+        if _id in gen.loc[:, "id"].to_numpy():
+            i = self.gen_data.loc[self.gen_data.id == _id, "id"].index[0]
+        gen.at[i, "name"] = name
+        gen.at[i, "id"] = _id
+        bus_phases = self.bus_data.loc[self.bus_data.name == "13", "phases"].to_numpy()[
+            0
+        ]
+        if phases is None:
+            phases = bus_phases
+        if s_rated is None:
+            s_rated = (p**2 + q**2) ** (1 / 2) * 1.2
+        n_phases = len(phases)
+        p_phase = round(p / n_phases, 9)
+        q_phase = round(q / n_phases, 9)
+        s_rated_phase = round(s_rated / n_phases, 9)
+        gen.loc[i, "phases"] = phases
+        gen.loc[i, [f"s{ph}_max" for ph in phases]] = s_rated_phase  # unlimited
+        gen.loc[i, [f"p{ph}" for ph in phases]] = p_phase  # unlimited
+        gen.loc[i, [f"q{ph}" for ph in phases]] = q_phase  # unlimited
+        if q_max is None:
+            q_max = s_rated
+        if q_min is None:
+            q_min = -s_rated
+        gen.loc[i, ["qa_max", "qb_max", "qc_max"]] = q_max  # unlimited
+        gen.loc[i, ["qa_min", "qb_min", "qc_min"]] = q_min  # unlimited
+
+        gen.loc[:, ["pa", "pb", "pc", "qa", "qb", "qc"]] = (
+            gen.loc[:, ["pa", "pb", "pc", "qa", "qb", "qc"]].astype(float).fillna(0.0)
+        )
+        gen.loc[:, [f"s{a}_max" for a in "abc"]] = (
+            gen.loc[:, [f"s{a}_max" for a in "abc"]].astype(float).fillna(0.0)
+        )
+        self.gen_data = gen
+
+    def add_capacitor(
+        self,
+        name: any,
+        phases: Optional[str] = None,
+        q=0,
+    ):
+        cap = self.cap_data.copy()
+        i = cap.shape[0]
+        _ids = self.bus_data.loc[self.bus_data.name == name, "id"].to_numpy()
+        if len(_ids) == 0:
+            raise ValueError(f"Bus {name} (type: {type(name)}) not found in bus_data.")
+        _id = _ids[0]
+        if _id in cap.loc[:, "id"].to_numpy():
+            i = self.cap_data.loc[self.cap_data.id == _id, "id"].index[0]
+        print(cap.name.dtype)
+        cap.at[i, "name"] = name
+        cap.at[i, "id"] = _id
+        bus_phases = self.bus_data.loc[self.bus_data.name == "13", "phases"].to_numpy()[
+            0
+        ]
+        if phases is None:
+            phases = bus_phases
+        n_phases = len(phases)
+        q_phase = round(q / n_phases, 9)
+        cap.loc[i, "phases"] = phases
+        cap.loc[i, [f"q{ph}" for ph in phases]] = q_phase  # unlimited
+        cap.loc[i, [f"q{ph}" for ph in phases]] = (
+            cap.loc[i, [f"q{ph}" for ph in phases]].astype(float).fillna(0.0)
+        )
+        self.cap_data = cap
 
     # -------------------------------------------------------------------------
     # Save/Export Methods
