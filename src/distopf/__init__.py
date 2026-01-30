@@ -56,6 +56,7 @@ from distopf.matrix_models.objectives import (
     cp_obj_target_q_3ph,
     cp_obj_target_q_total,
     cp_obj_curtail,
+    cp_obj_curtail_lp,
     cp_obj_none,
 )
 from distopf.plot import (
@@ -151,6 +152,7 @@ __all__ = [
     "cp_obj_target_q_3ph",
     "cp_obj_target_q_total",
     "cp_obj_curtail",
+    "cp_obj_curtail_lp",
     "cp_obj_none",
     "plot_network",
     "plot_voltages",

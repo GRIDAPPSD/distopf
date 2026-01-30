@@ -488,7 +488,7 @@ def plot_polar(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
     pq.phase = p.phase
     pq["p"] = p.value
     pq["q"] = q.value
-    pq["s"] = pq.p + 1j * pq.q
+    pq["s"] = pq.p.astype(float) + 1j * pq.q.astype(float)
     pq["r"] = np.abs(pq.s)
     pq["th"] = np.angle(pq.s, deg=True)
     fig = px.scatter_polar(

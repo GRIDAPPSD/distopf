@@ -1154,9 +1154,9 @@ class LinDistBaseMP(BaseModelMP):
         n_rows_ineq = (
             n_inequalities
             * (
-                len(np.where(~np.isnan(self.branch.sa_max))[0])
-                + len(np.where(~np.isnan(self.branch.sb_max))[0])
-                + len(np.where(~np.isnan(self.branch.sc_max))[0])
+                len(np.where(~self.branch.sa_max.isna())[0])
+                + len(np.where(~self.branch.sb_max.isna())[0])
+                + len(np.where(~self.branch.sc_max.isna())[0])
             )
             * self.n_steps
         )

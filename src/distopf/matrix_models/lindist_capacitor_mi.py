@@ -124,7 +124,7 @@ class LinDistModelCapMI(LinDistBase):
 
     def create_inequality_constraints(self) -> tuple[csr_array, np.ndarray]:
         a_cap, b_cap = self.create_capacitor_constraints()
-        a_inv, b_inv = self.create_octagon_constraints()
+        a_inv, b_inv = self.create_inverter_octagon_constraints()
         a_ub = vstack([a_cap, a_inv])
         b_ub = np.r_[b_cap, b_inv]
         return csr_array(a_ub), b_ub

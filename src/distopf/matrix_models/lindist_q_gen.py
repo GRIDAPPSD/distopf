@@ -133,9 +133,6 @@ class LinDistModelQGen(LinDistBase):
         a_eq[qc, vj] = -q_cap_nom
         return a_eq, b_eq
 
-    def create_inequality_constraints(self):
-        return None, None
-
     def get_p_gens(self, x):
         df = self.get_device_variables(x, self.qg_map)
         df.a = self.gen_data.pa.to_numpy()
