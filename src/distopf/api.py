@@ -464,9 +464,9 @@ class Case:
         --------
         >>> case = create_case(CASES_DIR / "csv" / "ieee13")
         >>> model = case.to_pyomo_model()
-        >>> from distopf.pyomo_models import add_standard_constraints, solve_model
-        >>> add_standard_constraints(model)
-        >>> results = solve_model(model)
+        >>> from distopf.pyomo_models import add_constraints, solve
+        >>> add_constraints(model)
+        >>> results = solve(model)
         """
         from distopf.pyomo_models import create_lindist_model
 

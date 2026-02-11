@@ -423,6 +423,35 @@ def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     )
 
 
+def _create_branch_thermal_parameters(m: pyo.ConcreteModel, case: Case) -> None:
+    """Create branch thermal limit parameters."""
+    s_max_data = {}
+    has_thermal_limits = (
+        "sa_max" in case.branch_data.columns
+        or "sb_max" in case.branch_data.columns
+        or "sc_max" in case.branch_data.columns
+    )
+
+    if not has_thermal_limits:
+        return
+
+    for _, row in case.branch_data.iterrows():
+        for phase in "abc":
+            col = f"s{phase}_max"
+            if col in case.branch_data.columns:
+                val = getattr(row, col, None)
+                if val is not None and not pd.isna(val):
+                    s_max_data[(row.tb, phase)] = val
+
+    if s_max_data:
+        m.s_branch_max = pyo.Param(
+            m.branch_phase_set,
+            initialize=s_max_data,
+            default=None,
+            doc="Branch apparent power thermal limit",
+        )
+
+
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     """
     Create all parameters for the Pyomo model including impedances, loads,
@@ -436,24 +465,38 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_v_swing_parameters(m, case)
     _create_v_limit_parameters(m, case)
     _create_battery_parameters(m, case)
+    _create_branch_thermal_parameters(m, case)
 
 
-def create_lindist_model(case: Case) -> LindistModelProtocol:
+def create_lindist_model(
+    case: Case,
+    control_capacitors: bool = False,
+    control_regulators: bool = False,
+) -> LindistModelProtocol:
     """
-    Factory function to create a Pyomo ConcreteModel for multiperiod linear distribution system optimization.
+    Factory function to create a configurable Pyomo LinDistFlow model.
 
     Parameters
     ----------
     case : Case
         Dataclass containing network data frames
+    cap_mi : bool, optional
+        If True, add mixed-integer capacitor switching variables (default: False)
+    reg_mi : bool, optional
+        If True, add mixed-integer regulator tap variables (default: False)
 
     Returns
     -------
     pyo.ConcreteModel
-        Configured Pyomo model with sets, variables, and parameters
+        Configured Pyomo model with requested MI variables
     """
-
     m = pyo.ConcreteModel()
+
+    # Store configuration flags on model for constraint functions to reference
+    m.cap_mi_enabled = control_capacitors
+    m.reg_mi_enabled = control_regulators
+
+    # Maps
     m.from_bus_map = {
         int(tb): int(fb) for fb, tb in case.branch_data.loc[:, ["fb", "tb"]].to_numpy()
     }
@@ -467,16 +510,20 @@ def create_lindist_model(case: Case) -> LindistModelProtocol:
         int(_id): str(name)
         for _id, name in case.bus_data.loc[:, ["id", "name"]].to_numpy()
     }
+
+    # Time parameters
     m.delta_t = pyo.Param(initialize=case.delta_t)
     m.start_step = pyo.Param(initialize=case.start_step)
     m.n_steps = pyo.Param(initialize=case.n_steps)
+
+    # Create all standard sets and parameters
     _create_sets(m, case)
     _create_parameters(m, case)
 
-    # Time-indexed variables
+    # ===== Standard Variables =====
     m.v2 = pyo.Var(
         m.bus_phase_set, m.time_set, domain=pyo.NonNegativeReals, initialize=1
-    )  # Voltage magnitude squared
+    )
     m.p_flow = pyo.Var(m.branch_phase_set, m.time_set)
     m.q_flow = pyo.Var(m.branch_phase_set, m.time_set, initialize=0)
     m.p_gen = pyo.Var(m.gen_phase_set, m.time_set, domain=pyo.NonNegativeReals)
@@ -488,11 +535,232 @@ def create_lindist_model(case: Case) -> LindistModelProtocol:
     m.p_load = pyo.Var(m.bus_phase_set, m.time_set)
     m.q_load = pyo.Var(m.bus_phase_set, m.time_set)
 
-    # create battery variables
+    # Battery variables
     m.p_charge = pyo.Var(m.bat_set, m.time_set, initialize=0)
     m.p_discharge = pyo.Var(m.bat_set, m.time_set, initialize=0)
     m.p_bat = pyo.Var(m.bat_phase_set, m.time_set, initialize=0)
     m.q_bat = pyo.Var(m.bat_phase_set, m.time_set, initialize=0)
     m.soc = pyo.Var(m.bat_set, m.time_set, initialize=0.5)
-    model: LindistModelProtocol = m
-    return model
+
+    # ===== Capacitor MI Variables (conditional) =====
+    if control_capacitors:
+        m.u_cap = pyo.Var(
+            m.cap_phase_set,
+            m.time_set,
+            domain=pyo.Binary,
+            initialize=1,
+            doc="Capacitor switching status (1=on, 0=off)",
+        )
+        m.z_cap = pyo.Var(
+            m.cap_phase_set,
+            m.time_set,
+            domain=pyo.NonNegativeReals,
+            initialize=1,
+            doc="Auxiliary variable for McCormick linearization (z = u_cap * v2)",
+        )
+
+    # ===== Regulator MI Variables (conditional) =====
+    if control_regulators:
+        # Tap positions: 33 taps from 0.9 to 1.1 (step 0.00625)
+        tap_ratios = [0.9 + k * 0.00625 for k in range(33)]
+        m.tap_set = pyo.RangeSet(0, 32)  # 0 through 32 inclusive ie set(range(33))
+        m.tap_ratio = pyo.Param(
+            m.tap_set,
+            initialize={k: tap_ratios[k] for k in range(33)},
+            doc="Voltage ratio for each tap position",
+        )
+        m.tap_ratio_squared = pyo.Param(
+            m.tap_set,
+            initialize={k: tap_ratios[k] ** 2 for k in range(33)},
+            doc="Squared voltage ratio for each tap position",
+        )
+        m.reg_big_m = pyo.Param(
+            initialize=1e3, doc="Big-M value for regulator tap constraints"
+        )
+        m.u_reg = pyo.Var(
+            m.reg_phase_set,
+            m.tap_set,
+            m.time_set,
+            domain=pyo.Binary,
+            initialize=lambda m, _id, ph, k, t: 1 if k == 16 else 0,
+            doc="Binary tap selection (1 if tap k is selected)",
+        )
+
+    return m
+
+
+def add_constraints(
+    model: pyo.ConcreteModel,
+    circular_constraints: bool = True,
+    thermal_constraints: bool = False,
+    equality_only: bool = False,
+    control_capacitors: bool = False,
+    control_regulators: bool = False,
+    reg_tap_change_limit: int | None = None,
+) -> None:
+    """Add constraints to a LinDistFlow Pyomo model.
+
+    This is the main constraint builder that replaces multiple model classes.
+    Use this for flexible constraint configuration.
+
+    Parameters
+    ----------
+    model : pyo.ConcreteModel
+        Model created by create_lindist_model()
+    circular_constraints : bool, default True
+        If True, use circular (quadratic) constraints for generators, batteries,
+        and thermal limits. If False, use octagonal (linear) approximations.
+        Circular requires NLP solver (IPOPT), octagonal works with LP/MILP solvers.
+    thermal_constraints : bool, default False
+        If True, add thermal limit constraints on branch power flows.
+    equality_only : bool, default False
+        If True, only add equality constraints (power flow, voltage drop, loads).
+        Skips voltage limits, thermal limits, and generator capacity limits.
+        Useful for penalty-based optimization approaches.
+    cap_mi : bool, default False
+        Use mixed-integer capacitor switching (requires model created with
+        control_capacitors=True)
+    reg_mi : bool, default False
+        Use mixed-integer regulator tap control (requires model created with
+        control_regulators=True)
+    reg_tap_change_limit : int or None, default None
+        Max tap change per timestep (only applies if reg_mi=True)
+
+    Examples
+    --------
+    >>> model = create_lindist_model(case)
+    >>> add_constraints(model)  # Standard constraints (circular, no thermal)
+
+    >>> model = create_lindist_model(case, control_capacitors=True)
+    >>> add_constraints(model, cap_mi=True, thermal_constraints=True)
+    """
+    from distopf.pyomo_models import constraints
+
+    # Power flow (always)
+    constraints.add_p_flow_constraints(model)
+    constraints.add_q_flow_constraints(model)
+
+    # Thermal limits
+    if thermal_constraints and not equality_only:
+        if circular_constraints:
+            constraints.add_circular_thermal_constraints(model)
+        else:
+            constraints.add_octagonal_thermal_constraints(model)
+
+    # Voltage
+    if not equality_only:
+        constraints.add_voltage_limits(model)
+    constraints.add_voltage_drop_constraints(model)
+    constraints.add_swing_bus_constraints(model)
+
+    # Loads
+    constraints.add_cvr_load_constraints(model)
+
+    # Capacitors
+    if control_capacitors:
+        constraints.add_capacitor_mi_constraints(model)
+        constraints.add_capacitor_mccormick_constraints(model)
+        constraints.add_capacitor_z_bounds(model)
+    else:
+        constraints.add_capacitor_constraints(model)
+
+    # Regulators
+    if control_regulators:
+        constraints.add_regulator_tap_sos1_constraints(model)
+        constraints.add_regulator_mi_with_impedance_constraints(model)
+        if reg_tap_change_limit is not None:
+            constraints.add_regulator_tap_change_limit_constraints(
+                model, max_tap_change=reg_tap_change_limit
+            )
+    else:
+        constraints.add_regulator_constraints(model)
+
+    # Generators
+    if not equality_only:
+        constraints.add_generator_limits(model)
+    constraints.add_generator_constant_p_constraints_q_control(model)
+    constraints.add_generator_constant_q_constraints_p_control(model)
+    if not equality_only:
+        if circular_constraints:
+            constraints.add_circular_generator_constraints_pq_control(model)
+        else:
+            constraints.add_octagonal_inverter_constraints_pq_control(model)
+
+    # Batteries
+    constraints.add_battery_constant_q_constraints_p_control(model)
+    constraints.add_battery_energy_constraints(model)
+    constraints.add_battery_net_p_bat_equal_phase_constraints(model)
+    if not equality_only:
+        constraints.add_battery_power_limits(model)
+        constraints.add_battery_soc_limits(model)
+        if circular_constraints:
+            constraints.add_circular_battery_constraints(model)
+
+
+class LinDistModel:
+    """Configurable LinDistFlow Pyomo model.
+
+    Thin wrapper around create_lindist_model() + add_constraints().
+    Use this class for convenience, or call the functions directly for
+    more control.
+
+    Parameters
+    ----------
+    case : Case
+        Case object containing network data
+    circular_constraints : bool, default True
+        If True, use circular (quadratic) constraints for generators, batteries,
+        and thermal limits. If False, use octagonal (linear) approximations.
+    thermal_constraints : bool, default False
+        If True, add thermal limit constraints on branch power flows.
+    equality_only : bool, default False
+        If True, only add equality constraints (power flow, voltage drop, loads).
+        Skips voltage limits, thermal limits, and generator capacity limits.
+    cap_mi : bool, default False
+        Enable mixed-integer capacitor switching
+    reg_mi : bool, default False
+        Enable mixed-integer regulator tap control
+    reg_tap_change_limit : int or None, default None
+        Max tap change per timestep
+
+    Attributes
+    ----------
+    model : pyo.ConcreteModel
+        The Pyomo model with all constraints
+    case : Case
+        Reference to input case data
+
+    Examples
+    --------
+    >>> m = LinDistModel(case)
+    >>> m.model.objective = pyo.Objective(rule=loss_objective_rule)
+    >>> result = solve(m.model)
+
+    >>> m = LinDistModel(case, cap_mi=True, circular_constraints=False)
+    """
+
+    def __init__(
+        self,
+        case: Case,
+        circular_constraints: bool = True,
+        thermal_constraints: bool = False,
+        equality_only: bool = False,
+        cap_mi: bool = False,
+        reg_mi: bool = False,
+        reg_tap_change_limit: int | None = None,
+    ):
+        self.case = case
+        self.model = create_lindist_model(
+            case,
+            control_capacitors=cap_mi,
+            control_regulators=reg_mi,
+        )
+        add_constraints(
+            self.model,
+            circular_constraints=circular_constraints,
+            thermal_constraints=thermal_constraints,
+            equality_only=equality_only,
+            control_capacitors=cap_mi,
+            control_regulators=reg_mi,
+            reg_tap_change_limit=reg_tap_change_limit,
+        )

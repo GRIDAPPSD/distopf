@@ -326,9 +326,9 @@ def cp_obj_demand_cost_min(model: LinDistBaseMP, xk, **kwargs):
 
 
 def cp_obj_cost_min(model: LinDistBaseMP, xk, **kwargs):
-    return cp_obj_energy_cost_min(model, xk, **kwargs) + cp_obj_demand_cost_min(model, xk, **kwargs)
-
-
+    return cp_obj_energy_cost_min(model, xk, **kwargs) + cp_obj_demand_cost_min(
+        model, xk, **kwargs
+    )
 
 
 def cp_obj_none(*args, **kwargs) -> cp.Constant:

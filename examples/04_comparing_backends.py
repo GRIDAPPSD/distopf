@@ -21,7 +21,7 @@ print()
 
 # Backend 1: Matrix-based convex solver (CVXPY/CLARABEL)
 print("Running Matrix Backend (CVXPY + CLARABEL)...")
-result_matrix = case.run_opf("loss_min", backend="matrix")
+result_matrix = case.run_opf("loss_min", backend="multiperiod")
 v_matrix = result_matrix.voltages[["a", "b", "c"]]
 s_base = case.bus_data["s_base"].iloc[0]
 print("  Status: Success")

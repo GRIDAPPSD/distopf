@@ -76,4 +76,3 @@ if __name__ == "__main__":
     # Octagon with vertex on x-axis
     print("=" * 50)
     print_table(16, theta0=0)
-

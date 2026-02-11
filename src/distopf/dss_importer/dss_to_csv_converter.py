@@ -216,7 +216,187 @@ class DSSToCSVConverter:
         v_df = v_df.sort_index()
         return v_df
 
-    def get_apparent_power_flows(self):
+    def get_currents(self, from_side=False):
+        all_names = self.dss.PDElements.AllNames()
+        all_n_conductors = self.dss.PDElements.AllNumConductors()
+        all_n_terminals = self.dss.PDElements.AllNumTerminals()
+        all_n_phases = self.dss.PDElements.AllNumPhases()
+        all_currents_mag_ang = self.dss.PDElements.AllCurrentsMagAng()
+        data_list = []
+        i = 0
+        for name, n_cond, n_phases, n_term in zip(
+            all_names, all_n_conductors, all_n_phases, all_n_terminals
+        ):
+            element_type = name.split(".")[0]
+            element_name = name.split(".")[1]
+            i_end = i + n_cond * n_term * 2
+            cur_ang = np.array(all_currents_mag_ang[i:i_end]).reshape(n_cond * n_term, 2)
+            i = i_end
+            if element_type not in ["Line", "Transformer", "Reactor"]:
+                continue
+            if element_type == "Line":
+                self.dss.Lines.Name(element_name)
+            if element_type == "Transformer":
+                self.dss.Transformers.Name(element_name)
+            if element_type == "Reactor":
+                self.dss.Reactors.Name(element_name)
+            bus_names = self.dss.CktElement.BusNames()
+            bus1 = bus_names[0].split(".")[0]
+            bus2 = bus_names[1].split(".")[0]
+            self.dss.Circuit.SetActiveBus(bus2)
+            v_base = self.dss.Bus.kVBase()*1000
+            current_base = self.s_base/v_base
+            active_phases = np.array([0, 1, 2])
+            if n_phases < 3:
+                active_phases = (
+                    np.array(self.dss.CktElement.BusNames()[0].split(".")[1:]).astype(
+                        int
+                    )
+                    - 1
+                )
+            cur_in = cur_ang[:n_phases, 0]
+            cur_out = cur_ang[n_cond : n_cond + n_phases, 0]
+            if from_side:
+                cur_ = cur_in
+            else:
+                cur_ = cur_out
+            cur = np.array(
+                [np.nan, np.nan, np.nan]
+            )
+            cur[active_phases] = cur_[:n_phases]
+            cur = cur / current_base
+            self.dss.Circuit.SetActiveBus(bus2)
+            each_current = dict(
+                fb=self.bus_names_to_index_map[bus1],
+                tb=self.bus_names_to_index_map[bus2],
+                from_name=bus1,
+                to_name=bus2,
+                a=cur[0],
+                b=cur[1],
+                c=cur[2],
+                nodes=self.dss.Bus.Nodes(),
+            )
+            data_list.append(each_current)
+        # combine lines between identical buses.
+        df = pd.DataFrame(data_list)
+        df.fb = df.fb.astype(int)
+        df.tb = df.tb.astype(int)
+        df = (
+            df.groupby(by=["fb", "tb"], as_index=False)
+            .agg(
+                {
+                    "fb": "first",
+                    "tb": "first",
+                    "from_name": "first",
+                    "to_name": "first",
+                    "a": "sum",
+                    "b": "sum",
+                    "c": "sum",
+                    "nodes": "first",
+                }
+            )
+            .reset_index(drop=True)
+            .sort_values(by=["fb"], ignore_index=True)
+            .sort_values(by=["tb"], ignore_index=True)
+        )
+        for i, row in df.iterrows():
+            if 1 not in row.nodes:
+                df.loc[i, "a"] = pd.NA
+            if 2 not in row.nodes:
+                df.loc[i, "b"] = pd.NA
+            if 3 not in row.nodes:
+                df.loc[i, "c"] = pd.NA
+        return df.loc[:, ["fb", "tb", "from_name", "to_name", "a", "b", "c"]]
+
+    def get_current_angles(self, from_side=False):
+        all_names = self.dss.PDElements.AllNames()
+        all_n_conductors = self.dss.PDElements.AllNumConductors()
+        all_n_terminals = self.dss.PDElements.AllNumTerminals()
+        all_n_phases = self.dss.PDElements.AllNumPhases()
+        all_currents_mag_ang = self.dss.PDElements.AllCurrentsMagAng()
+        power_data = []
+        i = 0
+        for name, n_cond, n_phases, n_term in zip(
+            all_names, all_n_conductors, all_n_phases, all_n_terminals
+        ):
+            element_type = name.split(".")[0]
+            element_name = name.split(".")[1]
+            i_end = i + n_cond * n_term * 2
+            cur_ang = np.array(all_currents_mag_ang[i:i_end]).reshape(n_cond * n_term, 2)
+            i = i_end
+            if element_type not in ["Line", "Transformer", "Reactor"]:
+                continue
+            if element_type == "Line":
+                self.dss.Lines.Name(element_name)
+            if element_type == "Transformer":
+                self.dss.Transformers.Name(element_name)
+            if element_type == "Reactor":
+                self.dss.Reactors.Name(element_name)
+            bus_names = self.dss.CktElement.BusNames()
+            bus1 = bus_names[0].split(".")[0]
+            bus2 = bus_names[1].split(".")[0]
+            active_phases = np.array([0, 1, 2])
+            if n_phases < 3:
+                active_phases = (
+                    np.array(self.dss.CktElement.BusNames()[0].split(".")[1:]).astype(
+                        int
+                    )
+                    - 1
+                )
+            ang_in = cur_ang[:n_phases, 1]
+            ang_out = cur_ang[n_cond : n_cond + n_phases, 1]
+            if from_side:
+                ang_ = ang_in
+            else:
+                ang_ = ang_out - 180
+            ang = np.array(
+                [np.nan, np.nan, np.nan]
+            )
+            ang[active_phases] = ang_[:n_phases]
+            self.dss.Circuit.SetActiveBus(bus2)
+            each_power = dict(
+                fb=self.bus_names_to_index_map[bus1],
+                tb=self.bus_names_to_index_map[bus2],
+                from_name=bus1,
+                to_name=bus2,
+                a=ang[0]%360,
+                b=ang[1]%360,
+                c=ang[2]%360,
+                nodes=self.dss.Bus.Nodes(),
+            )
+            power_data.append(each_power)
+        # combine lines between identical buses.
+        df = pd.DataFrame(power_data)
+        df.fb = df.fb.astype(int)
+        df.tb = df.tb.astype(int)
+        df = (
+            df.groupby(by=["fb", "tb"], as_index=False)
+            .agg(
+                {
+                    "fb": "first",
+                    "tb": "first",
+                    "from_name": "first",
+                    "to_name": "first",
+                    "a": "sum",
+                    "b": "sum",
+                    "c": "sum",
+                    "nodes": "first",
+                }
+            )
+            .reset_index(drop=True)
+            .sort_values(by=["fb"], ignore_index=True)
+            .sort_values(by=["tb"], ignore_index=True)
+        )
+        for i, row in df.iterrows():
+            if 1 not in row.nodes:
+                df.loc[i, "a"] = pd.NA
+            if 2 not in row.nodes:
+                df.loc[i, "b"] = pd.NA
+            if 3 not in row.nodes:
+                df.loc[i, "c"] = pd.NA
+        return df.loc[:, ["fb", "tb", "from_name", "to_name", "a", "b", "c"]]
+
+    def get_apparent_power_flows(self, from_side=True):
         all_names = self.dss.PDElements.AllNames()
         all_n_conductors = self.dss.PDElements.AllNumConductors()
         all_n_terminals = self.dss.PDElements.AllNumTerminals()
@@ -251,23 +431,26 @@ class DSSToCSVConverter:
                     )
                     - 1
                 )
-            # pq_in = pq[:n_phases, :]
+            pq_in = pq[:n_phases, :]
             pq_out = -pq[n_cond : n_cond + n_phases, :]
-            s_out_ = pq_out[:, 0] + 1j * pq_out[:, 1]
-            s_out = np.array(
+            if from_side:
+                s_ = pq_in[:, 0] + 1j * pq_in[:, 1]
+            else:
+                s_ = pq_out[:, 0] + 1j * pq_out[:, 1]
+            s = np.array(
                 [np.nan + 1j * np.nan, np.nan + 1j * np.nan, np.nan + 1j * np.nan]
             )
-            s_out[active_phases] = s_out_[:n_phases]
-            s_out = s_out * 1000 / self.s_base
+            s[active_phases] = s_[:n_phases]
+            s = s * 1000 / self.s_base
             self.dss.Circuit.SetActiveBus(bus2)
             each_power = dict(
                 fb=self.bus_names_to_index_map[bus1],
                 tb=self.bus_names_to_index_map[bus2],
                 from_name=bus1,
                 to_name=bus2,
-                a=s_out[0],
-                b=s_out[1],
-                c=s_out[2],
+                a=s[0],
+                b=s[1],
+                c=s[2],
                 nodes=self.dss.Bus.Nodes(),
             )
             power_data.append(each_power)

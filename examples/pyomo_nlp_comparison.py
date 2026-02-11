@@ -2,10 +2,13 @@ import distopf as opf
 import pyomo.environ as pyo
 import pandas as pd
 import numpy as np
-from distopf.pyomo_models.objectives import loss_objective_rule
+from distopf.pyomo_models.objectives import (
+    loss_objective_rule,
+    substation_power_objective_rule,
+)
 from distopf.api import create_case
 from distopf.pyomo_models.nl_branchflow_prebuilt import NLBranchFlow
-from distopf.pyomo_models.lindist_loads import LinDistPyoMPL
+from distopf.pyomo_models import create_lindist_model, add_constraints
 from distopf.pyomo_models.results import (
     get_voltages,
     get_values,
@@ -15,23 +18,26 @@ from math import pi
 
 
 def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
-    i_angles["ab"] = i_angles.a - i_angles.b
-    i_angles["bc"] = i_angles.b - i_angles.c
-    i_angles["ca"] = i_angles.c - i_angles.a
+    i_angles["ab"] = (i_angles.a - i_angles.b) % 360
+    i_angles["bc"] = (i_angles.b - i_angles.c) % 360
+    i_angles["ca"] = (i_angles.c - i_angles.a) % 360
     i_angles["ba"] = -i_angles.ab
     i_angles["cb"] = -i_angles.bc
     i_angles["ac"] = -i_angles.ca
     i_angles["aa"] = i_angles.a - i_angles.a
     i_angles["bb"] = i_angles.b - i_angles.b
     i_angles["cc"] = i_angles.c - i_angles.c
+    print("i_angles")
+    print(i_angles)
     data = {
-        (_id, phases): float(i_angles.loc[i_angles.id == _id, phases].tolist()[0])
+        (_id, phases): float(i_angles.loc[i_angles.tb == _id, phases].tolist()[0])
         * pi
         / 180
-        for _id, phases in m2.bus_phase_pair_set
+        for _id, phases in non_linear_model.bus_angle_phase_pair_set
     }
-    for key in m2.d:
-        m2.d[key] = data[key]
+    for key in non_linear_model.d:
+        non_linear_model.d[key] = data[key]
+    print()
     nlp = non_linear_model
     lp = linear_model
     nlp.v2.set_values(lp.v2.get_values())
@@ -65,14 +71,21 @@ def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
     return nlp
 
 
+start_step = 12
+
 # case = create_case(opf.CASES_DIR / "csv/ieee123_alternate", start_step=12)
 # case = create_case(opf.CASES_DIR / "cim/IEEE13.xml", start_step=12)
-# case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
-case_path = opf.CASES_DIR / "dss/dss_reg_test/main.dss"
+case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
+# case_path = opf.CASES_DIR / "dss/test_line/main.dss"
+# case_path = opf.CASES_DIR / "dss/test_reg/main.dss"
+# case_path = opf.CASES_DIR / "dss/test_line_unbal_load/main.dss"
+# case_path = opf.CASES_DIR / "dss/test_line_unbal_line/main.dss"
 # case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
-case = create_case(case_path, start_step=12)
+case = create_case(case_path, start_step=start_step)
 # case = create_case(opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS", start_step=12)
 case.gen_data.control_variable = ""
+# cross_phase_cols = ['rab', 'rac', 'rbc', 'xab', 'xac', 'xbc']
+# case.branch_data.loc[:, cross_phase_cols] = 0.0
 dss_parser = opf.DSSToCSVConverter(case_path)
 v_dss = dss_parser.v_solved
 v_dss = v_dss.reset_index(drop=True)
@@ -87,6 +100,10 @@ p_dss["id"] = p_dss["tb"]
 q_dss = dss_parser.get_q_flows()
 q_dss["name"] = q_dss["to_name"]
 q_dss["id"] = q_dss["tb"]
+print("DSS Currents")
+print(dss_parser.get_currents())
+print("DSS Current angles")
+print(dss_parser.get_current_angles())
 
 # p_dss = s_dss.loc[:, ["fb", "id", "from_name", "name"]].copy()
 # q_dss = s_dss.loc[:, ["fb", "id", "from_name", "name"]].copy()
@@ -100,13 +117,18 @@ case.bus_data.v_min = 0.0
 case.gen_data = case.gen_data.iloc[0:0]
 case.bat_data = case.bat_data.iloc[0:0]
 fbs_results = fbs_solve(case)
-i_ang = fbs_results["current_angles"]
-v_fbs = fbs_results["voltages"]
+i_ang = fbs_results.current_angles
+v_fbs = fbs_results.voltages
 v_fbs["algorithm"] = "fbs"
-cur = fbs_results["currents"]
-v_ang = fbs_results["voltage_angles"]
-cur.index = cur.id
-i_ang.index = i_ang.id
+cur = fbs_results.currents
+cur["t"] += start_step
+v_ang = fbs_results.voltage_angles
+cur.index = cur.tb
+i_ang.index = i_ang.tb
+print("FBS Currents")
+print(fbs_results.currents)
+print("FBS Current Angles")
+print(i_ang)
 v_ang.index = v_ang.id
 v_fbs.index = v_fbs.id
 v_phasor = v_fbs.loc[:, ["id", "name", "t"]].copy()
@@ -114,12 +136,12 @@ v_phasor.loc[:, ["a", "b", "c"]] = v_fbs.loc[:, ["a", "b", "c"]] * np.exp(
     1j * np.radians(v_ang.loc[:, ["a", "b", "c"]])
 )
 
-i_phasor = cur.loc[:, ["fb", "id", "from_name", "name", "t"]].copy()
+i_phasor = cur.loc[:, ["fb", "tb", "from_name", "to_name", "t"]].copy()
 i_phasor.loc[:, ["a", "b", "c"]] = cur.loc[:, ["a", "b", "c"]] * np.exp(
     1j * np.radians(i_ang.loc[:, ["a", "b", "c"]])
 )
 
-s = cur.loc[:, ["fb", "id", "from_name", "name", "t"]].copy()
+s = cur.loc[:, ["fb", "tb", "from_name", "to_name", "t"]].copy()
 s.loc[:, ["a", "b", "c"]] = v_phasor.loc[:, ["a", "b", "c"]] * np.conj(
     i_phasor.loc[:, ["a", "b", "c"]]
 )
@@ -127,23 +149,27 @@ s.loc[:, ["a", "b", "c"]] = v_phasor.loc[:, ["a", "b", "c"]] * np.conj(
 # q_flow_fbs = cur.loc[:, ["fb", "id", "from_name", "name", "t"]].copy()
 # p_flow_fbs.loc[:, ["a", "b", "c"]] = np.real(s.loc[:, ["a", "b", "c"]])
 # q_flow_fbs.loc[:, ["a", "b", "c"]] = np.imag(s.loc[:, ["a", "b", "c"]])
-p_flow_fbs = fbs_results["p_flows"]
-q_flow_fbs = fbs_results["q_flows"]
+p_flow_fbs = fbs_results.p_flows
+q_flow_fbs = fbs_results.q_flows
 p_flow_fbs["algorithm"] = "fbs"
 q_flow_fbs["algorithm"] = "fbs"
-lindist = LinDistPyoMPL(case)
+
+# Create LinDist model using new API
+lindist_model = create_lindist_model(case)
+add_constraints(lindist_model)
+
 nlbf = NLBranchFlow(case)
 
-m1: pyo.ConcreteModel = lindist.model
+m1: pyo.ConcreteModel = lindist_model
 m2: pyo.ConcreteModel = nlbf.model
 
 
 m1.objective = pyo.Objective(
-    rule=loss_objective_rule,
+    rule=substation_power_objective_rule,
     sense=pyo.minimize,
 )
 m2.objective = pyo.Objective(
-    rule=loss_objective_rule,  # loss_objective_rule,
+    rule=substation_power_objective_rule,  # loss_objective_rule,
     sense=pyo.minimize,
 )
 # Solve the model
@@ -161,8 +187,8 @@ if results1.solver.status == pyo.SolverStatus.ok:
     # data = get_all_results(model, case)
     v_lp = get_voltages(m1.v2)
     v2 = get_values(m1.v2)
-    p_flow_lp = get_values(m1.p_flow)
-    q_flow_lp = get_values(m1.q_flow)
+    p_flow_lp = get_values(m1.p_flow).rename(columns={"id": "tb", "name": "to_name"})
+    q_flow_lp = get_values(m1.q_flow).rename(columns={"id": "tb", "name": "to_name"})
     p_gen_lp = get_values(m1.p_gen)
     q_gen_lp = get_values(m1.q_gen)
     # plot_voltages(v, t=12).show(renderer="browser")
@@ -173,23 +199,17 @@ if results1.solver.status == pyo.SolverStatus.ok:
     v_list.append(v_lp)
     # Add fb and from_name columns to flow data
     p_flow_lp = p_flow_lp.merge(
-        case.branch_data.loc[:, ["tb", "fb", "from_name"]].rename(columns={"tb": "id"}),
-        on="id",
+        case.branch_data.loc[:, ["tb", "fb", "from_name"]],
+        on="tb",
         how="left",
     )
     q_flow_lp = q_flow_lp.merge(
-        case.branch_data.loc[:, ["tb", "fb", "from_name"]].rename(columns={"tb": "id"}),
-        on="id",
+        case.branch_data.loc[:, ["tb", "fb", "from_name"]],
+        on="tb",
         how="left",
     )
     p_flow_lp["algorithm"] = "lindist"
     p_list.append(p_flow_lp)
-    # Add fb and from_name columns to flow data
-    q_flow_lp = q_flow_lp.merge(
-        case.branch_data.loc[:, ["tb", "fb", "from_name"]].rename(columns={"tb": "id"}),
-        on="id",
-        how="left",
-    )
     q_flow_lp["algorithm"] = "lindist"
     q_list.append(q_flow_lp)
 
@@ -207,25 +227,37 @@ if results2.solver.status == pyo.SolverStatus.ok:
     # data = get_all_results(model, case)
     v_nlp = get_voltages(m2.v2)
     v2_nlp = get_values(m2.v2)
-    p_flow_nlp = get_values(m2.p_flow)
-    q_flow_nlp = get_values(m2.q_flow)
+    p_flow_nlp = get_values(m2.p_flow).rename(columns={"id": "tb", "name": "to_name"})
+    q_flow_nlp = get_values(m2.q_flow).rename(columns={"id": "tb", "name": "to_name"})
     p_gen_nlp = get_values(m2.p_gen)
     q_gen_nlp = get_values(m2.q_gen)
+    l_flow_nlp = get_values(m2.l_flow).rename(columns={"id": "tb", "name": "to_name"})
+    i_flow = l_flow_nlp.copy()
+    i_flow["a"] = i_flow.aa ** (1 / 2)
+    i_flow["b"] = i_flow.bb ** (1 / 2)
+    i_flow["c"] = i_flow.cc ** (1 / 2)
+    i_flow["fb"] = i_flow["tb"].map(m2.from_bus_map)
+    i_flow["from_name"] = i_flow["fb"].map(m2.name_map)
+    i_flow = i_flow.loc[:, ["fb", "tb", "from_name", "to_name", "t", "a", "b", "c"]]
     # plot_voltages(v_nlp, t=12).show(renderer="browser")
     # plot_gens(p_flow, q_flow).show(renderer="browser")
     # plot_gens(p_gen, q_gen).show(renderer="browser")
     # plot_polar(p_gen, q_gen).show(renderer="browser")
+    print("exact current")
+    print(cur)
+    print("nlp current")
+    print(i_flow)
     v_nlp["algorithm"] = "nlp"
     v_list.append(v_nlp)
     # Add fb and from_name columns to flow data
     p_flow_nlp = p_flow_nlp.merge(
-        case.branch_data.loc[:, ["tb", "fb", "from_name"]].rename(columns={"tb": "id"}),
-        on="id",
+        case.branch_data.loc[:, ["tb", "fb", "from_name"]],
+        on="tb",
         how="left",
     )
     q_flow_nlp = q_flow_nlp.merge(
-        case.branch_data.loc[:, ["tb", "fb", "from_name"]].rename(columns={"tb": "id"}),
-        on="id",
+        case.branch_data.loc[:, ["tb", "fb", "from_name"]],
+        on="tb",
         how="left",
     )
     p_flow_nlp["algorithm"] = "nlp"
@@ -416,7 +448,7 @@ def plot_line_flow_vs_distance(
     Parameters
     ----------
     flow_data : pd.DataFrame
-        Line flow dataframe with columns: fb, from_name, id, name, algorithm, phase, value
+        Line flow dataframe with columns: fb, from_name, tb, to_name, algorithm, phase, value
     case : Case
         Case object to calculate distances and branch data
     flow_name : str
@@ -435,7 +467,7 @@ def plot_line_flow_vs_distance(
 
     # Add distance column for to-bus only
     flow_data_copy = flow_data.copy()
-    flow_data_copy["to_distance"] = flow_data_copy["id"].astype(int).map(distances)
+    flow_data_copy["to_distance"] = flow_data_copy["tb"].astype(int).map(distances)
 
     # Create subplots for each phase
     from plotly.subplots import make_subplots
@@ -492,9 +524,9 @@ def plot_line_flow_vs_distance(
 
             for idx, row in flow_algo.iterrows():
                 fb = int(row["fb"])
-                tb = int(row["id"])
+                tb = int(row["tb"])
                 from_name = row["from_name"]
-                to_name = row["name"]
+                to_name = row["to_name"]
                 flow_value = row["value"]
                 to_dist = int(row["to_distance"])
 
@@ -558,7 +590,7 @@ v = v.melt(
 # ).show(renderer="browser")
 p = pd.concat(p_list)
 p = p.melt(
-    id_vars=["fb", "id", "from_name", "name", "algorithm"],
+    id_vars=["fb", "tb", "from_name", "to_name", "algorithm"],
     value_vars=["a", "b", "c"],
     var_name="phase",
     value_name="value",
@@ -568,7 +600,7 @@ p = p.melt(
 # ).show(renderer="browser")
 q = pd.concat(q_list)
 q = q.melt(
-    id_vars=["fb", "id", "from_name", "name", "algorithm"],
+    id_vars=["fb", "tb", "from_name", "to_name", "algorithm"],
     value_vars=["a", "b", "c"],
     var_name="phase",
     value_name="value",
@@ -582,9 +614,9 @@ v_with_distance = v.copy()
 plot_voltage_vs_distance(v_with_distance, case).show(renderer="browser")
 
 # ============ Active Power Flow vs Distance from Source ============
-plot_voltage_vs_distance(
+plot_line_flow_vs_distance(
     p, case, title="Active Power Flow vs Distance from Source"
 ).show(renderer="browser")
-plot_voltage_vs_distance(
+plot_line_flow_vs_distance(
     q, case, title="Reactive Power Flow vs Distance from Source"
 ).show(renderer="browser")

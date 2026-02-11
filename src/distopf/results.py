@@ -3,10 +3,20 @@
 This module provides standard result containers that work across all solver
 backends (matrix, pyomo, multiperiod, FBS). The goal is to provide a consistent
 API regardless of which solver was used.
+
+# TODO: Rename user-facing variable names to be more user-friendly:
+#   - p_flows -> active_power_flows or branch_p
+#   - q_flows -> reactive_power_flows or branch_q
+#   - p_gens -> generator_p or gen_active_power
+#   - q_gens -> generator_q or gen_reactive_power
+#   - p_loads -> load_p or load_active_power
+#   - q_loads -> load_q or load_reactive_power
+#   - q_caps -> capacitor_q or cap_reactive_power
+#   - Consider using consistent naming: entity_quantity pattern
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Optional
 import pandas as pd
@@ -74,17 +84,28 @@ class PowerFlowResult:
     p_gens: Optional[pd.DataFrame] = None
     q_gens: Optional[pd.DataFrame] = None
 
+    # Load results
+    p_loads: Optional[pd.DataFrame] = None
+    q_loads: Optional[pd.DataFrame] = None
+
     # Battery results
     p_bats: Optional[pd.DataFrame] = None
     q_bats: Optional[pd.DataFrame] = None
     p_discharge: Optional[pd.DataFrame] = None
     p_charge: Optional[pd.DataFrame] = None
     soc: Optional[pd.DataFrame] = None
-    
-    # Mixed integer variables
+
+    # Capacitor results
+    q_caps: Optional[pd.DataFrame] = None
+
+    # Regulator results
+    tap_ratios: Optional[pd.DataFrame] = None
+
+    # Mixed integer variables (access via raw_result for binary vars like u_cap, u_reg)
     reg_taps: Optional[pd.DataFrame] = None
     z_caps: Optional[pd.DataFrame] = None
     u_caps: Optional[pd.DataFrame] = None
+
     # Current results (FBS-specific, but available from any solver if computed)
     currents: Optional[pd.DataFrame] = None
     current_angles: Optional[pd.DataFrame] = None
@@ -110,23 +131,14 @@ class PowerFlowResult:
     # -------------------------------------------------------------------------
 
     def to_dict(self) -> dict:
-        """Return results as a dictionary of DataFrames.
+        """Return all result attributes as a dictionary.
 
         Returns
         -------
         dict
-            Dictionary with all available results as DataFrames
+            Dictionary with all result attributes
         """
-        return {
-            "voltages": self.voltages,
-            "voltage_angles": self.voltage_angles,
-            "p_flows": self.p_flows,
-            "q_flows": self.q_flows,
-            "p_gens": self.p_gens,
-            "q_gens": self.q_gens,
-            "currents": self.currents,
-            "current_angles": self.current_angles,
-        }
+        return asdict(self)
 
     def save(self, output_dir: Path | str) -> None:
         """Save all results to CSV files.
@@ -140,9 +152,9 @@ class PowerFlowResult:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Save each DataFrame that exists
-        for name, df in self.to_dict().items():
-            if df is not None:
-                df.to_csv(output_dir / f"{name}.csv", index=False)
+        for name, val in self.to_dict().items():
+            if val is not None and hasattr(val, "to_csv"):
+                val.to_csv(output_dir / f"{name}.csv", index=False)
 
         # Save metadata
         metadata = {
@@ -181,9 +193,9 @@ class PowerFlowResult:
         lines.append("")
         lines.append("  Available results:")
 
-        for name, df in self.to_dict().items():
-            if df is not None:
-                lines.append(f"    {name}: {df.shape}")
+        for name, val in self.to_dict().items():
+            if val is not None and hasattr(val, "shape"):
+                lines.append(f"    {name}: {val.shape}")
 
         return "\n".join(lines)
 

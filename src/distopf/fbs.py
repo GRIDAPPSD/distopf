@@ -578,7 +578,7 @@ class FBS:
 
         return pd.DataFrame(angle_data).sort_values("id").reset_index(drop=True)
 
-    def get_p_flows(self) -> pd.DataFrame:
+    def get_p_flows(self, from_side=True) -> pd.DataFrame:
         """
         Get active power flows in the specified format.
 
@@ -604,7 +604,12 @@ class FBS:
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
 
             # if fb in self.voltages:
-            s = self.voltages[tb] * np.conj(current)
+            bus = tb
+            a_t = np.eye(3, dtype=complex)
+            if from_side:
+                bus = fb
+                a_t = self._get_tap_ratio_matrix(tb)
+            s = a_t @ self.voltages[bus] * np.conj(current)
 
             # Get connected phases for the branch
             fb_phases = self.phase_connections.get(fb, [0, 1, 2])
@@ -614,9 +619,9 @@ class FBS:
             flow_data.append(
                 {
                     "fb": fb_id,
-                    "id": tb_id,
+                    "tb": tb_id,
                     "from_name": fb_name,
-                    "name": tb_name,
+                    "to_name": tb_name,
                     "t": 0,  # Time step
                     "a": s[0].real if 0 in branch_phases else np.nan,
                     "b": s[1].real if 1 in branch_phases else np.nan,
@@ -624,16 +629,16 @@ class FBS:
                 }
             )
 
-        return pd.DataFrame(flow_data).sort_values(["id", "fb"]).reset_index(drop=True)
+        return pd.DataFrame(flow_data).sort_values(["tb", "fb"]).reset_index(drop=True)
 
-    def get_q_flows(self) -> pd.DataFrame:
+    def get_q_flows(self, from_side=True) -> pd.DataFrame:
         """
         Get reactive power flows in the specified format.
 
         Returns
         -------
         pd.DataFrame
-            Reactive power flows with columns: fb, id, from_name, name, t, a, b, c
+            Reactive power flows with columns: fb, tb, from_name, name, t, a, b, c
         """
         if not hasattr(self, "currents") or len(self.currents) == 0:
             raise ValueError("No results available. Run solve() first.")
@@ -651,7 +656,12 @@ class FBS:
             fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb_id}"
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
 
-            s = self.voltages[tb] * np.conj(current)
+            bus = tb
+            a_t = np.eye(3, dtype=complex)
+            if from_side:
+                bus = fb
+                a_t = self._get_tap_ratio_matrix(tb)
+            s = a_t @ self.voltages[bus] * np.conj(current)
 
             # Get connected phases for the branch
             fb_phases = self.phase_connections.get(fb, [0, 1, 2])
@@ -661,9 +671,9 @@ class FBS:
             flow_data.append(
                 {
                     "fb": fb_id,
-                    "id": tb_id,
+                    "tb": tb_id,
                     "from_name": fb_name,
-                    "name": tb_name,
+                    "to_name": tb_name,
                     "t": 0,  # Time step
                     "a": s[0].imag if 0 in branch_phases else np.nan,
                     "b": s[1].imag if 1 in branch_phases else np.nan,
@@ -671,7 +681,7 @@ class FBS:
                 }
             )
 
-        return pd.DataFrame(flow_data).sort_values(["id", "fb"]).reset_index(drop=True)
+        return pd.DataFrame(flow_data).sort_values(["tb", "fb"]).reset_index(drop=True)
 
     def get_currents(self) -> pd.DataFrame:
         """
@@ -680,7 +690,7 @@ class FBS:
         Returns
         -------
         pd.DataFrame
-            Current magnitudes with columns: fb, id, from_name, name, t, a, b, c
+            Current magnitudes with columns: fb, tb, from_name, name, t, a, b, c
         """
         if not hasattr(self, "currents") or len(self.currents) == 0:
             raise ValueError("No results available. Run solve() first.")
@@ -706,9 +716,9 @@ class FBS:
             current_data.append(
                 {
                     "fb": fb_id,
-                    "id": tb_id,
+                    "tb": tb_id,
                     "from_name": fb_name,
-                    "name": tb_name,
+                    "to_name": tb_name,
                     "t": 0,  # Time step
                     "a": abs(current[0]) if 0 in branch_phases else np.nan,
                     "b": abs(current[1]) if 1 in branch_phases else np.nan,
@@ -717,7 +727,7 @@ class FBS:
             )
 
         return (
-            pd.DataFrame(current_data).sort_values(["id", "fb"]).reset_index(drop=True)
+            pd.DataFrame(current_data).sort_values(["tb", "fb"]).reset_index(drop=True)
         )
 
     def get_current_angles(self) -> pd.DataFrame:
@@ -727,7 +737,7 @@ class FBS:
         Returns
         -------
         pd.DataFrame
-            Current angles with columns: fb, id, from_name, name, t, a, b, c
+            Current angles with columns: fb, tb, from_name, name, t, a, b, c
         """
         if not hasattr(self, "currents") or len(self.currents) == 0:
             raise ValueError("No results available. Run solve() first.")
@@ -753,26 +763,25 @@ class FBS:
             angle_data.append(
                 {
                     "fb": fb_id,
-                    "id": tb_id,
+                    "tb": tb_id,
                     "from_name": fb_name,
-                    "name": tb_name,
+                    "to_name": tb_name,
                     "t": 0,  # Time step
-                    "a": np.angle(current[0]) * 180 / np.pi
+                    "a": np.angle(current[0]) * 180 / np.pi % 360
                     if 0 in branch_phases
                     else np.nan,
-                    "b": np.angle(current[1]) * 180 / np.pi
+                    "b": np.angle(current[1]) * 180 / np.pi % 360
                     if 1 in branch_phases
                     else np.nan,
-                    "c": np.angle(current[2]) * 180 / np.pi
+                    "c": np.angle(current[2]) * 180 / np.pi % 360
                     if 2 in branch_phases
                     else np.nan,
                 }
             )
 
-        return pd.DataFrame(angle_data).sort_values(["id", "fb"]).reset_index(drop=True)
+        return pd.DataFrame(angle_data).sort_values(["tb", "fb"]).reset_index(drop=True)
 
     def results(self) -> PowerFlowResult:
-        
         p_gens_df = None
         q_gens_df = None
         if self.gen_data is not None and len(self.gen_data) > 0:

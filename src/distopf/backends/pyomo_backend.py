@@ -26,41 +26,64 @@ class PyomoBackend(Backend):
         Parameters
         ----------
         objective : str, callable, or None
-            Optimization objective function
+            Optimization objective function. Supported strings:
+            'loss', 'substation', 'voltage_deviation', 'curtail'
         control_regulators : bool
-            Not supported in pyomo backend (ignored with warning)
+            Enable mixed-integer regulator tap control
         control_capacitors : bool
-            Not supported in pyomo backend (ignored with warning)
+            Enable mixed-integer capacitor switching
         raw_result : bool
-            If True, return raw Pyomo OpfResult object instead of PowerFlowResult
+            If True, return raw Pyomo PyoResult object instead of PowerFlowResult
         **kwargs
-            Additional solver options (note: solver is always IPOPT)
+            Additional options:
+            - circular_constraints : bool, default True
+                Use circular (quadratic) constraints for generators, batteries,
+                and thermal limits. If False, use octagonal (linear) approximations.
+            - thermal_constraints : bool, default False
+                Add thermal limit constraints on branch power flows.
+            - equality_only : bool, default False
+                Only add equality constraints (power flow, voltage drop).
+                Skips voltage/thermal/generator limits.
+            - reg_tap_change_limit : int or None
+                Max tap change per timestep (only if control_regulators=True)
 
         Returns
         -------
         PowerFlowResult or raw result
             If raw_result=False: PowerFlowResult with all results
-            If raw_result=True: Pyomo OpfResult object with all variable results
+            If raw_result=True: Pyomo PyoResult object with all variable results
         """
         from distopf.pyomo_models import (
             create_lindist_model,
-            add_standard_constraints,
+            add_constraints,
             solve,
         )
         from distopf.results import PowerFlowResult
         import pyomo.environ as pyo  # type: ignore[import-untyped]
 
-        # Warn about unsupported parameters
-        if control_regulators:
-            self._warn_unsupported("pyomo", "control_regulators")
-        if control_capacitors:
-            self._warn_unsupported("pyomo", "control_capacitors")
-        if "solver" in kwargs:
-            self._warn_unsupported("pyomo", "solver kwarg (uses IPOPT)")
+        # Extract pyomo-specific options from kwargs
+        circular_constraints = kwargs.pop("circular_constraints", True)
+        thermal_constraints = kwargs.pop("thermal_constraints", False)
+        equality_only = kwargs.pop("equality_only", False)
+        reg_tap_change_limit = kwargs.pop("reg_tap_change_limit", None)
 
-        # Create Pyomo model (uses gen_data.control_variable per-row)
-        self.model = create_lindist_model(self.case)
-        add_standard_constraints(self.model)
+        # Create Pyomo model
+        self.model = create_lindist_model(
+            self.case,
+            control_capacitors=control_capacitors,
+            control_regulators=control_regulators,
+        )
+
+        # Add constraints with configuration
+        add_constraints(
+            self.model,
+            circular_constraints=circular_constraints,
+            thermal_constraints=thermal_constraints,
+            equality_only=equality_only,
+            control_capacitors=control_capacitors,
+            control_regulators=control_regulators,
+            reg_tap_change_limit=reg_tap_change_limit,
+        )
 
         # Set objective
         obj_rule = self._resolve_objective(objective)
@@ -72,12 +95,18 @@ class PyomoBackend(Backend):
         if raw_result:
             return self.result
 
-        # Extract results (result is OpfResult from solve())
+        # Extract results (result is PyoResult from solve())
         voltages_df = self.get_voltages()
         p_flows_df = self.get_p_flows()
         q_flows_df = self.get_q_flows()
         p_gens = self.get_p_gens()
         q_gens = self.get_q_gens()
+
+        # Extract additional results (may not exist in all models)
+        q_caps = getattr(self.result, "q_cap", None)
+        tap_ratios = getattr(self.result, "reg_ratio", None)
+        p_loads = getattr(self.result, "p_load", None)
+        q_loads = getattr(self.result, "q_load", None)
 
         # Get metadata from pyomo result
         objective_value = None
@@ -93,6 +122,10 @@ class PyomoBackend(Backend):
             q_flows=q_flows_df,
             p_gens=p_gens,
             q_gens=q_gens,
+            p_loads=p_loads,
+            q_loads=q_loads,
+            q_caps=q_caps,
+            tap_ratios=tap_ratios,
             objective_value=objective_value,
             converged=True,
             solver="ipopt",
@@ -105,7 +138,12 @@ class PyomoBackend(Backend):
 
     def _resolve_objective(self, objective: Any) -> Any:
         """Resolve objective string to Pyomo objective function."""
-        from distopf.pyomo_models.objectives import loss_objective_rule
+        from distopf.pyomo_models.objectives import (
+            loss_objective_rule,
+            substation_power_objective_rule,
+            voltage_deviation_objective_rule,
+            generation_curtailment_objective_rule,
+        )
 
         if objective is None:
             return loss_objective_rule
@@ -115,28 +153,24 @@ class PyomoBackend(Backend):
 
         # String objective - map to pyomo objective rules
         obj_lower = objective.lower().strip()
-        if obj_lower in ("loss", "loss_min"):
-            return loss_objective_rule
 
-        # List unsupported objectives that work with matrix backend
-        matrix_only_objectives = [
-            "curtail",
-            "curtail_min",
-            "gen_max",
-            "target_p_3ph",
-            "target_q_3ph",
-            "target_p_total",
-            "target_q_total",
-        ]
-        if obj_lower in matrix_only_objectives:
-            raise ValueError(
-                f"Objective '{objective}' is not supported by pyomo backend. "
-                f"Use backend='matrix' or backend='multiperiod' for this objective."
-            )
+        objective_map = {
+            "loss": loss_objective_rule,
+            "loss_min": loss_objective_rule,
+            "substation": substation_power_objective_rule,
+            "substation_power": substation_power_objective_rule,
+            "voltage_deviation": voltage_deviation_objective_rule,
+            "curtail": generation_curtailment_objective_rule,
+            "curtail_min": generation_curtailment_objective_rule,
+            "curtailment": generation_curtailment_objective_rule,
+        }
+
+        if obj_lower in objective_map:
+            return objective_map[obj_lower]
 
         raise ValueError(
             f"Unknown pyomo objective: '{objective}'. "
-            f"Pyomo backend supports: loss, loss_min"
+            f"Supported: {', '.join(objective_map.keys())}"
         )
 
     def get_voltages(self) -> pd.DataFrame:
@@ -169,7 +203,7 @@ class PyomoBackend(Backend):
     def get_all_results(self) -> dict[str, pd.DataFrame]:
         """Get all variable results from the solved model.
 
-        The OpfResult object dynamically extracts all Pyomo variables
+        The PyoResult object dynamically extracts all Pyomo variables
         from the model. This method returns them as a dictionary.
 
         Returns

@@ -53,7 +53,9 @@ def update_models(models: dict[str, LinDistMP]):
 
 
 def parse_v_up(model: LinDistMP, x: np.ndarray):
-    swing = model.bus.loc[model.bus.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE]), "name"].to_list()[0]
+    swing = model.bus.loc[
+        model.bus.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE]), "name"
+    ].to_list()[0]
     v = model.get_voltages(x)
     v = v.loc[v.name == swing, ["name", "t", "a", "b", "c"]]
     return v
@@ -74,7 +76,9 @@ def parse_v_dn(model: LinDistMP, x: np.ndarray, down_buses: list):
 
 
 def parse_s_up(model: LinDistMP, x: np.ndarray):
-    swing = model.bus.loc[model.bus.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE]), "name"].to_list()[0]
+    swing = model.bus.loc[
+        model.bus.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE]), "name"
+    ].to_list()[0]
     s = model.get_apparent_power_flows(x)
     s = s.loc[s["from_name"] == swing, ["from_name", "t", "a", "b", "c"]]
     s["name"] = s.from_name
@@ -143,7 +147,9 @@ def add_v_down_to_schedules(schedules, v, sending_area):
     v = v.loc[:, ["a", "b", "c"]]
     schedules.loc[:, [f"{sending_area}.{ph}.v" for ph in "abc"]] = v
     for t in v.index:
-        schedules.loc[schedules.time == t, [f"{sending_area}.{ph}.v" for ph in "abc"]] = v.loc[t].to_numpy()
+        schedules.loc[
+            schedules.time == t, [f"{sending_area}.{ph}.v" for ph in "abc"]
+        ] = v.loc[t].to_numpy()
     return schedules
 
 
@@ -165,9 +171,7 @@ def add_s_to_schedules(schedules, s, sending_area):
     return schedules
 
 
-def build_local_to_global_map(
-    primary_model: LinDistMP, models: dict[str, LinDistMP]
-):
+def build_local_to_global_map(primary_model: LinDistMP, models: dict[str, LinDistMP]):
     global_j_to_name_map = {
         bus_id - 1: str(bus_name)
         for bus_id, bus_name in primary_model.bus_data.loc[:, ["id", "name"]].to_numpy()
@@ -254,9 +258,7 @@ def _solve_pool(_models, _model_name, objective, kwargs):
 def _cvxpy_solve_all_parallel(models, objective, **kwargs):
     all_results = {}
     with mp.Pool() as pool:
-        args = [
-            (models, area_name, objective, kwargs) for area_name in models.keys()
-        ]
+        args = [(models, area_name, objective, kwargs) for area_name in models.keys()]
         all_results_list = pool.starmap(_solve_pool, args)
     for area_name, result in zip(models.keys(), all_results_list):
         all_results[area_name] = result
@@ -312,7 +314,6 @@ def solve_enapp(
     tol: float,
     **kwargs,
 ):
-
     tic = perf_counter()
     sources = {area_name: data["up_buses"][0] for area_name, data in area_info.items()}
     models = decompose(model, sources)

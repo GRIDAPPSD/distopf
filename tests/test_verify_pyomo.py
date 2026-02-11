@@ -2,7 +2,7 @@ import pytest
 import pyomo.environ as pyo
 from distopf.pyomo_models.objectives import loss_objective
 from distopf.pyomo_models.solvers import solve
-from distopf.pyomo_models.lindist_loads import LinDistPyoMPL
+from distopf.pyomo_models import create_lindist_model, add_constraints
 import distopf.matrix_models.multiperiod as mpopf
 from distopf.api import create_case
 from distopf import CASES_DIR
@@ -14,14 +14,18 @@ case.gen_data.control_variable = ""
 case.schedules.default = 1
 case.schedules.PV = 1
 case.bat_data = case.bat_data.head(0)  # delete battery data
-m1 = LinDistPyoMPL(case=case)
-m1.model.objective = loss_objective
+
+# Create Pyomo model using new API
+model = create_lindist_model(case)
+add_constraints(model)
+model.objective = loss_objective
+
 solver = pyo.SolverFactory("ipopt")
 if not solver.available(exception_flag=False):
     pytest.skip("Ipopt not available on this system", allow_module_level=True)
 
-results = solver.solve(m1.model)
-r1 = solve(m1.model)
+results = solver.solve(model)
+r1 = solve(model)
 
 m2 = mpopf.LinDistMPL(case=case)
 r2 = mpopf.cvxpy_solve(m2, mpopf.cp_obj_loss, solver="CLARABEL")

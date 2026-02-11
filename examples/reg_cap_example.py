@@ -4,7 +4,6 @@ from distopf.matrix_models.lindist_capacitor_regulator_mi import (
 )
 
 
-
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 
 model = LinDistModelCapacitorRegulatorMI(

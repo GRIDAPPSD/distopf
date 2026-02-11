@@ -1,5 +1,5 @@
 from enum import IntEnum
-from itertools import combinations_with_replacement
+from itertools import combinations_with_replacement, product
 import pyomo.environ as pyo  # type: ignore
 from typing import Tuple, List
 import pandas as pd
@@ -43,6 +43,15 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
             (i, ph1 + ph2)
             for i, phs in m.phase_map.items()
             for ph1, ph2 in combinations_with_replacement(phs, 2)
+            if i not in m.swing_bus_set
+        ]
+    )
+
+    m.bus_angle_phase_pair_set = pyo.Set(
+        initialize=[
+            (i, ph1 + ph2)
+            for i, phs in m.phase_map.items()
+            for ph1, ph2 in product(phs, repeat=2)
             if i not in m.swing_bus_set
         ]
     )
@@ -433,7 +442,7 @@ def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 
 
 def _create_angle_parameters(m: pyo.ConcreteModel, case: Case) -> None:
-    m.d = pyo.Param(m.bus_phase_pair_set, initialize=0, mutable=True)
+    m.d = pyo.Param(m.bus_angle_phase_pair_set, initialize=0, mutable=True)
 
 
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
