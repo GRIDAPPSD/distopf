@@ -57,10 +57,8 @@ def add_p_flow_nlp_constraints(m: LindistModelProtocol) -> None:
             [
                 m.l_flow[_id, "".join(sorted(ph + ph2)), t]
                 * (
-                    m.r[_id, "".join(sorted(ph + ph2))]
-                    * pyo.cos(m.d[_id, ph + ph2])
-                    - m.x[_id, "".join(sorted(ph + ph2))]
-                    * pyo.sin(m.d[_id, ph + ph2])
+                    m.r[_id, "".join(sorted(ph + ph2))] * pyo.cos(m.d[_id, ph + ph2])
+                    - m.x[_id, "".join(sorted(ph + ph2))] * pyo.sin(m.d[_id, ph + ph2])
                 )
                 for ph2 in m.phase_map[_id]
             ]
@@ -116,10 +114,8 @@ def add_q_flow_nlp_constraints(m: LindistModelProtocol) -> None:
             [
                 m.l_flow[_id, "".join(sorted(ph + ph2)), t]
                 * (
-                    m.x[_id, "".join(sorted(ph + ph2))]
-                    * pyo.cos(m.d[_id, ph + ph2])
-                    + m.r[_id, "".join(sorted(ph + ph2))]
-                    * pyo.sin(m.d[_id, ph + ph2])
+                    m.x[_id, "".join(sorted(ph + ph2))] * pyo.cos(m.d[_id, ph + ph2])
+                    + m.r[_id, "".join(sorted(ph + ph2))] * pyo.sin(m.d[_id, ph + ph2])
                 )
                 for ph2 in m.phase_map[_id]
             ]

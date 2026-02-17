@@ -57,6 +57,8 @@ class PyomoBackend(Backend):
             create_lindist_model,
             add_constraints,
             solve,
+            create_penalized_objective,
+            set_objective,
         )
         from distopf.results import PowerFlowResult
         import pyomo.environ as pyo  # type: ignore[import-untyped]
@@ -66,6 +68,12 @@ class PyomoBackend(Backend):
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         equality_only = kwargs.pop("equality_only", False)
         reg_tap_change_limit = kwargs.pop("reg_tap_change_limit", None)
+
+        voltage_weight = kwargs.pop("voltage_weight", None)
+        thermal_weight = kwargs.pop("thermal_weight", None)
+        generator_weight = kwargs.pop("generator_weight", None)
+        battery_weight = kwargs.pop("battery_weight", None)
+        soc_weight = kwargs.pop("soc_weight", None)
 
         # Create Pyomo model
         self.model = create_lindist_model(
@@ -87,7 +95,18 @@ class PyomoBackend(Backend):
 
         # Set objective
         obj_rule = self._resolve_objective(objective)
-        self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
+        if equality_only:
+            obj = create_penalized_objective(
+                obj_rule,
+                voltage_weight=voltage_weight,
+                thermal_weight=thermal_weight,
+                generator_weight=generator_weight,
+                battery_weight=battery_weight,
+                soc_weight=soc_weight,
+            )
+            set_objective(self.model, obj)
+        else:
+            self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
 
         # Solve
         self.result = solve(self.model)

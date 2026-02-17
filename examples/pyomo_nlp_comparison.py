@@ -75,8 +75,8 @@ start_step = 12
 
 # case = create_case(opf.CASES_DIR / "csv/ieee123_alternate", start_step=12)
 # case = create_case(opf.CASES_DIR / "cim/IEEE13.xml", start_step=12)
-case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
-# case_path = opf.CASES_DIR / "dss/test_line/main.dss"
+# case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
+case_path = opf.CASES_DIR / "dss/test_line/main.dss"
 # case_path = opf.CASES_DIR / "dss/test_reg/main.dss"
 # case_path = opf.CASES_DIR / "dss/test_line_unbal_load/main.dss"
 # case_path = opf.CASES_DIR / "dss/test_line_unbal_line/main.dss"

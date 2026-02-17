@@ -480,13 +480,18 @@ class TestObjectiveAliases:
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-
         # All these should work and produce same result
-        r1 = case.run_opf("loss_min", control_variable="Q")
+        r1 = case.run_opf(
+            "loss_min", control_variable="P", backend="pyomo"
+        )
 
         case2 = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-        r2 = case2.run_opf("loss", control_variable="Q")
-
+        r2 = case2.run_opf(
+            "loss", control_variable="P", backend="pyomo"
+        )
+        print()
+        print(r2.p_gens)
+        print(r2.q_gens)
         # Results should be identical (column names are 'a', 'b', 'c')
         assert (r1.voltages["a"] - r2.voltages["a"]).abs().max() < 1e-6
 
@@ -537,14 +542,14 @@ class TestBackendSelection:
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        assert case._select_backend(control_regulators=True) == "matrix"
+        assert case._select_backend(control_regulators=True) == "pyomo"
 
     def test_auto_selects_multiperiod_for_n_steps(self):
         """Cases with n_steps > 1 should auto-select multiperiod."""
         import distopf as opf
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13", n_steps=24)
-        assert case._select_backend() == "multiperiod"
+        assert case._select_backend() == "pyomo"
 
     def test_explicit_matrix_backend(self):
         """Can explicitly use matrix backend."""

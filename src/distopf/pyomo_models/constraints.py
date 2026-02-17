@@ -168,7 +168,7 @@ def add_generator_constant_q_constraints(m: LindistModelProtocol) -> None:
 
 def add_generator_constant_p_constraints_q_control(m: LindistModelProtocol) -> None:
     def _rule(m: LindistModelProtocol, _id, ph, t):
-        if m.gen_control_type[_id, ph] in [ControlVariable.P, ControlVariable.PQ]:
+        if m.gen_control_type[_id, ph] != ControlVariable.Q:
             return pyo.Constraint.Skip
         return m.p_gen[_id, ph, t] == m.p_gen_nom[_id, ph, t]
 
@@ -177,7 +177,7 @@ def add_generator_constant_p_constraints_q_control(m: LindistModelProtocol) -> N
 
 def add_generator_constant_q_constraints_p_control(m: LindistModelProtocol) -> None:
     def _rule(m: LindistModelProtocol, _id, ph, t):
-        if m.gen_control_type[_id, ph] in [ControlVariable.Q, ControlVariable.PQ]:
+        if m.gen_control_type[_id, ph] != ControlVariable.P:
             return pyo.Constraint.Skip
         return m.q_gen[_id, ph, t] == m.q_gen_nom[_id, ph, t]
 
