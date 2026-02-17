@@ -68,7 +68,7 @@ model.objective = pyo.Objective(
 solver_name = "highs"
 print(f"\nSolving with {solver_name}...")
 solver = pyo.SolverFactory(solver_name)
-result = solver.solve(model, tee=False)
+result = solver.solve(model, tee=True)
 
 print(f"Solver status: {result.solver.termination_condition}")
 

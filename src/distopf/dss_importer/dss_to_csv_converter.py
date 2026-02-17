@@ -230,7 +230,9 @@ class DSSToCSVConverter:
             element_type = name.split(".")[0]
             element_name = name.split(".")[1]
             i_end = i + n_cond * n_term * 2
-            cur_ang = np.array(all_currents_mag_ang[i:i_end]).reshape(n_cond * n_term, 2)
+            cur_ang = np.array(all_currents_mag_ang[i:i_end]).reshape(
+                n_cond * n_term, 2
+            )
             i = i_end
             if element_type not in ["Line", "Transformer", "Reactor"]:
                 continue
@@ -244,8 +246,8 @@ class DSSToCSVConverter:
             bus1 = bus_names[0].split(".")[0]
             bus2 = bus_names[1].split(".")[0]
             self.dss.Circuit.SetActiveBus(bus2)
-            v_base = self.dss.Bus.kVBase()*1000
-            current_base = self.s_base/v_base
+            v_base = self.dss.Bus.kVBase() * 1000
+            current_base = self.s_base / v_base
             active_phases = np.array([0, 1, 2])
             if n_phases < 3:
                 active_phases = (
@@ -260,9 +262,7 @@ class DSSToCSVConverter:
                 cur_ = cur_in
             else:
                 cur_ = cur_out
-            cur = np.array(
-                [np.nan, np.nan, np.nan]
-            )
+            cur = np.array([np.nan, np.nan, np.nan])
             cur[active_phases] = cur_[:n_phases]
             cur = cur / current_base
             self.dss.Circuit.SetActiveBus(bus2)
@@ -322,7 +322,9 @@ class DSSToCSVConverter:
             element_type = name.split(".")[0]
             element_name = name.split(".")[1]
             i_end = i + n_cond * n_term * 2
-            cur_ang = np.array(all_currents_mag_ang[i:i_end]).reshape(n_cond * n_term, 2)
+            cur_ang = np.array(all_currents_mag_ang[i:i_end]).reshape(
+                n_cond * n_term, 2
+            )
             i = i_end
             if element_type not in ["Line", "Transformer", "Reactor"]:
                 continue
@@ -349,9 +351,7 @@ class DSSToCSVConverter:
                 ang_ = ang_in
             else:
                 ang_ = ang_out - 180
-            ang = np.array(
-                [np.nan, np.nan, np.nan]
-            )
+            ang = np.array([np.nan, np.nan, np.nan])
             ang[active_phases] = ang_[:n_phases]
             self.dss.Circuit.SetActiveBus(bus2)
             each_power = dict(
@@ -359,9 +359,9 @@ class DSSToCSVConverter:
                 tb=self.bus_names_to_index_map[bus2],
                 from_name=bus1,
                 to_name=bus2,
-                a=ang[0]%360,
-                b=ang[1]%360,
-                c=ang[2]%360,
+                a=ang[0] % 360,
+                b=ang[1] % 360,
+                c=ang[2] % 360,
                 nodes=self.dss.Bus.Nodes(),
             )
             power_data.append(each_power)

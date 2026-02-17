@@ -37,8 +37,8 @@ class BackendSelector:
             return self.backend_override
 
         if control_regulators or control_capacitors:
-            return "matrix"
-        return "multiperiod"
+            return "pyomo"
+        return "pyomo"
 
     def validate_backend(self, backend: Optional[str]) -> str:
         """

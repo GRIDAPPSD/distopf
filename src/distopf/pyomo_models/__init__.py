@@ -68,7 +68,12 @@ from distopf.pyomo_models.constraints import (
 from distopf.pyomo_models.results import PyoResult, get_values, get_voltages
 
 # Objectives
-from distopf.pyomo_models.objectives import loss_objective, loss_objective_rule
+from distopf.pyomo_models.objectives import (
+    loss_objective,
+    loss_objective_rule,
+    create_penalized_objective,
+    set_objective,
+)
 
 # Solver
 from distopf.pyomo_models.solvers import solve
@@ -112,6 +117,8 @@ __all__ = [
     # Objectives
     "loss_objective",
     "loss_objective_rule",
+    "create_penalized_objective",
+    "set_objective",
     # Solver
     "solve",
 ]

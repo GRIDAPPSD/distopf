@@ -11,3 +11,4 @@ build/*
 examples/layouts/*
 .zed/debug.json
 .zed/tasks.json
+/.vscode/
