@@ -39,14 +39,14 @@ opf.plot_polar(
     p_flows.loc[:, ["id", "name", "a", "b", "c"]],
     q_flows.loc[:, ["id", "name", "a", "b", "c"]],
 ).show(renderer="browser")
-opf.plot_polar(
-    results.p_gens.loc[:, ["id", "name", "a", "b", "c"]],
-    results.q_gens.loc[:, ["id", "name", "a", "b", "c"]],
-).show(renderer="browser")
+# opf.plot_polar(
+#     results.p_gens.loc[:, ["id", "name", "a", "b", "c"]],
+#     results.q_gens.loc[:, ["id", "name", "a", "b", "c"]],
+# ).show(renderer="browser")
 
-case.branch_data.loc[case.branch_data.tb == 2, ["sa_max", "sb_max", "sc_max"]] = (
-    1.205 * 1.0823921
-)
+# case.branch_data.loc[case.branch_data.tb == 2, ["sa_max", "sb_max", "sc_max"]] = (
+#     1.205 * 1.0823921
+# )
 print(case.branch_data.head())
 results = case.run_opf(objective, control_variable=control_variable, backend=backend)
 s_flows = results.p_flows.copy()
@@ -64,6 +64,6 @@ opf.plot_polar(
     p_flows.loc[:, ["id", "name", "a", "b", "c"]],
     q_flows.loc[:, ["id", "name", "a", "b", "c"]],
 ).show(renderer="browser")
-opf.plot_polar(results.p_gens, results.q_gens).show(renderer="browser")
+# opf.plot_polar(results.p_gens, results.q_gens).show(renderer="browser")
 
 print(results.p_gens)

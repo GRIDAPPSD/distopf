@@ -103,6 +103,60 @@ def generation_curtailment_objective_rule(model: LindistModelProtocol):
     return total_curtailment
 
 
+# ============ Slack Variable Penalty Functions ========================================
+# ======================================================================================
+#
+# These penalty functions work with slack variables to allow flexible constraint
+# relaxation. Slack variables are added to inequality constraints to convert them
+# to equalities, enabling use with LP/MILP solvers while still penalizing violations.
+#
+# Example: v_min² ≤ v² ≤ v_max² becomes:
+#   v² ≥ v_min² - s  (allows v² to go below v_min² by amount s)
+#   v² ≤ v_max² + s  (allows v² to go above v_max² by amount s)
+# where s ≥ 0 is the slack variable.
+# ======================================================================================
+
+
+def voltage_slack_penalty(model: LindistModelProtocol, weight: float = 1e3):
+    """
+    Linear penalty for voltage slack violations.
+
+    Penalizes the sum of all slack variables across all buses, phases, and time steps.
+    This encourages the optimizer to minimize voltage violations while allowing
+    flexibility when necessary.
+
+    Parameters
+    ----------
+    model : LindistModelProtocol
+        Pyomo model with v2_slack variables
+    weight : float
+        Penalty weight (default: 1e3)
+
+    Returns
+    -------
+    float or Pyomo expression
+        Total penalty for slack violations
+
+    Notes
+    -----
+    Requires model to have v2_slack variable defined via add_slack_constraints().
+    Uses linear penalty (sum of slacks) rather than quadratic for better LP compatibility.
+
+    Examples
+    --------
+    >>> penalty = voltage_slack_penalty(model, weight=1e4)
+    >>> obj = loss_objective_rule(model) + penalty
+    """
+    if not hasattr(model, "v2_slack"):
+        return 0
+
+    penalty = 0
+    for _id, ph in model.bus_phase_set:
+        for t in model.time_set:
+            penalty += model.v2_slack[_id, ph, t]
+    return weight * penalty
+
+
 # ============ Penalty Functions for Soft Constraints ==================================
 # ======================================================================================
 #
@@ -524,6 +578,56 @@ def add_penalized_substation_power_objective(
         soc_weight=soc_weight,
     )
     set_objective(model, obj)
+
+
+def add_voltage_slack_penalty_to_objective(
+    model: LindistModelProtocol,
+    primary_objective_rule,
+    slack_weight: float = 1e3,
+) -> None:
+    """
+    Add voltage slack penalty to a primary objective function.
+
+    Combines a primary objective (e.g., loss minimization) with a linear penalty
+    on voltage slack variables. This allows the optimizer to violate voltage bounds
+    when necessary to achieve the primary objective, while penalizing such violations.
+
+    Parameters
+    ----------
+    model : LindistModelProtocol
+        Pyomo model with v2_slack variables (from add_slack_constraints)
+    primary_objective_rule : callable
+        Function that takes model and returns primary objective expression
+    slack_weight : float
+        Weight for voltage slack penalty (default: 1e3)
+
+    Returns
+    -------
+    None
+        Sets model.objective directly
+
+    Examples
+    --------
+    >>> from distopf.pyomo_models import add_slack_constraints
+    >>> add_slack_constraints(model)
+    >>> add_voltage_slack_penalty_to_objective(
+    ...     model,
+    ...     loss_objective_rule,
+    ...     slack_weight=1e4
+    ... )
+    >>> result = solver.solve(model)
+
+    Notes
+    -----
+    This is a convenience function for the common case of adding voltage slack
+    penalties. For more complex penalty combinations, construct the objective
+    directly or use create_penalized_objective().
+    """
+
+    def objective_rule(m):
+        return primary_objective_rule(m) + voltage_slack_penalty(m, slack_weight)
+
+    set_objective(model, pyo.Objective(rule=objective_rule, sense=pyo.minimize))
 
 
 loss_objective = pyo.Objective(rule=loss_objective_rule, sense=pyo.minimize)
