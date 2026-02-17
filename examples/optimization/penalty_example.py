@@ -30,8 +30,8 @@ add_constraints(model, equality_only=True)
 objectives.add_penalized_loss_objective(
     model,
     voltage_weight=1e4,  # High penalty for voltage violations
-    thermal_weight=1e3,  # Penalty for thermal limit violations
-    generator_weight=1e3,  # Penalty for generator limit violations
+    thermal_weight=1e4,  # Penalty for thermal limit violations
+    generator_weight=1e4,  # Penalty for generator limit violations
 )
 
 # Solve with IPOPT

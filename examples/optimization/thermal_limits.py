@@ -29,12 +29,24 @@ s_flows.a = np.sqrt(results.p_flows.a**2 + results.q_flows.a**2)
 s_flows.b = np.sqrt(results.p_flows.b**2 + results.q_flows.b**2)
 s_flows.c = np.sqrt(results.p_flows.c**2 + results.q_flows.c**2)
 print(s_flows)
-opf.plot_polar(results.p_flows, results.q_flows).show(renderer="browser")
-opf.plot_polar(results.p_gens, results.q_gens).show(renderer="browser")
+p_flows = results.p_flows
+p_flows["id"] = p_flows.tb
+p_flows["name"] = p_flows.to_name
+q_flows = results.q_flows
+q_flows["id"] = q_flows.tb
+q_flows["name"] = q_flows.to_name
+opf.plot_polar(
+    p_flows.loc[:, ["id", "name", "a", "b", "c"]],
+    q_flows.loc[:, ["id", "name", "a", "b", "c"]],
+).show(renderer="browser")
+# opf.plot_polar(
+#     results.p_gens.loc[:, ["id", "name", "a", "b", "c"]],
+#     results.q_gens.loc[:, ["id", "name", "a", "b", "c"]],
+# ).show(renderer="browser")
 
-case.branch_data.loc[case.branch_data.tb == 2, ["sa_max", "sb_max", "sc_max"]] = (
-    1.205 * 1.0823921
-)
+# case.branch_data.loc[case.branch_data.tb == 2, ["sa_max", "sb_max", "sc_max"]] = (
+#     1.205 * 1.0823921
+# )
 print(case.branch_data.head())
 results = case.run_opf(objective, control_variable=control_variable, wrapper=wrapper)
 s_flows = results.p_flows.copy()
@@ -42,7 +54,10 @@ s_flows.a = np.sqrt(results.p_flows.a**2 + results.q_flows.a**2)
 s_flows.b = np.sqrt(results.p_flows.b**2 + results.q_flows.b**2)
 s_flows.c = np.sqrt(results.p_flows.c**2 + results.q_flows.c**2)
 print(s_flows)
-opf.plot_polar(results.p_flows, results.q_flows).show(renderer="browser")
-opf.plot_polar(results.p_gens, results.q_gens).show(renderer="browser")
+opf.plot_polar(
+    p_flows.loc[:, ["id", "name", "a", "b", "c"]],
+    q_flows.loc[:, ["id", "name", "a", "b", "c"]],
+).show(renderer="browser")
+# opf.plot_polar(results.p_gens, results.q_gens).show(renderer="browser")
 
 print(results.p_gens)
