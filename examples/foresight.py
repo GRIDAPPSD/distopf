@@ -126,7 +126,7 @@ case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 case.bus_data.loc[:, ["pl_a", "pl_b", "pl_c"]] *= 3.5
 case.bus_data.loc[:, ["ql_a", "ql_b", "ql_c"]] *= 3.5
 
-case.branch_data.loc[case.branch_data.tb == 2, ["sa_max", "sb_max", "sc_max"]] = 0.0
+case.branch_data.loc[case.branch_data.tb == 3, ["sa_max", "sb_max", "sc_max"]] = 3.0
 # Build model with equality constraints only (no hard voltage/thermal limits)
 # This uses equality_only=True to skip inequality constraints
 model = create_lindist_model(case)
