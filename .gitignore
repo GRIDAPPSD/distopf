@@ -12,3 +12,5 @@ examples/layouts/*
 .zed/debug.json
 .zed/tasks.json
 /.vscode/
+*.code-workspace
+scratch/*

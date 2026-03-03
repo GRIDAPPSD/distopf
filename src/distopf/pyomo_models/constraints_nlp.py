@@ -57,8 +57,8 @@ def add_p_flow_nlp_constraints(m: LindistModelProtocol) -> None:
             [
                 m.l_flow[_id, "".join(sorted(ph + ph2)), t]
                 * (
-                    m.r[_id, "".join(sorted(ph + ph2))] * pyo.cos(m.d[_id, ph + ph2])
-                    - m.x[_id, "".join(sorted(ph + ph2))] * pyo.sin(m.d[_id, ph + ph2])
+                    m.r[_id, "".join(sorted(ph + ph2))] * pyo.cos(m.d[_id, ph2 + ph])
+                    - m.x[_id, "".join(sorted(ph + ph2))] * pyo.sin(m.d[_id, ph2 + ph])
                 )
                 for ph2 in m.phase_map[_id]
             ]
@@ -114,8 +114,8 @@ def add_q_flow_nlp_constraints(m: LindistModelProtocol) -> None:
             [
                 m.l_flow[_id, "".join(sorted(ph + ph2)), t]
                 * (
-                    m.x[_id, "".join(sorted(ph + ph2))] * pyo.cos(m.d[_id, ph + ph2])
-                    + m.r[_id, "".join(sorted(ph + ph2))] * pyo.sin(m.d[_id, ph + ph2])
+                    m.x[_id, "".join(sorted(ph + ph2))] * pyo.cos(m.d[_id, ph2 + ph])
+                    + m.r[_id, "".join(sorted(ph + ph2))] * pyo.sin(m.d[_id, ph2 + ph])
                 )
                 for ph2 in m.phase_map[_id]
             ]
@@ -175,7 +175,8 @@ def add_voltage_drop_nlp_constraints(m: LindistModelProtocol) -> None:
         )
         voltage_drop_term3 = sum(
             [
-                1
+                # 1
+                2  # TODO: IS IT A 1 or a 2?
                 * m.l_flow[_id, "".join(sorted(q1 + q2)), t]
                 * (
                     pyo.cos(m.d[_id, q1 + q2])
@@ -191,7 +192,8 @@ def add_voltage_drop_nlp_constraints(m: LindistModelProtocol) -> None:
                     * m.x[_id, "".join(sorted(a + q1))]
                     * m.r[_id, "".join(sorted(a + q2))]
                 )
-                for q1, q2 in product("abc", repeat=2)
+                # for q1, q2 in product("abc", repeat=2)
+                for q1, q2 in combinations("abc", 2)  # TODO: combination or product?
                 if q1 != q2 and q1 in m.phase_map[_id] and q2 in m.phase_map[_id]
             ]
         )
@@ -250,7 +252,8 @@ def add_regulator_nlp_constraints(m: LindistModelProtocol) -> None:
         )
         voltage_drop_term3 = sum(
             [
-                1
+                # 1
+                2
                 * m.l_flow[_id, "".join(sorted(q1 + q2)), t]
                 * (
                     pyo.cos(m.d[_id, q1 + q2])
@@ -266,7 +269,8 @@ def add_regulator_nlp_constraints(m: LindistModelProtocol) -> None:
                     * m.x[_id, "".join(sorted(a + q1))]
                     * m.r[_id, "".join(sorted(a + q2))]
                 )
-                for q1, q2 in product("abc", repeat=2)
+                # for q1, q2 in product("abc", repeat=2)
+                for q1, q2 in combinations("abc", 2)
                 if q1 != q2 and q1 in m.phase_map[_id] and q2 in m.phase_map[_id]
             ]
         )

@@ -16,49 +16,54 @@ from distopf.pyomo_models.results import (
 from distopf.fbs import fbs_solve
 from math import pi
 
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.express as px
 
-def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
-    i_angles["ab"] = (i_angles.a - i_angles.b) % 360
-    i_angles["bc"] = (i_angles.b - i_angles.c) % 360
-    i_angles["ca"] = (i_angles.c - i_angles.a) % 360
-    i_angles["ba"] = -i_angles.ab
-    i_angles["cb"] = -i_angles.bc
-    i_angles["ac"] = -i_angles.ca
-    i_angles["aa"] = i_angles.a - i_angles.a
-    i_angles["bb"] = i_angles.b - i_angles.b
-    i_angles["cc"] = i_angles.c - i_angles.c
-    print("i_angles")
-    print(i_angles)
-    data = {
-        (_id, phases): float(i_angles.loc[i_angles.tb == _id, phases].tolist()[0])
-        * pi
-        / 180
-        for _id, phases in non_linear_model.bus_angle_phase_pair_set
-    }
-    for key in non_linear_model.d:
-        non_linear_model.d[key] = data[key]
+def initialize_non_linear_model(non_linear_model, fbs_results):
     print()
     nlp = non_linear_model
-    lp = linear_model
-    nlp.v2.set_values(lp.v2.get_values())
-    nlp.v2_reg.set_values(lp.v2_reg.get_values())
-    nlp.p_flow.set_values(lp.p_flow.get_values())
-    nlp.q_flow.set_values(lp.q_flow.get_values())
-    nlp.p_gen.set_values(lp.p_gen.get_values())
-    nlp.q_gen.set_values(lp.q_gen.get_values())
-    nlp.p_load.set_values(lp.p_load.get_values())
-    nlp.q_load.set_values(lp.q_load.get_values())
-    nlp.q_cap.set_values(lp.q_cap.get_values())
-    nlp.p_charge.set_values(lp.p_charge.get_values())
-    nlp.p_discharge.set_values(lp.p_discharge.get_values())
-    nlp.p_bat.set_values(lp.p_bat.get_values())
-    nlp.q_bat.set_values(lp.q_bat.get_values())
-    nlp.soc.set_values(lp.soc.get_values())
+    fbs = fbs_results
+    v_data = {}
+    v_reg_data = {}
+    for _id, ph, t in nlp.bus_phase_set * nlp.time_set:
+        v_mag = fbs.voltages.loc[(fbs.voltages.id == _id), ph].to_numpy()[0]
+        v_data[(_id, ph, t)] = v_mag**2
+        if (_id, ph) in nlp.reg_phase_set:
+            v_reg_data[(_id, ph, t)] = v_mag**2
+    nlp.v2.set_values(v_data)
+    nlp.v2_reg.set_values(v_reg_data)
+
+    p_data = {}
+    q_data = {}
+    for _id, ph, t in nlp.branch_phase_set * nlp.time_set:
+        p_flow = fbs.p_flows.loc[(fbs.p_flows.tb == _id), ph].to_numpy()[0]
+        q_flow = fbs.q_flows.loc[(fbs.q_flows.tb == _id), ph].to_numpy()[0]
+        p_data[(_id, ph, t)] = p_flow
+        q_data[(_id, ph, t)] = q_flow
+    nlp.p_flow.set_values(p_data)
+    nlp.q_flow.set_values(q_data)
+    # nlp.v2_reg.set_values(lp.v2_reg.get_values())
+    # nlp.p_flow.set_values(lp.p_flow.get_values())
+    # nlp.q_flow.set_values(lp.q_flow.get_values())
+    # nlp.p_gen.set_values(lp.p_gen.get_values())
+    # nlp.q_gen.set_values(lp.q_gen.get_values())
+    # nlp.p_load.set_values(lp.p_load.get_values())
+    # nlp.q_load.set_values(lp.q_load.get_values())
+    # nlp.q_cap.set_values(lp.q_cap.get_values())
+    # nlp.p_charge.set_values(lp.p_charge.get_values())
+    # nlp.p_discharge.set_values(lp.p_discharge.get_values())
+    # nlp.p_bat.set_values(lp.p_bat.get_values())
+    # nlp.q_bat.set_values(lp.q_bat.get_values())
+    # nlp.soc.set_values(lp.soc.get_values())
     l_data = {}
-    for _id, ph, t in lp.branch_phase_set * lp.time_set:
-        l_data[(_id, ph + ph, t)] = (
-            lp.p_flow[_id, ph, t].value ** 2 + lp.q_flow[_id, ph, t].value ** 2
-        ) / lp.v2[_id, ph, t].value
+    for _id, ph, t in nlp.branch_phase_set * nlp.time_set:
+        i_mag = fbs.currents.loc[(fbs.currents.tb == _id), ph].to_numpy()[0]
+        l_data[(_id, ph + ph, t)] = i_mag**2
+    # for _id, ph, t in lp.branch_phase_set * lp.time_set:
+    #     l_data[(_id, ph + ph, t)] = (
+    #         lp.p_flow[_id, ph, t].value ** 2 + lp.q_flow[_id, ph, t].value ** 2
+    #     ) / lp.v2[lp.from_bus_map[_id], ph, t].value
     for _id, phases, t in nlp.bus_phase_pair_set * nlp.time_set:
         ph1 = phases[0]
         ph2 = phases[1]
@@ -68,6 +73,26 @@ def initialize_non_linear_model(non_linear_model, linear_model, i_angles):
             l_data[_id, ph1 + ph1, t] * l_data[_id, ph2 + ph2, t]
         )
     nlp.l_flow.set_values(l_data)
+
+    fbs.current_angles["ab"] = (fbs.current_angles.a - fbs.current_angles.b) % 360
+    fbs.current_angles["bc"] = (fbs.current_angles.b - fbs.current_angles.c) % 360
+    fbs.current_angles["ca"] = (fbs.current_angles.c - fbs.current_angles.a) % 360
+    fbs.current_angles["ba"] = -fbs.current_angles.ab
+    fbs.current_angles["cb"] = -fbs.current_angles.bc
+    fbs.current_angles["ac"] = -fbs.current_angles.ca
+    fbs.current_angles["aa"] = fbs.current_angles.a - fbs.current_angles.a
+    fbs.current_angles["bb"] = fbs.current_angles.b - fbs.current_angles.b
+    fbs.current_angles["cc"] = fbs.current_angles.c - fbs.current_angles.c
+    data = {
+        (_id, phases): float(
+            fbs.current_angles.loc[fbs.current_angles.tb == _id, phases].tolist()[0]
+        )
+        * pi
+        / 180
+        for _id, phases in nlp.bus_angle_phase_pair_set
+    }
+    for key in nlp.d:
+        nlp.d[key] = data[key]
     return nlp
 
 
@@ -76,14 +101,17 @@ start_step = 12
 # case = create_case(opf.CASES_DIR / "csv/ieee123_alternate", start_step=12)
 # case = create_case(opf.CASES_DIR / "cim/IEEE13.xml", start_step=12)
 # case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
-case_path = opf.CASES_DIR / "dss/test_line/main.dss"
+# case_path = opf.CASES_DIR / "dss/test_line/main.dss"
 # case_path = opf.CASES_DIR / "dss/test_reg/main.dss"
 # case_path = opf.CASES_DIR / "dss/test_line_unbal_load/main.dss"
 # case_path = opf.CASES_DIR / "dss/test_line_unbal_line/main.dss"
-# case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
+case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
 case = create_case(case_path, start_step=start_step)
+print(case.bus_data)
 # case = create_case(opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS", start_step=12)
-case.gen_data.control_variable = ""
+case.gen_data.control_variable = "P"
+case.bus_data.v_max = 2
+case.bus_data.v_min = 0
 # cross_phase_cols = ['rab', 'rac', 'rbc', 'xab', 'xac', 'xbc']
 # case.branch_data.loc[:, cross_phase_cols] = 0.0
 dss_parser = opf.DSSToCSVConverter(case_path)
@@ -164,12 +192,20 @@ m1: pyo.ConcreteModel = lindist_model
 m2: pyo.ConcreteModel = nlbf.model
 
 
+def generation_curtailment_max_objective_rule(model):
+    total_curtailment = 0
+    for _id, ph in model.gen_phase_set:
+        for t in model.time_set:
+            total_curtailment += model.p_gen_nom[_id, ph, t] - model.p_gen[_id, ph, t]
+    return -total_curtailment
+
+
 m1.objective = pyo.Objective(
-    rule=substation_power_objective_rule,
+    rule=generation_curtailment_max_objective_rule,
     sense=pyo.minimize,
 )
 m2.objective = pyo.Objective(
-    rule=substation_power_objective_rule,  # loss_objective_rule,
+    rule=generation_curtailment_max_objective_rule,  # loss_objective_rule,
     sense=pyo.minimize,
 )
 # Solve the model
@@ -217,10 +253,10 @@ else:
     print("Linear Optimization failed!")
 
 
-m2 = initialize_non_linear_model(m2, m1, i_ang)
+m2 = initialize_non_linear_model(m2, fbs_results)
 
 
-results2 = opt.solve(m2, tee=False)
+results2 = opt.solve(m2, tee=True)
 if results2.solver.status == pyo.SolverStatus.ok:
     print("Optimization successful!")
     print(f"Objective value: {pyo.value(m2.objective)}")
@@ -264,6 +300,8 @@ if results2.solver.status == pyo.SolverStatus.ok:
     p_list.append(p_flow_nlp)
     q_flow_nlp["algorithm"] = "nlp"
     q_list.append(q_flow_nlp)
+    print(p_gen_nlp)
+    print(q_gen_nlp)
 else:
     print("Non-linear Optimization failed!")
 
@@ -316,11 +354,16 @@ def calculate_nodal_distances(case):
     return distances
 
 
-def plot_voltage_vs_distance(v_data, case, title="Voltage vs Distance from Source"):
+def plot_voltage_vs_distance(
+    v_data,
+    case,
+    title="Voltage vs Distance from Source",
+    color_by="algorithm",
+):
     """
     Plot voltage on y-axis vs nodal distance from source bus on x-axis.
     Lines follow the actual network topology (from-bus to to-bus connections).
-
+    
     Parameters
     ----------
     v_data : pd.DataFrame
@@ -329,13 +372,14 @@ def plot_voltage_vs_distance(v_data, case, title="Voltage vs Distance from Sourc
         Case object to calculate distances and branch data
     title : str
         Plot title
-
+    color_by : str
+        Column name to use for color grouping (e.g., "algorithm")
+        
     Returns
     -------
     plotly.graph_objects.Figure
         The plotly figure
     """
-    import plotly.graph_objects as go
 
     distances = calculate_nodal_distances(case)
 
@@ -344,10 +388,7 @@ def plot_voltage_vs_distance(v_data, case, title="Voltage vs Distance from Sourc
     v_data_copy["distance"] = v_data_copy["id"].map(distances)
 
     # Create subplots for each phase
-    from plotly.subplots import make_subplots
-
     phases = ["a", "b", "c"]
-    algorithms = v_data_copy["algorithm"].unique()
 
     fig = make_subplots(
         rows=1,
@@ -356,39 +397,29 @@ def plot_voltage_vs_distance(v_data, case, title="Voltage vs Distance from Sourc
         shared_yaxes=True,
     )
 
-    # Define colors for algorithms
-    color_map = {
-        "dss": "red",
-        "fbs": "blue",
-        "lindist": "green",
-        "nlp_relaxed": "orange",
-        "nlp": "purple",
-    }
+    # Get unique values for color_by column and assign colors automatically
+    color_groups = v_data_copy[color_by].unique()
+    colors = px.colors.qualitative.Plotly
+    if len(color_groups) > len(colors):
+        colors = px.colors.qualitative.Alphabet
+    color_map = {group: colors[i % len(colors)] for i, group in enumerate(color_groups)}
 
-    dash_map = {
-        "dss": "solid",
-        "fbs": "solid",
-        "lindist": "solid",
-        "nlp_relaxed": "dash",
-        "nlp": "dot",
-    }
-
-    # Track which algorithms have been added to legend to avoid duplicates
+    # Track which groups have been added to legend to avoid duplicates
     legend_added = set()
 
-    # For each phase, algorithm, and branch, draw a line following the network topology
+    # For each phase, group, and branch, draw a line following the network topology
     for col_idx, phase in enumerate(phases, 1):
-        for algorithm in algorithms:
-            # Get voltage data for this algorithm and phase
-            v_algo = v_data_copy[
-                (v_data_copy["algorithm"] == algorithm)
+        for group in color_groups:
+            # Get voltage data for this group and phase
+            v_group = v_data_copy[
+                (v_data_copy[color_by] == group)
                 & (v_data_copy["phase"] == phase)
             ].copy()
 
             # Create a mapping of bus id to voltage, name, distance
-            v_map = dict(zip(v_algo["id"], v_algo["value"]))
-            d_map = dict(zip(v_algo["id"], v_algo["distance"]))
-            name_map = dict(zip(v_algo["id"], v_algo["name"]))
+            v_map = dict(zip(v_group["id"], v_group["value"]))
+            d_map = dict(zip(v_group["id"], v_group["distance"]))
+            name_map = dict(zip(v_group["id"], v_group["name"]))
 
             # For each branch, draw a line segment following the topology
             for idx, branch in case.branch_data.iterrows():
@@ -398,14 +429,14 @@ def plot_voltage_vs_distance(v_data, case, title="Voltage vs Distance from Sourc
                 if fb in v_map and tb in v_map:
                     # Create hover text for both endpoints
                     hover_text = [
-                        f"<b>{name_map[fb]}</b><br>ID: {fb}<br>Voltage: {v_map[fb]:.4f} pu",
-                        f"<b>{name_map[tb]}</b><br>ID: {tb}<br>Voltage: {v_map[tb]:.4f} pu",
+                        f"<b>{name_map[fb]}</b><br>ID: {fb}<br>Voltage: {v_map[fb]:.4f} pu<br><b>{color_by}:</b> {group}",
+                        f"<b>{name_map[tb]}</b><br>ID: {tb}<br>Voltage: {v_map[tb]:.4f} pu<br><b>{color_by}:</b> {group}",
                     ]
 
-                    # Determine if this algorithm should show in legend
-                    show_legend = algorithm not in legend_added
+                    # Determine if this group should show in legend
+                    show_legend = group not in legend_added
                     if show_legend:
-                        legend_added.add(algorithm)
+                        legend_added.add(group)
 
                     # Draw line from from-bus to to-bus
                     fig.add_trace(
@@ -413,14 +444,11 @@ def plot_voltage_vs_distance(v_data, case, title="Voltage vs Distance from Sourc
                             x=[d_map[fb], d_map[tb]],
                             y=[v_map[fb], v_map[tb]],
                             mode="lines+markers",
-                            name=algorithm,
-                            line=dict(
-                                color=color_map.get(algorithm, "black"),
-                                dash=dash_map.get(algorithm, "solid"),
-                            ),
-                            legendgroup=algorithm,
+                            name=str(group),
+                            line=dict(color=color_map[group], width=1),
+                            legendgroup=str(group),
                             showlegend=show_legend,
-                            marker=dict(size=6),
+                            marker=dict(size=4, color=color_map[group]),
                             hovertext=hover_text,
                             hoverinfo="text",
                         ),
@@ -431,20 +459,23 @@ def plot_voltage_vs_distance(v_data, case, title="Voltage vs Distance from Sourc
     fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=1)
     fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=2)
     fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=3)
-
     fig.update_yaxes(title_text="Voltage (pu)", row=1, col=1)
     fig.update_layout(title_text=title, hovermode="closest")
+
     return fig
 
-
 def plot_line_flow_vs_distance(
-    flow_data, case, flow_name="Power Flow", title="Line Flow vs Distance from Source"
+    flow_data,
+    case,
+    flow_name="Power Flow",
+    title="Line Flow vs Distance from Source",
+    color_by="algorithm",
 ):
     """
     Plot line flow on y-axis vs nodal distance from source bus on x-axis.
-    Each point represents the flow into the to-bus.
+    Each point represents the flow into the to-bus, plotted at the to-bus distance.
+    Lines connect from-bus to to-bus following network topology.
     Hover text shows from-bus and to-bus information.
-
     Parameters
     ----------
     flow_data : pd.DataFrame
@@ -455,25 +486,23 @@ def plot_line_flow_vs_distance(
         Name of the flow type for hover text (e.g., "Active Power", "Reactive Power")
     title : str
         Plot title
-
+    color_by : str
+        Column name to use for color grouping (e.g., "algorithm", "phase", or any other column)
     Returns
     -------
     plotly.graph_objects.Figure
         The plotly figure
     """
-    import plotly.graph_objects as go
 
     distances = calculate_nodal_distances(case)
 
-    # Add distance column for to-bus only
+    # Add distance columns for both buses
     flow_data_copy = flow_data.copy()
+    flow_data_copy["from_distance"] = flow_data_copy["fb"].astype(int).map(distances)
     flow_data_copy["to_distance"] = flow_data_copy["tb"].astype(int).map(distances)
 
     # Create subplots for each phase
-    from plotly.subplots import make_subplots
-
     phases = ["a", "b", "c"]
-    algorithms = flow_data_copy["algorithm"].unique()
 
     fig = make_subplots(
         rows=1,
@@ -482,97 +511,147 @@ def plot_line_flow_vs_distance(
         shared_yaxes=True,
     )
 
-    # Define colors for algorithms
-    color_map = {
-        "dss": "red",
-        "fbs": "blue",
-        "lindist": "green",
-        "nlp_relaxed": "orange",
-        "nlp": "purple",
-    }
+    # Get unique values for color_by column and assign colors automatically
+    color_groups = flow_data_copy[color_by].unique()
+    colors = px.colors.qualitative.Plotly  # Default plotly color sequence
+    if len(color_groups) > len(colors):
+        # Use a larger color palette if needed
+        colors = px.colors.qualitative.Alphabet
+    color_map = {group: colors[i % len(colors)] for i, group in enumerate(color_groups)}
 
-    dash_map = {
-        "dss": "solid",
-        "fbs": "solid",
-        "lindist": "solid",
-        "nlp_relaxed": "dash",
-        "nlp": "dot",
-    }
-
-    # Track which algorithms have been added to legend to avoid duplicates
+    # Track which groups have been added to legend to avoid duplicates
     legend_added = set()
 
-    # For each phase, algorithm, plot flow points and connecting lines
+    # For each phase, color group, and branch, draw a line following the network topology
     for col_idx, phase in enumerate(phases, 1):
-        for algorithm in algorithms:
-            # Get flow data for this algorithm and phase
-            flow_algo = flow_data_copy[
-                (flow_data_copy["algorithm"] == algorithm)
+        for group in color_groups:
+            # Get flow data for this group and phase
+            flow_group = flow_data_copy[
+                (flow_data_copy[color_by] == group)
                 & (flow_data_copy["phase"] == phase)
             ].copy()
 
-            if len(flow_algo) == 0:
+            if len(flow_group) == 0:
                 continue
 
-            # Sort by distance for proper line connection
-            flow_algo = flow_algo.sort_values("to_distance")
+            # Create mappings from branch (fb, tb) to flow data
+            branch_flow = {}  # (fb, tb) -> flow value for that branch
+            dist_map = {}  # bus_id -> distance
+            name_map = {}  # bus_id -> name
 
-            # Create hover text and coordinates
-            hover_texts = []
-            x_coords = []
-            y_coords = []
-
-            for idx, row in flow_algo.iterrows():
+            for idx, row in flow_group.iterrows():
                 fb = int(row["fb"])
                 tb = int(row["tb"])
-                from_name = row["from_name"]
-                to_name = row["to_name"]
-                flow_value = row["value"]
-                to_dist = int(row["to_distance"])
+                branch_flow[(fb, tb)] = row["value"]
+                dist_map[fb] = row["from_distance"]
+                dist_map[tb] = row["to_distance"]
+                name_map[fb] = row["from_name"]
+                name_map[tb] = row["to_name"]
 
-                # Create hover text showing from and to bus info
-                hover_text = f"<b>From:</b> {from_name} (ID: {fb})<br><b>To:</b> {to_name} (ID: {tb})<br><b>{flow_name}:</b> {flow_value:.4f}"
+            # For each branch, draw a line segment from from-bus to to-bus
+            for idx, branch in case.branch_data.iterrows():
+                fb = int(branch["fb"])
+                tb = int(branch["tb"])
 
-                hover_texts.append(hover_text)
-                x_coords.append(to_dist)
-                y_coords.append(flow_value)
+                # Check if we have flow data for this branch
+                if (fb, tb) not in branch_flow:
+                    continue
 
-            # Determine if this algorithm should show in legend
-            show_legend = algorithm not in legend_added
-            if show_legend:
-                legend_added.add(algorithm)
+                # Get the flow value for this specific branch
+                current_flow = branch_flow[(fb, tb)]
 
-            # Plot points and connecting lines at to-bus locations
-            fig.add_trace(
-                go.Scatter(
-                    x=x_coords,
-                    y=y_coords,
-                    mode="lines+markers",
-                    name=algorithm,
-                    line=dict(
-                        color=color_map.get(algorithm, "black"),
-                        dash=dash_map.get(algorithm, "solid"),
-                    ),
-                    legendgroup=algorithm,
-                    showlegend=show_legend,
-                    marker=dict(size=8),
-                    hovertext=hover_texts,
-                    hoverinfo="text",
-                ),
-                row=1,
-                col=col_idx,
-            )
+                # Skip if flow is NaN
+                if np.isnan(current_flow):
+                    continue
+
+                # Get the flow value for the upstream branch (where fb is the to-bus)
+                upstream_flow = None
+                for (upstream_fb, upstream_tb), flow_val in branch_flow.items():
+                    if upstream_tb == fb and not np.isnan(flow_val):
+                        upstream_flow = flow_val
+                        break
+
+                fb_dist = dist_map.get(fb)
+                tb_dist = dist_map.get(tb)
+
+                if fb_dist is None or tb_dist is None:
+                    continue
+
+                # Determine if this group should show in legend
+                show_legend = group not in legend_added
+                if show_legend:
+                    legend_added.add(group)
+
+                # Create hover text for this branch
+                branch_hover = (
+                    f"<b>From:</b> {name_map.get(fb, fb)} (ID: {fb})<br>"
+                    f"<b>To:</b> {name_map.get(tb, tb)} (ID: {tb})<br>"
+                    f"<b>{flow_name}:</b> {current_flow:.4f}<br>"
+                    f"<b>{color_by}:</b> {group}"
+                )
+
+                # If from-bus has no upstream flow (source bus), only plot the to-bus point
+                if upstream_flow is None:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[tb_dist],
+                            y=[current_flow],
+                            mode="markers",
+                            name=str(group),
+                            line=dict(color=color_map[group], width=1),
+                            legendgroup=str(group),
+                            showlegend=show_legend,
+                            marker=dict(size=4, color=color_map[group]),
+                            hovertext=[branch_hover],
+                            hoverinfo="text",
+                        ),
+                        row=1,
+                        col=col_idx,
+                    )
+                else:
+                    # Find the upstream branch info for hover text
+                    upstream_hover = None
+                    for (upstream_fb, upstream_tb), flow_val in branch_flow.items():
+                        if upstream_tb == fb and not np.isnan(flow_val):
+                            upstream_hover = (
+                                f"<b>From:</b> {name_map.get(upstream_fb, upstream_fb)} (ID: {upstream_fb})<br>"
+                                f"<b>To:</b> {name_map.get(upstream_tb, upstream_tb)} (ID: {upstream_tb})<br>"
+                                f"<b>{flow_name}:</b> {flow_val:.4f}<br>"
+                                f"<b>{color_by}:</b> {group}"
+                            )
+                            break
+
+                    if upstream_hover is None:
+                        upstream_hover = branch_hover
+
+                    # Draw line from from-bus to to-bus
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[fb_dist, tb_dist],
+                            y=[upstream_flow, current_flow],
+                            mode="lines+markers",
+                            name=str(group),
+                            line=dict(color=color_map[group], width=1),
+                            legendgroup=str(group),
+                            showlegend=show_legend,
+                            marker=dict(size=4, color=color_map[group]),
+                            hovertext=[upstream_hover, branch_hover],
+                            hoverinfo="text",
+                        ),
+                        row=1,
+                        col=col_idx,
+                    )
 
     fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=1)
     fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=2)
     fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=3)
-
     fig.update_yaxes(
         title_text=f"{flow_name} (kW)" if "Power" in flow_name else f"{flow_name}",
         row=1,
         col=1,
     )
     fig.update_layout(title_text=title, hovermode="closest")
+
     return fig
 
 

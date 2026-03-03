@@ -3,10 +3,12 @@ from distopf.pyomo_models.results import PyoResult
 import pyomo.environ as pyo
 
 
-def solve(model: LindistModelProtocol) -> PyoResult:
+def solve(model: LindistModelProtocol, solver="ipopt", duals=True) -> PyoResult:
     # t0 = perf_counter()
     # Solve the model
-    results = pyo.SolverFactory("ipopt").solve(model)
+    results = pyo.SolverFactory(solver).solve(model)
+    if duals:
+        model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
     # t1 = perf_counter()
     # Extract and display results
     if results.solver.status == pyo.SolverStatus.ok:

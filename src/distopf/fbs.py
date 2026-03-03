@@ -806,6 +806,30 @@ class FBS:
                     ["id"] + (["name"] if "name" in gen_df.columns else []) + q_present
                 ].rename(columns=q_cols)
                 q_gens_df.insert(2, "t", 0)
+        p_load_df = None
+        q_load_df = None
+        if self.bus_data is not None and len(self.bus_data) > 0:
+            bus_df = self.bus_data.copy()
+            # Map pa/pb/pc -> a/b/c and qa/qb/qc -> a/b/c with a time column t=0
+            p_cols = {"pl_a": "a", "pl_b": "b", "pl_c": "c"}
+            q_cols = {"ql_a": "a", "ql_b": "b", "ql_c": "c"}
+
+            # p_gens
+            p_present = [c for c in ["pl_a", "pl_b", "pl_c"] if c in bus_df.columns]
+            if p_present:
+                p_load_df = bus_df[
+                    ["id"] + (["name"] if "name" in bus_df.columns else []) + p_present
+                ].rename(columns=p_cols)
+                # Insert time column at position 2 for single-period compatibility
+                p_load_df.insert(2, "t", 0)
+
+            # q_gens
+            q_present = [c for c in ["ql_a", "ql_b", "ql_c"] if c in bus_df.columns]
+            if q_present:
+                q_load_df = bus_df[
+                    ["id"] + (["name"] if "name" in bus_df.columns else []) + q_present
+                ].rename(columns=q_cols)
+                q_load_df.insert(2, "t", 0)
         results = PowerFlowResult(
             voltages=self.get_voltages(),
             voltage_angles=self.get_voltage_angles(),
@@ -815,6 +839,8 @@ class FBS:
             current_angles=self.get_current_angles(),
             p_gens=p_gens_df,
             q_gens=q_gens_df,
+            p_loads=p_load_df,
+            q_loads=q_load_df,
             converged=self.converged,
             solver="fbs",
             result_type="fbs",  # FBS - iteration returns 6 values
