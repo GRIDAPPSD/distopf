@@ -68,6 +68,7 @@ class PyomoBackend(Backend):
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         equality_only = kwargs.pop("equality_only", False)
         reg_tap_change_limit = kwargs.pop("reg_tap_change_limit", None)
+        duals = kwargs.pop("duals", False)
 
         voltage_weight = kwargs.pop("voltage_weight", None)
         thermal_weight = kwargs.pop("thermal_weight", None)
@@ -109,7 +110,7 @@ class PyomoBackend(Backend):
             self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
 
         # Solve
-        self.result = solve(self.model)
+        self.result = solve(self.model, duals=duals)
 
         if raw_result:
             return self.result

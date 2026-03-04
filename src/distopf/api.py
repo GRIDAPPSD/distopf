@@ -271,6 +271,7 @@ class Case:
         control_capacitors: bool = False,
         backend: Optional[str] = None,
         raw_result: bool = False,
+        duals: bool = False,
         **kwargs,
     ):
         """
@@ -306,6 +307,9 @@ class Case:
             - None: Auto-detect based on n_steps and bat_data
         raw_result : bool, default False
             If True, return raw result object instead of DataFrames
+        duals : bool, default False
+            If True (Pyomo backend only), extract dual variables from constraints.
+            Duals are stored on result.raw_result as dual_power_balance_p, etc.
         **kwargs
             Additional arguments passed to solver (e.g., target, error_percent, solver)
 
@@ -333,6 +337,7 @@ class Case:
             control_capacitors=control_capacitors,
             backend=backend,
             raw_result=raw_result,
+            duals=duals,
             **kwargs,
         )
 
