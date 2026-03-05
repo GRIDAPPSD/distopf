@@ -240,7 +240,7 @@ def add_circular_generator_constraints_pq_control(m: LindistModelProtocol) -> No
     """
 
     def _circle(m: LindistModelProtocol, _id, ph, t):
-        if m.gen_control_type[_id, ph] != ControlVariable.PQ.value:
+        if m.gen_control_type[_id, ph] != ControlVariable.PQ:
             return pyo.Constraint.Skip
         return (
             m.p_gen[_id, ph, t] ** 2 + m.q_gen[_id, ph, t] ** 2

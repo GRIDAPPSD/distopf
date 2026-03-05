@@ -64,6 +64,99 @@ case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 result = case.run_opf(objective="curtail_min", control_variable="P", v_max=1.05, v_min=0.95, gen_mult=10)
 result.plot_network().show(renderer="browser")
 ```
+
+## Optimization Backends
+
+DistOPF supports multiple optimization backends for solving OPF problems:
+
+### Linear Backend (backend='pyomo')
+The default linear backend uses the LinDistFlow model with CVXPY or Pyomo solvers.
+- **Model**: Linear approximation of power flow equations
+- **Solver**: CVXPY or Pyomo with linear solvers
+- **Speed**: Fast, suitable for real-time applications
+- **Accuracy**: Good for systems with small voltage deviations
+
+```python
+import distopf as opf
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
+result = case.run_opf(backend="pyomo", objective="loss")
+```
+
+### Nonlinear Backend (backend='nlp')
+The nonlinear backend uses the BranchFlow model with IPOPT or MINLP solvers for higher accuracy.
+- **Model**: Nonlinear power flow equations (exact)
+- **Solver**: IPOPT (continuous) or MINLP solvers like Bonmin/Couenne (discrete controls)
+- **Speed**: Slower than linear, but more accurate
+- **Accuracy**: Exact power flow representation
+
+#### Continuous Optimization (IPOPT)
+For continuous optimization without discrete controls:
+
+```python
+import distopf as opf
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
+result = case.run_opf(
+    backend="nlp",
+    objective="loss",
+    solver="ipopt",
+)
+```
+
+#### With FBS Initialization
+Initialize the nonlinear model from a fast backward-forward sweep (FBS) solution for better convergence:
+
+```python
+import distopf as opf
+from distopf.fbs import fbs_solve
+
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
+fbs_result = fbs_solve(case)  # Optional: run FBS first
+
+result = case.run_opf(
+    backend="nlp",
+    objective="loss",
+    initialize="fbs",  # Initialize from FBS results
+    solver="ipopt",
+)
+```
+
+#### Discrete Controls (MINLP)
+Enable regulator tap optimization and capacitor switching with MINLP solvers:
+
+```python
+import distopf as opf
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
+result = case.run_opf(
+    backend="nlp",
+    objective="loss",
+    control_regulators=True,      # Enable regulator tap control
+    control_capacitors=True,       # Enable capacitor switching
+    initialize="fbs",              # Recommended for discrete controls
+    solver="bonmin",               # MINLP solver (bonmin, couenne, etc.)
+)
+```
+
+#### Backend Comparison
+| Feature | Linear (pyomo) | Nonlinear (nlp) |
+|---------|---|---|
+| Model Type | LinDistFlow (linear) | BranchFlow (nonlinear) |
+| Solver | CVXPY, Pyomo | IPOPT, MINLP |
+| Speed | Fast | Slower |
+| Accuracy | Approximate | Exact |
+| Discrete Controls | Limited | Full support |
+| Initialization | N/A | Optional (FBS) |
+| Solver Availability | Common | Requires IPOPT/MINLP |
+
+#### Solver Requirements
+- **IPOPT**: Install via `conda install -c conda-forge ipopt` or `apt-get install coinor-libipopt-dev`
+- **MINLP Solvers**: Install Bonmin or Couenne via `conda install -c conda-forge bonmin couenne`
+
+#### Known Limitations
+- NLP backend requires a compatible solver (IPOPT or MINLP)
+- Convergence may be slow for large systems or difficult cases
+- Some cases may be infeasible with the nonlinear model
+- Discrete controls require MINLP solvers which may be slower than continuous optimization
+
 ## Using a custom model.
 Create CSVs formatted as shown below and store them in a single folder. The csv names must match exactly as shown. 
 Column order is not important. 

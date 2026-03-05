@@ -433,7 +433,7 @@ def add_circular_generator_constraints_pq_control(m: LindistModelProtocol) -> No
     """
 
     def _circle(m: LindistModelProtocol, _id, ph, t):
-        if m.gen_control_type[_id, ph] != ControlVariable.PQ.value:
+        if m.gen_control_type[_id, ph] != ControlVariable.PQ:
             return pyo.Constraint.Skip
         return (
             m.p_gen[_id, ph, t] ** 2 + m.q_gen[_id, ph, t] ** 2
@@ -645,6 +645,192 @@ def add_current_constraint2_relaxed(m: LindistModelProtocol) -> None:
     m.current_sqr_constraint = pyo.Constraint(
         m.bus_phase_pair_set, m.time_set, rule=_rule2
     )
+
+
+def add_regulator_tap_sos1_nlp_constraints(m: LindistModelProtocol) -> None:
+    """
+    Add SOS1 (Special Ordered Set Type 1) constraint for NL model:
+    exactly one tap position must be selected per regulator per time step.
+
+    sum_k(u_reg[id, ph, k, t]) == 1 for all (id, ph, t)
+    """
+
+    def sos1_rule(m: LindistModelProtocol, _id, ph, t):
+        return sum(m.u_reg[_id, ph, k, t] for k in m.tap_set) == 1
+
+    m.reg_tap_sos1 = pyo.Constraint(m.reg_phase_set, m.time_set, rule=sos1_rule)
+
+
+def add_regulator_mi_nlp_constraints(m: LindistModelProtocol) -> None:
+    """
+    Add Big-M regulator tap selection constraints for NL model.
+
+    Uses Big-M to enforce: v2_reg = tap_ratio^2 * v_i when tap k is selected
+    Then: v_j = v2_reg - 2*r*p_ij - 2*x*q_ij
+    """
+
+    def reg_tap_upper(m: LindistModelProtocol, _id, ph, k, t):
+        i = m.from_bus_map[_id]
+        return m.v2_reg[_id, ph, t] - m.tap_ratio_squared[k] * m.v2[
+            i, ph, t
+        ] <= m.reg_big_m * (1 - m.u_reg[_id, ph, k, t])
+
+    def reg_tap_lower(m: LindistModelProtocol, _id, ph, k, t):
+        i = m.from_bus_map[_id]
+        return m.v2_reg[_id, ph, t] - m.tap_ratio_squared[k] * m.v2[
+            i, ph, t
+        ] >= -m.reg_big_m * (1 - m.u_reg[_id, ph, k, t])
+
+    m.reg_tap_upper = pyo.Constraint(
+        m.reg_phase_set, m.tap_set, m.time_set, rule=reg_tap_upper
+    )
+    m.reg_tap_lower = pyo.Constraint(
+        m.reg_phase_set, m.tap_set, m.time_set, rule=reg_tap_lower
+    )
+
+
+def add_regulator_tap_change_limit_nlp_constraints(
+    m: LindistModelProtocol, max_tap_change: int = 2
+) -> None:
+    """
+    Limit regulator tap changes between time steps for NL model.
+
+    Parameters
+    ----------
+    m : LindistModelProtocol
+        Pyomo model
+    max_tap_change : int
+        Maximum tap position change allowed per time step (default: 2)
+    """
+
+    def tap_change_limit_upper(m: LindistModelProtocol, _id, ph, t):
+        if t == pyo.value(m.start_step):
+            return pyo.Constraint.Skip
+        tap_t = sum(k * m.u_reg[_id, ph, k, t] for k in m.tap_set)
+        tap_prev = sum(k * m.u_reg[_id, ph, k, t - 1] for k in m.tap_set)
+        return tap_t - tap_prev <= max_tap_change
+
+    def tap_change_limit_lower(m: LindistModelProtocol, _id, ph, t):
+        if t == pyo.value(m.start_step):
+            return pyo.Constraint.Skip
+        tap_t = sum(k * m.u_reg[_id, ph, k, t] for k in m.tap_set)
+        tap_prev = sum(k * m.u_reg[_id, ph, k, t - 1] for k in m.tap_set)
+        return tap_t - tap_prev >= -max_tap_change
+
+    m.reg_tap_change_upper = pyo.Constraint(
+        m.reg_phase_set, m.time_set, rule=tap_change_limit_upper
+    )
+    m.reg_tap_change_lower = pyo.Constraint(
+        m.reg_phase_set, m.time_set, rule=tap_change_limit_lower
+    )
+
+
+def add_capacitor_mccormick_nlp_constraints(m: LindistModelProtocol) -> None:
+    """
+    Add McCormick envelope constraints to linearize z_cap = u_cap * v2 for NL model.
+
+    For binary u in {0,1} and continuous v2 in [v_min^2, v_max^2]:
+        z <= v_max^2 * u           (when u=0, z=0)
+        z >= v2 - v_max^2 * (1 - u)  (when u=1, z >= v2)
+        z >= v_min^2 * u           (when u=0, z=0)
+    """
+
+    def mccormick_upper_1(m: LindistModelProtocol, _id, ph, t):
+        """z_cap <= v_max^2 * u_cap"""
+        v2_max = m.v_max[_id, ph] ** 2
+        return m.z_cap[_id, ph, t] <= v2_max * m.u_cap[_id, ph, t]
+
+    def mccormick_lower_1(m: LindistModelProtocol, _id, ph, t):
+        """z_cap >= v2 - v_max^2 * (1 - u_cap)"""
+        v2_max = m.v_max[_id, ph] ** 2
+        return m.z_cap[_id, ph, t] >= m.v2[_id, ph, t] - v2_max * (
+            1 - m.u_cap[_id, ph, t]
+        )
+
+    def mccormick_lower_2(m: LindistModelProtocol, _id, ph, t):
+        """z_cap >= v_min^2 * u_cap"""
+        v2_min = m.v_min[_id, ph] ** 2
+        return m.z_cap[_id, ph, t] >= v2_min * m.u_cap[_id, ph, t]
+
+    m.cap_mccormick_upper = pyo.Constraint(
+        m.cap_phase_set, m.time_set, rule=mccormick_upper_1
+    )
+    m.cap_mccormick_lower_1 = pyo.Constraint(
+        m.cap_phase_set, m.time_set, rule=mccormick_lower_1
+    )
+    m.cap_mccormick_lower_2 = pyo.Constraint(
+        m.cap_phase_set, m.time_set, rule=mccormick_lower_2
+    )
+
+
+def add_nlp_constraints(
+    m: LindistModelProtocol,
+    circular_constraints: bool = True,
+    thermal_constraints: bool = False,
+    control_regulators: bool = False,
+    control_capacitors: bool = False,
+) -> None:
+    """
+    Add all constraints for the nonlinear BranchFlow model.
+
+    This is the main entry point for constraint attachment, mirroring the
+    `add_constraints` function from the linear model.
+
+    Parameters
+    ----------
+    m : LindistModelProtocol
+        Pyomo ConcreteModel (created by create_nl_branchflow_model)
+    circular_constraints : bool, default True
+        Use circular (quadratic) constraints for generators/batteries
+    thermal_constraints : bool, default False
+        Add thermal limit constraints on branch power flows
+    control_regulators : bool, default False
+        Enable regulator tap control (adds integer variables and constraints)
+    control_capacitors : bool, default False
+        Enable capacitor switching control (adds binary variables and constraints)
+    """
+    # Power flow constraints
+    add_p_flow_nlp_constraints(m)
+    add_q_flow_nlp_constraints(m)
+
+    # Voltage constraints
+    add_voltage_limits(m)
+    add_voltage_drop_nlp_constraints(m)
+    add_swing_bus_constraints(m)
+
+    # Loads, capacitors, regulators
+    add_cvr_load_constraints(m)
+    add_capacitor_constraints(m)
+    add_regulator_nlp_constraints(m)
+
+    # Generators
+    add_generator_limits(m)
+    add_generator_constant_p_constraints_q_control(m)
+    add_generator_constant_q_constraints_p_control(m)
+    if circular_constraints:
+        add_circular_generator_constraints_pq_control(m)
+    else:
+        add_octagonal_inverter_constraints_pq_control(m)
+
+    # Batteries
+    add_battery_constant_q_constraints_p_control(m)
+    add_battery_energy_constraints(m)
+    add_battery_net_p_bat_equal_phase_constraints(m)
+    add_battery_power_limits(m)
+    add_battery_soc_limits(m)
+
+    # Current constraints
+    add_current_constraint1(m)
+    add_current_constraint2(m)
+
+    # Discrete control constraints (MINLP-only)
+    if control_regulators:
+        add_regulator_tap_sos1_nlp_constraints(m)
+        add_regulator_mi_nlp_constraints(m)
+        add_regulator_tap_change_limit_nlp_constraints(m, max_tap_change=2)
+
+    if control_capacitors:
+        add_capacitor_mccormick_nlp_constraints(m)
 
 
 def add_current_constraint2(m: LindistModelProtocol) -> None:

@@ -522,5 +522,45 @@ def create_nl_branchflow_model(case: Case) -> LindistModelProtocol:
     m.p_bat = pyo.Var(m.bat_phase_set, m.time_set, initialize=0)
     m.q_bat = pyo.Var(m.bat_phase_set, m.time_set, initialize=0)
     m.soc = pyo.Var(m.bat_set, m.time_set, initialize=0.5)
+
+    # Discrete control variables (created but only used if control flags are True)
+    # Regulator tap selection: u_reg[id, phase, tap_position, time]
+    m.tap_set = pyo.RangeSet(0, 32)  # 33 tap positions (0.9 to 1.1 p.u.)
+    tap_ratios = [0.9 + k * 0.00625 for k in range(33)]
+    m.tap_ratio = pyo.Param(
+        m.tap_set,
+        initialize={k: tap_ratios[k] for k in range(33)},
+        doc="Voltage ratio for each tap position",
+    )
+    m.tap_ratio_squared = pyo.Param(
+        m.tap_set,
+        initialize={k: tap_ratios[k] ** 2 for k in range(33)},
+        doc="Squared voltage ratio for each tap position",
+    )
+    m.u_reg = pyo.Var(
+        m.reg_phase_set,
+        m.tap_set,
+        m.time_set,
+        domain=pyo.Binary,
+        doc="Binary tap selection variable for regulators",
+    )
+    m.reg_big_m = pyo.Param(
+        initialize=10.0, doc="Big-M constant for regulator constraints"
+    )
+
+    # Capacitor switching: u_cap[id, phase, time]
+    m.u_cap = pyo.Var(
+        m.cap_phase_set,
+        m.time_set,
+        domain=pyo.Binary,
+        doc="Binary capacitor switching variable",
+    )
+    m.z_cap = pyo.Var(
+        m.cap_phase_set,
+        m.time_set,
+        domain=pyo.NonNegativeReals,
+        doc="Auxiliary variable for McCormick linearization (z = u_cap * v2)",
+    )
+
     model: LindistModelProtocol = m
     return model

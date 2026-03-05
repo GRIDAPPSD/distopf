@@ -303,7 +303,8 @@ class Case:
             Optimization backend to use:
             - "matrix": CVXPY/CLARABEL (fast, convex problems only)
             - "multiperiod": Multi-period matrix model (supports batteries, schedules)
-            - "pyomo": Pyomo/IPOPT (NLP, custom constraints)
+            - "pyomo": Pyomo/IPOPT (NLP, LinDistFlow model)
+            - "nlp": Pyomo/IPOPT or MINLP (nonlinear BranchFlow model)
             - None: Auto-detect based on n_steps and bat_data
         raw_result : bool, default False
             If True, return raw result object instead of DataFrames

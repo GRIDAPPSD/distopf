@@ -16,6 +16,7 @@ class BackendSelector:
         "matrix": MatrixBackend,
         "multiperiod": MultiperiodBackend,
         "pyomo": PyomoBackend,
+        "nlp": None,  # Will be imported lazily to avoid circular imports
     }
 
     SUPPORTED_BACKENDS = set(BACKEND_FACTORY.keys())
@@ -114,6 +115,12 @@ class BackendSelector:
             )
         else:
             backend = self.validate_backend(backend)
+
+        # Lazy-load NlpBackend to avoid circular imports
+        if backend == "nlp" and self.BACKEND_FACTORY["nlp"] is None:
+            from distopf.backends.nlp_backend import NlpBackend
+
+            self.BACKEND_FACTORY["nlp"] = NlpBackend
 
         # Instantiate backend using factory
         backend_class = self.BACKEND_FACTORY[backend]

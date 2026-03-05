@@ -1,37 +1,46 @@
+"""Thin wrapper for backward compatibility with NLBranchFlow model creation.
+
+This module provides a simple wrapper around the factory pattern for creating
+and constraining nonlinear BranchFlow models. For new code, prefer using
+create_nl_branchflow_model() and add_nlp_constraints() directly.
+"""
+
 from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
+from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
 from distopf.api import Case
-from distopf.pyomo_models import constraints_nlp
 
 
 class NLBranchFlow:
-    def __init__(self, case: Case):
+    """Thin wrapper for creating a fully-constrained nonlinear BranchFlow model.
+
+    This class provides backward compatibility. For new code, use:
         model = create_nl_branchflow_model(case)
-        constraints_nlp.add_p_flow_nlp_constraints(model)
-        constraints_nlp.add_q_flow_nlp_constraints(model)
-        # constraints.add_p_flow_constraints(model)
-        # constraints.add_q_flow_constraints(model)
-        # Node Voltages
-        constraints_nlp.add_voltage_limits(model)
-        constraints_nlp.add_voltage_drop_nlp_constraints(model)
-        # constraints.add_voltage_drop_constraints(model)
-        constraints_nlp.add_swing_bus_constraints(model)
-        # Loads, Capacitors and Regulators
-        constraints_nlp.add_cvr_load_constraints(model)
-        constraints_nlp.add_capacitor_constraints(model)
-        constraints_nlp.add_regulator_nlp_constraints(model)
-        # Generators
-        constraints_nlp.add_generator_limits(model)
-        constraints_nlp.add_generator_constant_p_constraints_q_control(model)
-        constraints_nlp.add_generator_constant_q_constraints_p_control(model)
-        # constraints_nlp.add_circular_generator_constraints_pq_control(model)
-        constraints_nlp.add_octagonal_inverter_constraints_pq_control(model)
-        # Battery models
-        constraints_nlp.add_battery_constant_q_constraints_p_control(model)
-        constraints_nlp.add_battery_energy_constraints(model)
-        constraints_nlp.add_battery_net_p_bat_equal_phase_constraints(model)
-        constraints_nlp.add_battery_power_limits(model)
-        constraints_nlp.add_battery_soc_limits(model)
-        constraints_nlp.add_current_constraint1(model)
-        constraints_nlp.add_current_constraint2(model)
-        self.model = model
+        add_nlp_constraints(model, ...)
+
+    Parameters
+    ----------
+    case : Case
+        The power system case data
+    circular_constraints : bool, default True
+        Use circular (quadratic) constraints for generators/batteries
+    control_regulators : bool, default False
+        Enable regulator tap control (requires MINLP solver)
+    control_capacitors : bool, default False
+        Enable capacitor switching (requires MINLP solver)
+    """
+
+    def __init__(
+        self,
+        case: Case,
+        circular_constraints: bool = True,
+        control_regulators: bool = False,
+        control_capacitors: bool = False,
+    ):
+        self.model = create_nl_branchflow_model(case)
+        add_nlp_constraints(
+            self.model,
+            circular_constraints=circular_constraints,
+            control_regulators=control_regulators,
+            control_capacitors=control_capacitors,
+        )
         self.case = case
