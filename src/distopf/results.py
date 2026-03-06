@@ -27,7 +27,9 @@ class PowerFlowResult:
     """Unified result container for power flow and OPF analysis.
 
     This dataclass provides a standard interface for accessing results
-    from any solver backend (matrix, pyomo, multiperiod, FBS).
+    from any solver backend (matrix, pyomo, multiperiod, FBS). It also
+    supports benchmarking and cross-backend comparison via optional
+    backend metadata fields.
 
     Attributes
     ----------
@@ -59,6 +61,14 @@ class PowerFlowResult:
         Solution time in seconds (if available)
     solver : str
         Name of the solver used ("matrix", "pyomo", "multiperiod", "fbs")
+    backend : str or None
+        Backend identifier for benchmarking (e.g., "pyomo", "multiperiod", "matrix", "fbs")
+    termination_condition : str or None
+        Solver termination condition (e.g., "optimal", "infeasible", "unbounded")
+    error_message : str or None
+        Error details if solve failed
+    case_name : str or None
+        Case identifier for benchmarking and result tracking
     raw_result : Any
         Raw result object from the underlying solver (for advanced access)
     model : Any
@@ -120,6 +130,14 @@ class PowerFlowResult:
     result_type: str = (
         "opf"  # "pf" for power flow, "opf" for optimal power flow, "fbs" for FBS
     )
+
+    # Benchmarking metadata (optional, for cross-backend comparison)
+    backend: Optional[str] = None  # e.g., "pyomo", "multiperiod", "matrix", "fbs"
+    termination_condition: Optional[str] = (
+        None  # e.g., "optimal", "infeasible", "unbounded"
+    )
+    error_message: Optional[str] = None  # Error details if solve failed
+    case_name: Optional[str] = None  # Case identifier for benchmarking
 
     # References (not included in repr for cleanliness)
     raw_result: Any = field(default=None, repr=False)

@@ -60,7 +60,7 @@ class NlpBackend(Backend):
         # Extract NLP-specific options from kwargs
         circular_constraints = kwargs.pop("circular_constraints", True)
         thermal_constraints = kwargs.pop("thermal_constraints", False)
-        initialize = kwargs.pop("initialize", None)
+        initialize = kwargs.pop("initialize", "fbs")
         solver_name = kwargs.pop("solver", "ipopt")
 
         # Validate solver choice for discrete controls

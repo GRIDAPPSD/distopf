@@ -798,6 +798,9 @@ class FBS:
                 ].rename(columns=p_cols)
                 # Insert time column at position 2 for single-period compatibility
                 p_gens_df.insert(2, "t", 0)
+            else:
+                # Create empty DataFrame with proper structure
+                p_gens_df = pd.DataFrame(columns=["id", "name", "t", "a", "b", "c"])
 
             # q_gens
             q_present = [c for c in ["qa", "qb", "qc"] if c in gen_df.columns]
@@ -806,6 +809,13 @@ class FBS:
                     ["id"] + (["name"] if "name" in gen_df.columns else []) + q_present
                 ].rename(columns=q_cols)
                 q_gens_df.insert(2, "t", 0)
+            else:
+                # Create empty DataFrame with proper structure
+                q_gens_df = pd.DataFrame(columns=["id", "name", "t", "a", "b", "c"])
+        else:
+            # Create empty DataFrames with proper structure when no gen_data
+            p_gens_df = pd.DataFrame(columns=["id", "name", "t", "a", "b", "c"])
+            q_gens_df = pd.DataFrame(columns=["id", "name", "t", "a", "b", "c"])
         p_load_df = None
         q_load_df = None
         if self.bus_data is not None and len(self.bus_data) > 0:
@@ -928,7 +938,7 @@ def compare_with_reference(
         p_flow_comparison_ref = []
         for idx, fbs_row in fbs_p_flows.iterrows():
             ref_row = ref_p_flows[
-                (ref_p_flows.fb == fbs_row.fb) & (ref_p_flows.id == fbs_row.id)
+                (ref_p_flows.fb == fbs_row.fb) & (ref_p_flows.tb == fbs_row.tb)
             ]
             if len(ref_row) > 0:
                 ref_row = ref_row.iloc[0]
@@ -942,7 +952,7 @@ def compare_with_reference(
                             p_flow_comparison_ref.append(
                                 {
                                     "from_bus": fbs_row.fb,
-                                    "to_bus": fbs_row.id,
+                                    "to_bus": fbs_row.tb,
                                     "phase": phase,
                                     "fbs_value": fbs_val,
                                     "ref_value": ref_val,
@@ -955,7 +965,7 @@ def compare_with_reference(
         q_flow_comparison_ref = []
         for idx, fbs_row in fbs_q_flows.iterrows():
             ref_row = ref_q_flows[
-                (ref_q_flows.fb == fbs_row.fb) & (ref_q_flows.id == fbs_row.id)
+                (ref_q_flows.fb == fbs_row.fb) & (ref_q_flows.tb == fbs_row.tb)
             ]
             if len(ref_row) > 0:
                 ref_row = ref_row.iloc[0]
@@ -969,7 +979,7 @@ def compare_with_reference(
                             q_flow_comparison_ref.append(
                                 {
                                     "from_bus": fbs_row.fb,
-                                    "to_bus": fbs_row.id,
+                                    "to_bus": fbs_row.tb,
                                     "phase": phase,
                                     "fbs_value": fbs_val,
                                     "ref_value": ref_val,
@@ -1043,10 +1053,10 @@ def compare_with_reference(
 
             # Find corresponding FBS power flows
             fbs_p_row = fbs_p_flows[
-                (fbs_p_flows.fb == fb_id) & (fbs_p_flows.id == tb_id)
+                (fbs_p_flows.fb == fb_id) & (fbs_p_flows.tb == tb_id)
             ]
             fbs_q_row = fbs_q_flows[
-                (fbs_q_flows.fb == fb_id) & (fbs_q_flows.id == tb_id)
+                (fbs_q_flows.fb == fb_id) & (fbs_q_flows.tb == tb_id)
             ]
 
             if len(fbs_p_row) > 0 and len(fbs_q_row) > 0:

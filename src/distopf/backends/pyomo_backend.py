@@ -64,7 +64,7 @@ class PyomoBackend(Backend):
         import pyomo.environ as pyo  # type: ignore[import-untyped]
 
         # Extract pyomo-specific options from kwargs
-        circular_constraints = kwargs.pop("circular_constraints", True)
+        circular_constraints = kwargs.pop("circular_constraints", False)
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         equality_only = kwargs.pop("equality_only", False)
         reg_tap_change_limit = kwargs.pop("reg_tap_change_limit", None)
@@ -75,6 +75,7 @@ class PyomoBackend(Backend):
         generator_weight = kwargs.pop("generator_weight", None)
         battery_weight = kwargs.pop("battery_weight", None)
         soc_weight = kwargs.pop("soc_weight", None)
+        solver = kwargs.pop("solver", "ipopt")
 
         # Create Pyomo model
         self.model = create_lindist_model(
@@ -108,9 +109,8 @@ class PyomoBackend(Backend):
             set_objective(self.model, obj)
         else:
             self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
-
         # Solve
-        self.result = solve(self.model, duals=duals)
+        self.result = solve(self.model, solver=solver, duals=duals)
 
         if raw_result:
             return self.result
@@ -127,6 +127,13 @@ class PyomoBackend(Backend):
         tap_ratios = getattr(self.result, "reg_ratio", None)
         p_loads = getattr(self.result, "p_load", None)
         q_loads = getattr(self.result, "q_load", None)
+
+        # Batteries (present in the Pyomo model, but were not being surfaced)
+        p_bats = getattr(self.result, "p_bat", None)
+        q_bats = getattr(self.result, "q_bat", None)
+        p_charge = getattr(self.result, "p_charge", None)
+        p_discharge = getattr(self.result, "p_discharge", None)
+        soc = getattr(self.result, "soc", None)
 
         # Get metadata from pyomo result
         objective_value = None
@@ -146,6 +153,11 @@ class PyomoBackend(Backend):
             q_loads=q_loads,
             q_caps=q_caps,
             tap_ratios=tap_ratios,
+            p_bats=p_bats,
+            q_bats=q_bats,
+            p_charge=p_charge,
+            p_discharge=p_discharge,
+            soc=soc,
             objective_value=objective_value,
             converged=True,
             solver="ipopt",

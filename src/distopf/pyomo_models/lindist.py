@@ -1,4 +1,5 @@
 from enum import IntEnum
+import warnings
 import pyomo.environ as pyo  # type: ignore
 from typing import Tuple, List
 import pandas as pd
@@ -128,6 +129,22 @@ def _create_load_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     )
 
 
+def _get_gen_schedule_mult(gen_shape: str, t: int, schedules: pd.DataFrame) -> float:
+    """Look up schedule multiplier for a generator shape at time t."""
+    if not gen_shape or pd.isna(gen_shape):
+        return 1.0
+    if gen_shape in schedules.columns:
+        return float(schedules.at[t, gen_shape])
+    if gen_shape != "PV":
+        warnings.warn(
+            f"gen_shape='{gen_shape}' not found in schedules columns "
+            f"{list(schedules.columns)}. Using multiplier=1.0.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return 1.0
+
+
 def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     p_gen_data, q_gen_data = {}, {}
     s_rated_data, q_gen_min_data, q_gen_max_data = {}, {}, {}
@@ -150,11 +167,13 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             control_var = getattr(row, "control_variable", "")
             gen_control_data[(row.id, phase)] = CONTROL_VARIABLE_MAP[control_var]
 
-            # Nominal generation values
+            # Nominal generation values, scaled by schedule
+            gen_shape = getattr(row, "gen_shape", "PV")
             p_gen = getattr(row, f"p{phase}", 0.0)
             q_gen = getattr(row, f"q{phase}", 0.0)
             for t in m.time_set:
-                p_gen_data[(row.id, phase, t)] = p_gen
+                gen_mult = _get_gen_schedule_mult(gen_shape, t, case.schedules)
+                p_gen_data[(row.id, phase, t)] = p_gen * gen_mult
                 q_gen_data[(row.id, phase, t)] = q_gen
 
     m.p_gen_nom = pyo.Param(
@@ -162,7 +181,7 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         m.time_set,
         initialize=p_gen_data,
         default=0.0,
-        doc="Nominal active power generation",
+        doc="Nominal active power generation (schedule-scaled)",
     )
     m.q_gen_nom = pyo.Param(
         m.gen_phase_set,
@@ -240,12 +259,14 @@ def _create_v_swing_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             for t in m.time_set:
                 v_swing_data[(row.id, phase, t)] = v_swing
 
+    # NOTE: v_swing stores *voltage magnitude* (per-unit), not squared voltage.
+    # Constraints (see add_swing_bus_constraints) apply the square when fixing v2.
     m.v_swing = pyo.Param(
         m.swing_phase_set,
         m.time_set,
         initialize=v_swing_data,
         default=1.0,
-        doc="Swing bus voltage magnitude squared",
+        doc="Swing bus voltage magnitude (p.u.)",
     )
 
 

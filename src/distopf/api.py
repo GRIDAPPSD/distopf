@@ -1,8 +1,11 @@
 from pathlib import Path
+import logging
 import warnings
 import pandas as pd
 from typing import Optional, TYPE_CHECKING
 from collections.abc import Callable
+
+logger = logging.getLogger("distopf")
 
 # Lazy imports for heavy dependencies (CIM/DSS converters, models)
 # These are only imported when actually needed to improve startup time
@@ -50,6 +53,18 @@ class Case:
         Number of time steps for multi-period analysis
     delta_t : float, default 1.0
         Hours per time step
+    ignore_schedule : bool, default False
+        If True, ignore all schedule data and use multiplier=1.0 for all loads
+        and generators at every time step.  Useful for single-step analyses
+        where schedule effects are unwanted.
+    ignore_gen : bool, default False
+        If True, replace gen_data with an empty DataFrame (no generators).
+    ignore_bat : bool, default False
+        If True, replace bat_data with an empty DataFrame (no batteries).
+    ignore_cap : bool, default False
+        If True, replace cap_data with an empty DataFrame (no capacitors).
+    ignore_reg : bool, default False
+        If True, replace reg_data with an empty DataFrame (no regulators).
 
     Examples
     --------
@@ -71,14 +86,44 @@ class Case:
         start_step: int = 0,
         n_steps: int = 1,
         delta_t: float = 1,  # hours per step
+        ignore_schedule: bool = False,
+        ignore_gen: bool = False,
+        ignore_bat: bool = False,
+        ignore_cap: bool = False,
+        ignore_reg: bool = False,
     ):
         self.branch_data = handle_branch_input(branch_data)
         self.bus_data = handle_bus_input(bus_data)
-        self.gen_data = handle_gen_input(gen_data)
-        self.cap_data = handle_cap_input(cap_data)
-        self.reg_data = handle_reg_input(reg_data)
-        self.bat_data = handle_bat_input(bat_data)
-        self.schedules = handle_schedules_input(schedules)
+        self.ignore_gen = ignore_gen
+        self.ignore_bat = ignore_bat
+        self.ignore_cap = ignore_cap
+        self.ignore_reg = ignore_reg
+        if ignore_gen:
+            self.gen_data = handle_gen_input(None)
+            logger.info("ignore_gen=True: generators removed")
+        else:
+            self.gen_data = handle_gen_input(gen_data)
+        if ignore_cap:
+            self.cap_data = handle_cap_input(None)
+            logger.info("ignore_cap=True: capacitors removed")
+        else:
+            self.cap_data = handle_cap_input(cap_data)
+        if ignore_reg:
+            self.reg_data = handle_reg_input(None)
+            logger.info("ignore_reg=True: regulators removed")
+        else:
+            self.reg_data = handle_reg_input(reg_data)
+        if ignore_bat:
+            self.bat_data = handle_bat_input(None)
+            logger.info("ignore_bat=True: batteries removed")
+        else:
+            self.bat_data = handle_bat_input(bat_data)
+        self.ignore_schedule = ignore_schedule
+        if ignore_schedule:
+            self.schedules = handle_schedules_input(None)
+            logger.info("ignore_schedule=True: all schedule multipliers set to 1.0")
+        else:
+            self.schedules = handle_schedules_input(schedules)
         self.start_step = start_step
         self.n_steps = n_steps
         self.delta_t = delta_t  # hours per step
@@ -88,6 +133,41 @@ class Case:
         self._result = None
 
         self._validate_case()
+
+    @staticmethod
+    def _enable_verbose():
+        """Add a stderr StreamHandler to the distopf logger at INFO level.
+
+        Returns the handler so the caller can remove it after the solve.
+        """
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(name)s | %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        return handler
+
+    @staticmethod
+    def _disable_verbose(handler):
+        """Remove a previously-added verbose handler."""
+        logger.removeHandler(handler)
+
+    def _log_schedule_summary(self):
+        """Emit an INFO log summarising active schedule multipliers."""
+        if self.schedules is None or self.schedules.empty:
+            logger.info("Schedules: none (all multipliers = 1.0)")
+            return
+        cols = [c for c in self.schedules.columns if c != "time"]
+        steps = range(self.start_step, self.start_step + self.n_steps)
+        lines = [
+            f"Schedules: {len(cols)} column(s) {cols}, "
+            f"time steps {self.start_step}..{self.start_step + self.n_steps - 1}"
+        ]
+        for c in cols:
+            vals = [self.schedules.at[t, c] for t in steps if t in self.schedules.index]
+            if vals:
+                lines.append(f"  {c}: min={min(vals):.4g}, max={max(vals):.4g}")
+        logger.info("\n".join(lines))
 
     def _validate_case(self):
         """
@@ -142,14 +222,13 @@ class Case:
         Parameters
         ----------
         raw_result : bool, default False
-            If True, return the raw scipy.optimize.OptimizeResult object
-            instead of PowerFlowResult.
+            If True, return the raw FBS result object instead of PowerFlowResult.
 
         Returns
         -------
-        PowerFlowResult or OptimizeResult
+        PowerFlowResult or FBS result
             If raw_result=False: PowerFlowResult with voltages, p_flows, q_flows, etc.
-            If raw_result=True: scipy OptimizeResult object
+            If raw_result=True: FBS result object
 
         Examples
         --------
@@ -159,64 +238,11 @@ class Case:
         >>> # Backward-compatible tuple unpacking still works if needed:
         >>> voltages, p_flows, q_flows = case.run_pf()  # (same as unpacking result)
         """
-        from distopf.distOPF import create_model, auto_solve
-        from distopf.results import PowerFlowResult
+        from distopf.fbs import FBS
 
-        # Create unconstrained power flow (wide voltage limits)
-        bus_data = self.bus_data.copy()
-        bus_data.loc[:, "v_min"] = 0.0
-        bus_data.loc[:, "v_max"] = 2.0
-
-        if self.gen_data is not None:
-            gen_data = self.gen_data.copy()
-            gen_data.control_variable = ""
-        else:
-            gen_data = None
-
-        self._model = create_model(
-            "",
-            branch_data=self.branch_data,
-            bus_data=bus_data,
-            gen_data=gen_data,
-            cap_data=self.cap_data,
-            reg_data=self.reg_data,
-        )
-
-        result = auto_solve(self._model)
-        self._result = result
-
-        if raw_result:
-            return result
-
-        self._voltages_df = self._model.get_voltages(result.x)
-        self._p_flows_df = self._model.get_p_flows(result.x)
-        self._q_flows_df = self._model.get_q_flows(result.x)
-        self._p_gens = self._model.get_p_gens(result.x)
-        self._q_gens = self._model.get_q_gens(result.x)
-
-        # Ensure single-period results have a time column 't' for consistency
-        if self._p_gens is not None and "t" not in self._p_gens.columns:
-            self._p_gens = self._p_gens.copy()
-            self._p_gens.insert(2, "t", 0)
-        if self._q_gens is not None and "t" not in self._q_gens.columns:
-            self._q_gens = self._q_gens.copy()
-            self._q_gens.insert(2, "t", 0)
-
-        result = PowerFlowResult(
-            voltages=self._voltages_df,
-            p_flows=self._p_flows_df,
-            q_flows=self._q_flows_df,
-            p_gens=self._p_gens,
-            q_gens=self._q_gens,
-            objective_value=result.fun if hasattr(result, "fun") else None,
-            converged=result.success if hasattr(result, "success") else True,
-            solver="clarabel",
-            result_type="pf",  # Power flow - iteration returns 3 values
-            raw_result=result,
-            model=self._model,
-            case=self,
-        )
-        return result
+        # Use FBS for power flow analysis
+        fbs = FBS(self)
+        return fbs.solve(max_iterations=100, tolerance=1e-6, verbose=False)
 
     def run_fbs(
         self, max_iterations: int = 100, tolerance: float = 1e-6, verbose: bool = False
@@ -257,11 +283,23 @@ class Case:
         """
         from distopf.fbs import FBS
 
-        # Create and solve with FBS
-        fbs = FBS(self)
-        return fbs.solve(
-            max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
-        )
+        handler = self._enable_verbose() if verbose else None
+        try:
+            logger.info(
+                "Running FBS power flow (%d buses, %d branches)",
+                len(self.bus_data),
+                len(self.branch_data),
+            )
+            self._log_schedule_summary()
+            fbs = FBS(self)
+            result = fbs.solve(
+                max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+            )
+            logger.info("FBS completed")
+            return result
+        finally:
+            if handler:
+                self._disable_verbose(handler)
 
     def run_opf(
         self,
@@ -272,6 +310,7 @@ class Case:
         backend: Optional[str] = None,
         raw_result: bool = False,
         duals: bool = False,
+        verbose: bool = False,
         **kwargs,
     ):
         """
@@ -311,6 +350,9 @@ class Case:
         duals : bool, default False
             If True (Pyomo backend only), extract dual variables from constraints.
             Duals are stored on result.raw_result as dual_power_balance_p, etc.
+        verbose : bool, default False
+            If True, print diagnostic information about the solve: backend
+            selection, schedule multiplier summaries, and timing.
         **kwargs
             Additional arguments passed to solver (e.g., target, error_percent, solver)
 
@@ -323,26 +365,43 @@ class Case:
         """
         from distopf.backend_selector import BackendSelector
 
-        # Resolve objective alias at entry point (single point of resolution)
-        if isinstance(objective, str):
-            from distopf.distOPF import resolve_objective_alias
+        handler = self._enable_verbose() if verbose else None
+        try:
+            # Resolve objective alias at entry point (single point of resolution)
+            if isinstance(objective, str):
+                from distopf.distOPF import resolve_objective_alias
 
-            objective = resolve_objective_alias(objective)
+                objective = resolve_objective_alias(objective)
 
-        # Route to appropriate backend using BackendSelector
-        selector = BackendSelector(self)
-        result = selector.solve(
-            objective=objective,
-            control_variable=control_variable,
-            control_regulators=control_regulators,
-            control_capacitors=control_capacitors,
-            backend=backend,
-            raw_result=raw_result,
-            duals=duals,
-            **kwargs,
-        )
+            logger.info(
+                "Running OPF: objective=%s, control_variable=%s, backend=%s, "
+                "n_steps=%d, start_step=%d",
+                objective,
+                control_variable,
+                backend,
+                self.n_steps,
+                self.start_step,
+            )
+            self._log_schedule_summary()
 
-        return result
+            # Route to appropriate backend using BackendSelector
+            selector = BackendSelector(self)
+            result = selector.solve(
+                objective=objective,
+                control_variable=control_variable,
+                control_regulators=control_regulators,
+                control_capacitors=control_capacitors,
+                backend=backend,
+                raw_result=raw_result,
+                duals=duals,
+                **kwargs,
+            )
+
+            logger.info("OPF completed (backend=%s)", backend or "auto")
+            return result
+        finally:
+            if handler:
+                self._disable_verbose(handler)
 
     def _select_backend(
         self, control_regulators=False, control_capacitors=False
@@ -585,6 +644,11 @@ class Case:
             start_step=self.start_step,
             n_steps=self.n_steps,
             delta_t=self.delta_t,
+            ignore_schedule=self.ignore_schedule,
+            ignore_gen=self.ignore_gen,
+            ignore_bat=self.ignore_bat,
+            ignore_cap=self.ignore_cap,
+            ignore_reg=self.ignore_reg,
         )
 
     def add_generator(
@@ -669,18 +733,118 @@ class Case:
         self.cap_data = cap
 
     # -------------------------------------------------------------------------
+    # Describe / Metadata Methods
+    # -------------------------------------------------------------------------
+
+    def _metadata(self) -> dict:
+        """Return a dictionary summarising this Case (JSON-serialisable)."""
+        n_gen = len(self.gen_data) if self.gen_data is not None else 0
+        n_cap = len(self.cap_data) if self.cap_data is not None else 0
+        n_reg = len(self.reg_data) if self.reg_data is not None else 0
+        n_bat = len(self.bat_data) if self.bat_data is not None else 0
+
+        gen_controls = {}
+        if n_gen > 0 and "control_variable" in self.gen_data.columns:
+            gen_controls = self.gen_data["control_variable"].value_counts().to_dict()
+
+        sched_cols = (
+            [c for c in self.schedules.columns if c != "time"]
+            if self.schedules is not None
+            else []
+        )
+        sched_summary = {}
+        steps = range(self.start_step, self.start_step + self.n_steps)
+        for c in sched_cols:
+            vals = [
+                float(self.schedules.at[t, c])
+                for t in steps
+                if t in self.schedules.index
+            ]
+            if vals:
+                sched_summary[c] = {"min": min(vals), "max": max(vals)}
+
+        return {
+            "buses": len(self.bus_data),
+            "branches": len(self.branch_data),
+            "generators": n_gen,
+            "capacitors": n_cap,
+            "regulators": n_reg,
+            "batteries": n_bat,
+            "start_step": self.start_step,
+            "n_steps": self.n_steps,
+            "delta_t": self.delta_t,
+            "ignore_schedule": self.ignore_schedule,
+            "ignore_gen": self.ignore_gen,
+            "ignore_bat": self.ignore_bat,
+            "ignore_cap": self.ignore_cap,
+            "ignore_reg": self.ignore_reg,
+            "generator_controls": gen_controls,
+            "schedule_columns": sched_cols,
+            "schedule_summary": sched_summary,
+        }
+
+    def describe(self) -> str:
+        """Return a human-readable summary of this Case.
+
+        Returns
+        -------
+        str
+            Multi-line description including network size, equipment counts,
+            time-series settings, and schedule multiplier ranges.
+        """
+        m = self._metadata()
+        lines = [
+            "Case Summary",
+            "=" * 40,
+            f"  Buses:       {m['buses']}",
+            f"  Branches:    {m['branches']}",
+            f"  Generators:  {m['generators']}",
+            f"  Capacitors:  {m['capacitors']}",
+            f"  Regulators:  {m['regulators']}",
+            f"  Batteries:   {m['batteries']}",
+            "",
+            "Time Series",
+            "-" * 40,
+            f"  start_step:       {m['start_step']}",
+            f"  n_steps:          {m['n_steps']}",
+            f"  delta_t:          {m['delta_t']} h",
+            f"  ignore_schedule:  {m['ignore_schedule']}",
+            f"  ignore_gen:       {m['ignore_gen']}",
+            f"  ignore_bat:       {m['ignore_bat']}",
+            f"  ignore_cap:       {m['ignore_cap']}",
+            f"  ignore_reg:       {m['ignore_reg']}",
+        ]
+        if m["generator_controls"]:
+            lines += ["", "Generator Controls", "-" * 40]
+            for cv, count in m["generator_controls"].items():
+                label = cv if cv else '""  (constant PQ)'
+                lines.append(f"  {label}: {count}")
+        if m["schedule_summary"]:
+            lines += ["", "Schedule Columns", "-" * 40]
+            for col, stats in m["schedule_summary"].items():
+                lines.append(f"  {col}: min={stats['min']:.4g}, max={stats['max']:.4g}")
+        else:
+            lines += ["", "Schedules: none (all multipliers = 1.0)"]
+        text = "\n".join(lines)
+        print(text)
+        return text
+
+    # -------------------------------------------------------------------------
     # Save/Export Methods
     # -------------------------------------------------------------------------
 
     def save(self, output_dir: Path | str) -> None:
         """
-        Save case input data to CSV files.
+        Save case input data to CSV files and a ``case_metadata.json``
+        summary.
 
         Parameters
         ----------
         output_dir : Path or str
             Directory to save case data
         """
+        import json
+
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True)
 
@@ -697,6 +861,9 @@ class Case:
         if self.schedules is not None:
             self.schedules.to_csv(output_dir / "schedules.csv", index=False)
 
+        with open(output_dir / "case_metadata.json", "w") as f:
+            json.dump(self._metadata(), f, indent=2)
+
 
 def create_case(
     data_path: Path,
@@ -704,6 +871,11 @@ def create_case(
     start_step: int = 0,
     n_steps: int = 1,
     delta_t: float = 1,
+    ignore_schedule: bool = False,
+    ignore_gen: bool = False,
+    ignore_bat: bool = False,
+    ignore_cap: bool = False,
+    ignore_reg: bool = False,
 ) -> Case:
     """
     Create a Case object from various input formats.
@@ -758,6 +930,11 @@ def create_case(
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,
+            ignore_schedule=ignore_schedule,
+            ignore_gen=ignore_gen,
+            ignore_bat=ignore_bat,
+            ignore_cap=ignore_cap,
+            ignore_reg=ignore_reg,
         )
     elif model_type in ["dss", "opendss"]:
         return create_case_from_dss(
@@ -765,6 +942,11 @@ def create_case(
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,
+            ignore_schedule=ignore_schedule,
+            ignore_gen=ignore_gen,
+            ignore_bat=ignore_bat,
+            ignore_cap=ignore_cap,
+            ignore_reg=ignore_reg,
         )
     elif model_type == "cim":
         return create_case_from_cim(
@@ -772,6 +954,11 @@ def create_case(
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,
+            ignore_schedule=ignore_schedule,
+            ignore_gen=ignore_gen,
+            ignore_bat=ignore_bat,
+            ignore_cap=ignore_cap,
+            ignore_reg=ignore_reg,
         )
     else:
         raise ValueError(
@@ -898,6 +1085,11 @@ def create_case_from_csv(
     start_step: int = 0,
     n_steps: int = 1,
     delta_t: float = 1,
+    ignore_schedule: bool = False,
+    ignore_gen: bool = False,
+    ignore_bat: bool = False,
+    ignore_cap: bool = False,
+    ignore_reg: bool = False,
 ) -> Case:
     """Enhanced version with better error handling and validation."""
 
@@ -978,6 +1170,11 @@ def create_case_from_csv(
         start_step=start_step,
         n_steps=n_steps,
         delta_t=delta_t,
+        ignore_schedule=ignore_schedule,
+        ignore_gen=ignore_gen,
+        ignore_bat=ignore_bat,
+        ignore_cap=ignore_cap,
+        ignore_reg=ignore_reg,
     )
 
     _validate_case_data(case)
@@ -989,6 +1186,11 @@ def create_case_from_dss(
     start_step: int = 0,
     n_steps: int = 1,
     delta_t: float = 1,
+    ignore_schedule: bool = False,
+    ignore_gen: bool = False,
+    ignore_bat: bool = False,
+    ignore_cap: bool = False,
+    ignore_reg: bool = False,
 ) -> Case:
     """Enhanced version with better error handling."""
 
@@ -1015,6 +1217,11 @@ def create_case_from_dss(
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,
+            ignore_schedule=ignore_schedule,
+            ignore_gen=ignore_gen,
+            ignore_bat=ignore_bat,
+            ignore_cap=ignore_cap,
+            ignore_reg=ignore_reg,
         )
         _validate_case_data(case)
         return case
@@ -1028,6 +1235,11 @@ def create_case_from_cim(
     start_step: int = 0,
     n_steps: int = 1,
     delta_t: float = 1,
+    ignore_schedule: bool = False,
+    ignore_gen: bool = False,
+    ignore_bat: bool = False,
+    ignore_cap: bool = False,
+    ignore_reg: bool = False,
 ) -> Case:
     """Enhanced version with better error handling."""
 
@@ -1056,6 +1268,11 @@ def create_case_from_cim(
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,
+            ignore_schedule=ignore_schedule,
+            ignore_gen=ignore_gen,
+            ignore_bat=ignore_bat,
+            ignore_cap=ignore_cap,
+            ignore_reg=ignore_reg,
         )
         _validate_case_data(case)
         return case

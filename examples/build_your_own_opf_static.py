@@ -152,11 +152,11 @@ def _(mo):
 
 
 @app.cell
-def _(OpfResult, model, pyo):
+def _(PyoResult, model, pyo):
     opt = pyo.SolverFactory("ipopt")
     results = opt.solve(model)
     # Extract result dataframes from model
-    sol = OpfResult(model)
+    sol = PyoResult(model)
     return results, sol
 
 

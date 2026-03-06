@@ -272,7 +272,11 @@ def add_swing_bus_constraints(m: LindistModelProtocol) -> None:
     """
 
     def swing_voltage_rule(m: LindistModelProtocol, _id, ph, t):
-        """Fix swing bus voltages"""
+        """Fix swing bus voltages.
+
+        `m.v_swing` is stored as voltage magnitude (p.u.), while `m.v2` is
+        voltage magnitude squared.
+        """
         if _id not in m.swing_bus_set:
             return pyo.Constraint.Skip
         return m.v2[_id, ph, t] == m.v_swing[_id, ph, t] ** 2

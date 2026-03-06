@@ -82,11 +82,10 @@ class CaseValidator:
             for _, row in self.case.gen_data.iterrows():
                 cv = str(row.get("control_variable", "")).upper()
                 if cv not in valid_cv:
-                    row["control_variable"] = ""
-                    # self.errors.append(
-                    #     f"Generator {row['name']}: invalid control_variable "
-                    #     f"'{row['control_variable']}'. Must be one of: {valid_cv}"
-                    # )
+                    self.errors.append(
+                        f"Generator {row['name']}: invalid control_variable "
+                        f"'{row.get('control_variable', '')}'. Must be one of: {valid_cv}"
+                    )
 
         # Phase consistency validation (warnings only)
         bus_phases = dict(zip(self.case.bus_data["id"], self.case.bus_data["phases"]))

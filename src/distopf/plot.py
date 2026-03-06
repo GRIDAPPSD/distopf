@@ -13,6 +13,17 @@ from distopf.matrix_models.base import LinDistBase
 from distopf.api import Case
 
 
+def _get_id_name_cols(df: pd.DataFrame) -> tuple[str, str]:
+    """Return the (id_col, name_col) pair present in df.
+
+    Supports both bus-indexed DataFrames (id, name) and
+    branch-indexed DataFrames (tb, to_name).
+    """
+    if "tb" in df.columns:
+        return "tb", "to_name" if "to_name" in df.columns else "tb"
+    return "id", "name"
+
+
 def _choose_t(df, t=None):
     df = df.copy()
     if t is None:
@@ -309,38 +320,42 @@ def plot_pq(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
         q = pd.DataFrame(q.loc[q.t == t2, :])
         q = q.drop("t", axis=1)
 
+    id_col, name_col = _get_id_name_cols(p)
+    keep = [id_col, name_col] + [c for c in ("a", "b", "c") if c in p.columns]
+    p = p[keep]
+    q = q[[id_col, name_col] + [c for c in ("a", "b", "c") if c in q.columns]]
     p = p.melt(
         ignore_index=True,
-        id_vars=["id", "name"],
+        id_vars=[id_col, name_col],
         var_name="phase",
         value_name="P",
     )
     q = q.melt(
         ignore_index=True,
-        id_vars=["id", "name"],
+        id_vars=[id_col, name_col],
         var_name="phase",
         value_name="Q",
     )
-    pq = pd.merge(p, q, how="outer", on=["id", "name", "phase"])
-    pq.id = p.id
-    pq.name = p.name
+    pq = pd.merge(p, q, how="outer", on=[id_col, name_col, "phase"])
+    pq[id_col] = p[id_col]
+    pq[name_col] = p[name_col]
     pq.phase = p.phase
     pq["P"] = p["P"]
     pq["Q"] = q["Q"]
     pq = pq.melt(
         ignore_index=False,
-        id_vars=["id", "name", "phase"],
+        id_vars=[id_col, name_col, "phase"],
         var_name="part",
         value_name="power",
     )
     fig = px.bar(
         pq,
-        x="name",
+        x=name_col,
         y="power",
         facet_col="phase",
         facet_row="part",
         color="phase",
-        labels={"name": "Bus Name"},
+        labels={name_col: "Bus Name"},
     )
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
     fig.update_layout(
@@ -471,21 +486,25 @@ def plot_polar(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
         q = pd.DataFrame(q.loc[q.t == t2, :])
         q = q.drop("t", axis=1)
 
+    id_col, name_col = _get_id_name_cols(p)
+    keep = [id_col, name_col] + [c for c in ("a", "b", "c") if c in p.columns]
+    p = p[keep]
+    q = q[[id_col, name_col] + [c for c in ("a", "b", "c") if c in q.columns]]
     p = p.melt(
         ignore_index=True,
-        id_vars=["id", "name"],
+        id_vars=[id_col, name_col],
         var_name="phase",
         value_name="value",
     )
     q = q.melt(
         ignore_index=True,
-        id_vars=["id", "name"],
+        id_vars=[id_col, name_col],
         var_name="phase",
         value_name="value",
     )
-    pq = pd.merge(p, q, how="outer", on=["id", "name", "phase"])
-    pq.id = p.id
-    pq.name = p.name
+    pq = pd.merge(p, q, how="outer", on=[id_col, name_col, "phase"])
+    pq[id_col] = p[id_col]
+    pq[name_col] = p[name_col]
     pq.phase = p.phase
     pq["p"] = p.value
     pq["q"] = q.value
@@ -500,7 +519,7 @@ def plot_polar(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
         # range_theta=[-90, 90],
         start_angle=0,
         direction="counterclockwise",
-        hover_data="name",
+        hover_data=name_col,
     )
     return fig
 
@@ -938,8 +957,10 @@ def plot_network(
         _s["a"] = p_flow.a + 1j * q_flow.a
         _s["b"] = p_flow.b + 1j * q_flow.b
         _s["c"] = p_flow.c + 1j * q_flow.c
-        _s["tb"] = _s["id"]
-        _s["fb"] = _s["tb"].map(from_bus_map)
+        if "tb" not in _s.columns:
+            _s["tb"] = _s["id"]
+        if "fb" not in _s.columns:
+            _s["fb"] = _s["tb"].map(from_bus_map)
         _s = _choose_t(_s, t)
     if p_gen is not None:
         p_gen = _choose_t(p_gen, t)
@@ -1225,7 +1246,7 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
                 edge.s_b.to_numpy()[0],
                 edge.s_c.to_numpy()[0],
             )
-            
+
             pflow_a_str = format_phase_value(np.real(sa), "a")
             pflow_b_str = format_phase_value(np.real(sb), "b")
             pflow_c_str = format_phase_value(np.real(sc), "c")
@@ -1234,7 +1255,9 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
             qflow_c_str = format_phase_value(np.imag(sc), "c")
 
             hover_text += "<br>"
-            hover_text += f"<b>  {edge.type.to_numpy()[0]}: {from_name} → {to_name}</b><br>"
+            hover_text += (
+                f"<b>  {edge.type.to_numpy()[0]}: {from_name} → {to_name}</b><br>"
+            )
             hover_text += f"➡️ P Flow  {pflow_a_str} {pflow_b_str} {pflow_c_str}<br>"
             hover_text += f"➡️ Q Flow  {qflow_a_str} {qflow_b_str} {qflow_c_str}<br>"
         text.append(hover_text)

@@ -497,34 +497,55 @@ class LinDistBaseMP(BaseModelMP):
             )
         return x_lim_lower, x_lim_upper
 
+    def _get_gen_schedule_mult(self, j: int, t: int) -> float:
+        """Look up the schedule multiplier for generator at bus j at time t.
+
+        Uses the per-generator ``gen_shape`` column.  If the column was not
+        present in the original gen_data, ``handle_gen_input`` already
+        defaulted it to ``"PV"``.
+        """
+        gen_shape = get(self.gen["gen_shape"], j, "PV")
+        if not gen_shape or pd.isna(gen_shape):
+            return 1.0
+        if gen_shape in self.schedules.columns:
+            return float(self.schedules.at[t, gen_shape])
+        # gen_shape not found in schedules
+        if gen_shape != "PV":
+            warnings.warn(
+                f"Generator at bus {j}: gen_shape='{gen_shape}' not found in "
+                f"schedules columns {list(self.schedules.columns)}. "
+                f"Using multiplier=1.0.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return 1.0
+
     def add_generator_limits(
         self, x_lim_lower: np.ndarray, x_lim_upper: np.ndarray, t: int = 0
     ) -> tuple[np.ndarray, np.ndarray]:
         if t < self.start_step:
             t = self.start_step
-        gen_mult = 1
-        if "PV" in self.schedules.columns:
-            gen_mult = self.schedules.PV[t]
         for a in "abc":
             if not self.phase_exists(a):
                 continue
             s_rated = self.gen[f"s{a}_max"]
-            p_out = self.gen[f"p{a}"] * gen_mult
-            q_max = ((s_rated**2) - ((p_out) ** 2)) ** (1 / 2)
-            q_min = -q_max
-            q_max_manual = self.gen.get(f"q{a}_max", np.ones_like(q_min) * 100e3)
-            q_min_manual = self.gen.get(f"q{a}_min", np.ones_like(q_min) * -100e3)
+            q_max_manual = self.gen.get(f"q{a}_max", np.ones(len(self.gen)) * 100e3)
+            q_min_manual = self.gen.get(f"q{a}_min", np.ones(len(self.gen)) * -100e3)
             for j in self.gen_buses[a]:
+                gen_mult = self._get_gen_schedule_mult(j, t)
+                p_out = self.gen[f"p{a}"][j] * gen_mult
+                q_max = ((s_rated[j] ** 2) - (p_out**2)) ** (1 / 2)
+                q_min = -q_max
                 mode = self.gen.loc[j, "control_variable"]
                 pg = self.idx("pg", j, a, t)
                 qg = self.idx("qg", j, a, t)
                 # active power bounds
                 x_lim_lower[pg] = 0
-                x_lim_upper[pg] = p_out[j]
+                x_lim_upper[pg] = p_out
                 # reactive power bounds
                 if mode == opf.CONSTANT_P:
-                    x_lim_lower[qg] = max(q_min[j], q_min_manual[j])
-                    x_lim_upper[qg] = min(q_max[j], q_max_manual[j])
+                    x_lim_lower[qg] = max(q_min, q_min_manual[j])
+                    x_lim_upper[qg] = min(q_max, q_max_manual[j])
                 if mode != opf.CONSTANT_P:
                     # reactive power bounds
                     x_lim_lower[qg] = max(-s_rated[j], q_min_manual[j])
@@ -800,9 +821,7 @@ class LinDistBaseMP(BaseModelMP):
         if t < self.start_step:
             t = self.start_step
         p_gen_nom, q_gen_nom = 0, 0
-        pv_mult = 1
-        if "PV" in self.schedules.columns:
-            pv_mult = self.schedules.PV[t]
+        gen_mult = self._get_gen_schedule_mult(j, t)
         if self.gen is not None:
             p_gen_nom = get(self.gen[f"p{a}"], j, 0)
             q_gen_nom = get(self.gen[f"q{a}"], j, 0)
@@ -816,7 +835,7 @@ class LinDistBaseMP(BaseModelMP):
         a_eq[qij, qg] = 1
         if get(self.gen["control_variable"], j, 0) in [opf.CONSTANT_PQ, opf.CONSTANT_P]:
             a_eq[pg, pg] = 1
-            b_eq[pg] = p_gen_nom * pv_mult
+            b_eq[pg] = p_gen_nom * gen_mult
         if get(self.gen["control_variable"], j, 0) in [opf.CONSTANT_PQ, opf.CONSTANT_Q]:
             a_eq[qg, qg] = 1
             b_eq[qg] = q_gen_nom
@@ -1329,7 +1348,7 @@ class LinDistBaseMP(BaseModelMP):
         df_list = []
         for t in range(self.start_step, self.start_step + self.n_steps):
             df = pd.DataFrame(
-                columns=["fb", "id", "from_name", "name", "t", "a", "b", "c"],
+                columns=["fb", "tb", "from_name", "to_name", "t", "a", "b", "c"],
                 index=range(2, self.nb + 1),
             )
             df["a"] = df["a"].astype(float)
@@ -1342,9 +1361,9 @@ class LinDistBaseMP(BaseModelMP):
                 tb_idxs = self.x_maps[t][ph].bj.to_numpy()
                 tb_names = self.bus.name[tb_idxs].to_numpy()
                 df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "fb"] = fb_idxs + 1
-                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "id"] = tb_idxs + 1
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "tb"] = tb_idxs + 1
                 df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "from_name"] = fb_names
-                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "name"] = tb_names
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "to_name"] = tb_names
                 df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, ph] = x[
                     self.x_maps[t][ph].pij
                 ]
@@ -1356,7 +1375,7 @@ class LinDistBaseMP(BaseModelMP):
         df_list = []
         for t in range(self.start_step, self.start_step + self.n_steps):
             df = pd.DataFrame(
-                columns=["fb", "id", "from_name", "name", "t", "a", "b", "c"],
+                columns=["fb", "tb", "from_name", "to_name", "t", "a", "b", "c"],
                 index=range(2, self.nb + 1),
             )
             df["a"] = df["a"].astype(float)
@@ -1369,9 +1388,9 @@ class LinDistBaseMP(BaseModelMP):
                 tb_idxs = self.x_maps[t][ph].bj.to_numpy()
                 tb_names = self.bus.name[tb_idxs].to_numpy()
                 df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "fb"] = fb_idxs + 1
-                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "id"] = tb_idxs + 1
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "tb"] = tb_idxs + 1
                 df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "from_name"] = fb_names
-                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "name"] = tb_names
+                df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, "to_name"] = tb_names
                 df.loc[self.x_maps[t][ph].bj.to_numpy() + 1, ph] = x[
                     self.x_maps[t][ph].qij
                 ]

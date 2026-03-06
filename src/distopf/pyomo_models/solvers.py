@@ -4,6 +4,8 @@ import pyomo.environ as pyo
 
 
 def solve(model: LindistModelProtocol, solver="ipopt", duals=True) -> PyoResult:
+    if solver is None:
+        solver = "ipopt"
     if duals:
         model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
     # Solve the model

@@ -26,6 +26,15 @@ For Pyomo (NLP) workflows:
 """
 
 # =============================================================================
+# Package-level logger (NullHandler by default; ``verbose=True`` on run_opf /
+# run_fbs adds a StreamHandler for casual users)
+# =============================================================================
+import logging as _logging
+
+logger = _logging.getLogger("distopf")
+logger.addHandler(_logging.NullHandler())
+
+# =============================================================================
 # Lightweight imports (always loaded) - these are fast
 # =============================================================================
 from distopf.cases import CASES_DIR

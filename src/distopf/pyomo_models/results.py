@@ -39,6 +39,19 @@ class PyoResult:
         for var in vars:
             setattr(self, var, get_values(getattr(model, var)))
 
+        # Enrich flow variables with branch columns (fb, from_name)
+        # and rename id→tb, name→to_name to match the standard branch format
+        flow_vars = ["p_flow", "q_flow"]
+        from_bus_map = getattr(model, "from_bus_map", {})
+        name_map = getattr(model, "name_map", {})
+        for fvar in flow_vars:
+            df = getattr(self, fvar, None)
+            if df is not None and "id" in df.columns:
+                df = df.rename(columns={"id": "tb", "name": "to_name"})
+                df.insert(0, "fb", df["tb"].map(from_bus_map))
+                df.insert(2, "from_name", df["fb"].map(name_map))
+                setattr(self, fvar, df)
+
         # Extract duals if requested and available
         if extract_duals and hasattr(model, "dual"):
             self._populate_common_duals(model)
