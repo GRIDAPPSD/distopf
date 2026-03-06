@@ -634,6 +634,8 @@ class DSSToCSVConverter:
         n_phases = self.dss.CktElement.NumPhases()
         if n_phases < 3:
             active_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
+            if "0" in active_phases:
+                active_phases.remove("0")
             active_phases = np.array(active_phases).astype(int) - 1
             phases = "".join("abc"[i] for i in active_phases)
         return dict(

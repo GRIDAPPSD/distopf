@@ -70,11 +70,11 @@ class CaseValidator:
                 self.errors.append(
                     f"Bus {row['name']}: v_min ({row['v_min']}) >= v_max ({row['v_max']})"
                 )
-            if row["v_min"] < 0.8 or row["v_max"] > 1.2:
-                self.warnings.append(
-                    f"Bus {row['name']}: voltage limits [{row['v_min']}, {row['v_max']}] "
-                    f"are outside typical range [0.8, 1.2]"
-                )
+            # if row["v_min"] < 0.8 or row["v_max"] > 1.2:
+            #     self.warnings.append(
+            #         f"Bus {row['name']}: voltage limits [{row['v_min']}, {row['v_max']}] "
+            #         f"are outside typical range [0.8, 1.2]"
+            #     )
 
         # Generator control variable validation
         if self.case.gen_data is not None and len(self.case.gen_data) > 0:
