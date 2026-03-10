@@ -131,7 +131,7 @@ class PowerFlowResult:
         "opf"  # "pf" for power flow, "opf" for optimal power flow, "fbs" for FBS
     )
 
-    # Benchmarking metadata (optional, for cross-backend comparison)
+    # case metadata
     backend: Optional[str] = None  # e.g., "pyomo", "multiperiod", "matrix", "fbs"
     termination_condition: Optional[str] = (
         None  # e.g., "optimal", "infeasible", "unbounded"
