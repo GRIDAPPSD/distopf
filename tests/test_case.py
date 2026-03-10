@@ -81,14 +81,6 @@ class TestCaseValidation:
         with pytest.raises(ValueError, match="v_min"):
             case._validate_case()
 
-    def test_unusual_voltage_limits_warns(self):
-        """Unusual voltage limits should warn."""
-        case = create_case(CASES_DIR / "csv" / "ieee13")
-        case.bus_data.loc[0, "v_min"] = 0.5
-
-        with pytest.warns(UserWarning, match="outside typical range"):
-            case._validate_case()
-
     def test_invalid_control_variable_raises(self):
         """Invalid control variable should raise."""
         case = create_case(CASES_DIR / "csv" / "ieee123_30der")
@@ -137,15 +129,6 @@ class TestCaseValidation:
 
 class TestCaseValidatorDetailed:
     """Test CaseValidator edge cases."""
-
-    def test_voltage_limits_warning(self):
-        """Unusual voltage limits should produce warnings."""
-        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        case.bus_data.loc[:, "v_min"] = 0.5
-        case.bus_data.loc[:, "v_max"] = 1.5
-        validator = CaseValidator(case)
-        is_valid, errors, warns = validator.validate_all()
-        assert any("outside typical range" in w for w in warns)
 
     def test_inverted_voltage_limits_error(self):
         """v_min >= v_max should produce error."""

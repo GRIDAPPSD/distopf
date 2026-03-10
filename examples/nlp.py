@@ -1,4 +1,4 @@
- """
+"""
 Example: Nonlinear OPF using the new backend='nlp' API.
 
 This example demonstrates how to use the new NLP backend for nonlinear optimal
