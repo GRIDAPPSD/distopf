@@ -297,7 +297,7 @@ class Case:
         Returns
         -------
         PowerFlowResult or FBS result
-            If raw_result=False: PowerFlowResult with voltages, p_flows, q_flows, etc.
+            If raw_result=False: PowerFlowResult with voltages, active_power_flows, reactive_power_flows, etc.
             If raw_result=True: FBS result object
 
         Examples
@@ -339,8 +339,8 @@ class Case:
             Result object with all power flow outputs:
             - voltages: Bus voltage magnitudes (p.u.)
             - voltage_angles: Bus voltage angles (degrees)
-            - p_flows: Branch active power flows (p.u.)
-            - q_flows: Branch reactive power flows (p.u.)
+            - active_power_flows: Branch active power flows (p.u.)
+            - reactive_power_flows: Branch reactive power flows (p.u.)
             - currents: Branch currents (p.u.)
             - current_angles: Branch current angles (degrees)
 

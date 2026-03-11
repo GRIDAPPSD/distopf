@@ -222,16 +222,16 @@ class PyomoWrapper(Wrapper):
 
         return PowerFlowResult(
             voltages=self.get_voltages(),
-            p_flows=self.get_p_flows(),
-            q_flows=self.get_q_flows(),
-            p_gens=self.get_p_gens(),
-            q_gens=self.get_q_gens(),
-            p_loads=p_loads,
-            q_loads=q_loads,
-            q_caps=q_caps,
+            active_power_flows=self.get_p_flows(),
+            reactive_power_flows=self.get_q_flows(),
+            active_power_generation=self.get_p_gens(),
+            reactive_power_generation=self.get_q_gens(),
+            active_power_loads=p_loads,
+            reactive_power_loads=q_loads,
+            capacitor_reactive_power=q_caps,
             tap_ratios=tap_ratios,
-            p_bats=p_bats,
-            q_bats=q_bats,
+            battery_active_power=p_bats,
+            battery_reactive_power=q_bats,
             p_charge=p_charge,
             p_discharge=p_discharge,
             soc=soc,
@@ -270,11 +270,11 @@ class PyomoWrapper(Wrapper):
         p_data = {}
         q_data = {}
         for _id, ph, t in self.model.branch_phase_set * self.model.time_set:
-            p_flow = fbs_results.p_flows.loc[
-                (fbs_results.p_flows.tb == _id), ph
+            p_flow = fbs_results.active_power_flows.loc[
+                (fbs_results.active_power_flows.tb == _id), ph
             ].to_numpy()[0]
-            q_flow = fbs_results.q_flows.loc[
-                (fbs_results.q_flows.tb == _id), ph
+            q_flow = fbs_results.reactive_power_flows.loc[
+                (fbs_results.reactive_power_flows.tb == _id), ph
             ].to_numpy()[0]
             p_data[(_id, ph, t)] = p_flow
             q_data[(_id, ph, t)] = q_flow

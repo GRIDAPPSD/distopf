@@ -843,14 +843,14 @@ class FBS:
         results = PowerFlowResult(
             voltages=self.get_voltages(),
             voltage_angles=self.get_voltage_angles(),
-            p_flows=self.get_p_flows(),
-            q_flows=self.get_q_flows(),
+            active_power_flows=self.get_p_flows(),
+            reactive_power_flows=self.get_q_flows(),
             currents=self.get_currents(),
             current_angles=self.get_current_angles(),
-            p_gens=p_gens_df,
-            q_gens=q_gens_df,
-            p_loads=p_load_df,
-            q_loads=q_load_df,
+            active_power_generation=p_gens_df,
+            reactive_power_generation=q_gens_df,
+            active_power_loads=p_load_df,
+            reactive_power_loads=q_load_df,
             converged=self.converged,
             solver="fbs",
             result_type="fbs",  # FBS - iteration returns 6 values
@@ -1256,9 +1256,9 @@ def run_fbs_with_opf_setpoints(
 
     if opf_result is not None:
         if p_gens is None:
-            p_gens = opf_result.p_gens
+            p_gens = opf_result.active_power_generation
         if q_gens is None:
-            q_gens = opf_result.q_gens
+            q_gens = opf_result.reactive_power_generation
 
     case_copy = case.copy()
 

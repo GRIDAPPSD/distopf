@@ -164,18 +164,18 @@ class TestCaseMethods:
 
         assert isinstance(result, opf.PowerFlowResult)
         assert result.voltages is not None
-        assert result.p_flows is not None
-        assert result.q_flows is not None
+        assert result.active_power_flows is not None
+        assert result.reactive_power_flows is not None
         assert len(result.voltages) > 0
-        assert len(result.p_flows) > 0
-        assert len(result.q_flows) > 0
+        assert len(result.active_power_flows) > 0
+        assert len(result.reactive_power_flows) > 0
 
-        assert result.p_gens is not None
-        assert "t" in result.p_gens.columns
-        assert result.q_gens is not None
-        assert "t" in result.q_gens.columns
-        assert result.p_flows is not None
-        assert result.q_flows is not None
+        assert result.active_power_generation is not None
+        assert "t" in result.active_power_generation.columns
+        assert result.reactive_power_generation is not None
+        assert "t" in result.reactive_power_generation.columns
+        assert result.active_power_flows is not None
+        assert result.reactive_power_flows is not None
 
     def test_case_run_pf_returns_results(self):
         """Test that Case.run_pf() returns a PowerFlowResult and Case has no result attrs."""
@@ -184,15 +184,15 @@ class TestCaseMethods:
 
         assert isinstance(res, PowerFlowResult)
         assert res.voltages is not None
-        assert res.p_flows is not None
-        assert res.q_flows is not None
-        assert res.p_gens is not None
-        assert res.q_gens is not None
+        assert res.active_power_flows is not None
+        assert res.reactive_power_flows is not None
+        assert res.active_power_generation is not None
+        assert res.reactive_power_generation is not None
 
         # Case should NOT expose result properties
         assert not hasattr(case, "voltages")
-        assert not hasattr(case, "p_flows")
-        assert not hasattr(case, "p_gens")
+        assert not hasattr(case, "active_power_flows")
+        assert not hasattr(case, "active_power_generation")
 
     def test_case_run_fbs(self):
         """Test Case.run_fbs() method."""
@@ -202,8 +202,8 @@ class TestCaseMethods:
         assert isinstance(result, opf.PowerFlowResult)
         assert result.voltages is not None
         assert result.voltage_angles is not None
-        assert result.p_flows is not None
-        assert result.q_flows is not None
+        assert result.active_power_flows is not None
+        assert result.reactive_power_flows is not None
         assert result.currents is not None
         assert result.current_angles is not None
         assert result.solver == "fbs"
@@ -215,8 +215,8 @@ class TestCaseMethods:
         results_dict = result.to_dict()
         assert "voltages" in results_dict
         assert "voltage_angles" in results_dict
-        assert "p_flows" in results_dict
-        assert "q_flows" in results_dict
+        assert "active_power_flows" in results_dict
+        assert "reactive_power_flows" in results_dict
         assert "currents" in results_dict
         assert "current_angles" in results_dict
 
@@ -228,15 +228,15 @@ class TestCaseMethods:
         assert isinstance(res, PowerFlowResult)
         assert res.voltages is not None
         assert res.voltage_angles is not None
-        assert res.p_flows is not None
-        assert res.q_flows is not None
+        assert res.active_power_flows is not None
+        assert res.reactive_power_flows is not None
         assert res.currents is not None
         assert res.current_angles is not None
 
         # Case should NOT expose result properties
         assert not hasattr(case, "voltages")
         assert not hasattr(case, "voltage_angles")
-        assert not hasattr(case, "p_flows")
+        assert not hasattr(case, "active_power_flows")
         assert not hasattr(case, "currents")
 
     def test_case_run_opf(self):

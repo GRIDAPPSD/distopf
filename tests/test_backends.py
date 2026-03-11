@@ -153,10 +153,10 @@ class TestBackendConsistency:
         r = case.run_opf("loss", backend="matrix")
 
         assert "t" in r.voltages.columns, "voltages missing 't' column"
-        assert "t" in r.p_flows.columns, "power_flows missing 't' column"
-        assert "t" in r.q_flows.columns, "power_flows missing 't' column"
-        assert "t" in r.p_gens.columns, "p_gens missing 't' column"
-        assert "t" in r.q_gens.columns, "q_gens missing 't' column"
+        assert "t" in r.active_power_flows.columns, "power_flows missing 't' column"
+        assert "t" in r.reactive_power_flows.columns, "power_flows missing 't' column"
+        assert "t" in r.active_power_generation.columns, "active_power_generation missing 't' column"
+        assert "t" in r.reactive_power_generation.columns, "reactive_power_generation missing 't' column"
 
         # Time value should be 0 for single-period
         assert (r.voltages["t"] == 0).all()

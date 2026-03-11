@@ -68,8 +68,8 @@ class TestCoreExports:
         # Check result has expected structure
         assert result is not None
         assert "voltages" in result.to_dict()
-        assert "p_flows" in result.to_dict()
-        assert "q_flows" in result.to_dict()
+        assert "active_power_flows" in result.to_dict()
+        assert "reactive_power_flows" in result.to_dict()
 
 
 class TestLazyLoading:

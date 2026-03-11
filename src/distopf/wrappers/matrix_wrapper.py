@@ -265,10 +265,10 @@ class MatrixWrapper(Wrapper):
 
         return PowerFlowResult(
             voltages=voltages_df,
-            p_flows=p_flows_df,
-            q_flows=q_flows_df,
-            p_gens=p_gens,
-            q_gens=q_gens,
+            active_power_flows=p_flows_df,
+            reactive_power_flows=q_flows_df,
+            active_power_generation=p_gens,
+            reactive_power_generation=q_gens,
             reg_taps=reg_taps,
             z_caps=z_caps,
             u_caps=u_caps,

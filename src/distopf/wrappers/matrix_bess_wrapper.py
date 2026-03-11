@@ -76,12 +76,12 @@ class MatrixBessWrapper(Wrapper):
 
         return PowerFlowResult(
             voltages=self.get_voltages(),
-            p_flows=self.get_p_flows(),
-            q_flows=self.get_q_flows(),
-            p_gens=self.get_p_gens(),
-            q_gens=self.get_q_gens(),
-            p_bats=self.get_p_batt(),
-            q_bats=self.get_q_batt(),
+            active_power_flows=self.get_p_flows(),
+            reactive_power_flows=self.get_q_flows(),
+            active_power_generation=self.get_p_gens(),
+            reactive_power_generation=self.get_q_gens(),
+            battery_active_power=self.get_p_batt(),
+            battery_reactive_power=self.get_q_batt(),
             p_charge=self.get_p_charge(),
             p_discharge=self.get_p_discharge(),
             soc=self.get_soc(),

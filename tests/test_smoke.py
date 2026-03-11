@@ -19,8 +19,8 @@ class TestSmokeTests:
         result = case.run_pf()
         assert isinstance(result, PowerFlowResult)
         assert result.voltages is not None
-        assert result.p_flows is not None
-        assert result.q_flows is not None
+        assert result.active_power_flows is not None
+        assert result.reactive_power_flows is not None
         assert result.converged
 
     def test_smoke_ieee13_run_fbs(self):
@@ -45,8 +45,8 @@ class TestSmokeTests:
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
         result = case.run_opf("loss", control_variable="Q", backend="matrix")
         assert isinstance(result, PowerFlowResult)
-        assert result.p_gens is not None
-        assert result.q_gens is not None
+        assert result.active_power_generation is not None
+        assert result.reactive_power_generation is not None
 
     def test_smoke_ieee123_30der_matrix_curtail(self):
         """Load ieee123_30der → run_opf(curtail, matrix) → verify results."""
@@ -135,7 +135,7 @@ class TestFBSWithOPFSetpoints:
 
         opf_res = case.run_opf("loss", backend="matrix")
         partial = opf.PowerFlowResult(
-            p_gens=None, q_gens=opf_res.q_gens, result_type="opf"
+            active_power_generation=None, reactive_power_generation=opf_res.reactive_power_generation, result_type="opf"
         )
         fbs_res = opf.run_fbs_with_opf_setpoints(case, partial)
 

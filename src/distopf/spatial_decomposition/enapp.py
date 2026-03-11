@@ -59,8 +59,8 @@ def parse_v_up(case: Case, result: PowerFlowResult):
 
 
 def parse_s_dn(case: Case, result: PowerFlowResult, down_buses: list):
-    p = result.p_flows
-    q = result.q_flows
+    p = result.active_power_flows
+    q = result.reactive_power_flows
     if p is None or q is None:
         return pd.DataFrame(columns=["name", "t", "a", "b", "c"])
     p = p.loc[p["to_name"].isin(down_buses), ["to_name", "t", "a", "b", "c"]]
@@ -87,8 +87,8 @@ def parse_s_up(case: Case, result: PowerFlowResult):
     swing = case.bus_data.loc[
         case.bus_data.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE]), "name"
     ].to_list()[0]
-    p = result.p_flows
-    q = result.q_flows
+    p = result.active_power_flows
+    q = result.reactive_power_flows
     if p is None or q is None:
         return pd.DataFrame(columns=["name", "t", "a", "b", "c"])
     p = p.loc[p["from_name"] == swing, ["from_name", "t", "a", "b", "c"]]
@@ -108,7 +108,7 @@ def combine_powerflow_results(
 ) -> Optional[PowerFlowResult]:
     """Combine multiple PowerFlowResult objects into a single canonical result.
 
-    - Concatenates voltages, p_flows, q_flows, p_gens, q_gens when present.
+    - Concatenates voltages, active_power_flows, reactive_power_flows, active_power_generation, reactive_power_generation when present.
     - Filters out dummy area nodes using `case_ref.bus_data.name` when provided.
     - Deduplicates by (name,t) for voltages and by branch/time identifiers for flows.
     """
@@ -139,10 +139,10 @@ def combine_powerflow_results(
 
     # Power flows
     p_list = [
-        r.p_flows for r in res_list if hasattr(r, "p_flows") and r.p_flows is not None
+        r.active_power_flows for r in res_list if hasattr(r, "active_power_flows") and r.active_power_flows is not None
     ]
     q_list = [
-        r.q_flows for r in res_list if hasattr(r, "q_flows") and r.q_flows is not None
+        r.reactive_power_flows for r in res_list if hasattr(r, "reactive_power_flows") and r.reactive_power_flows is not None
     ]
     p_all = pd.concat(p_list, ignore_index=True) if p_list else None
     q_all = pd.concat(q_list, ignore_index=True) if q_list else None
@@ -188,10 +188,10 @@ def combine_powerflow_results(
 
     # Generators
     pg_list = [
-        r.p_gens for r in res_list if hasattr(r, "p_gens") and r.p_gens is not None
+        r.active_power_generation for r in res_list if hasattr(r, "active_power_generation") and r.active_power_generation is not None
     ]
     qg_list = [
-        r.q_gens for r in res_list if hasattr(r, "q_gens") and r.q_gens is not None
+        r.reactive_power_generation for r in res_list if hasattr(r, "reactive_power_generation") and r.reactive_power_generation is not None
     ]
     p_gens = pd.concat(pg_list, ignore_index=True) if pg_list else None
     q_gens = pd.concat(qg_list, ignore_index=True) if qg_list else None
@@ -221,10 +221,10 @@ def combine_powerflow_results(
 
     aggregated = PowerFlowResult(
         voltages=v_all,
-        p_flows=p_all,
-        q_flows=q_all,
-        p_gens=p_gens,
-        q_gens=q_gens,
+        active_power_flows=p_all,
+        reactive_power_flows=q_all,
+        active_power_generation=p_gens,
+        reactive_power_generation=q_gens,
         objective_value=objective_value,
         converged=all([getattr(r, "converged", True) for r in res_list]),
         solver="enapp",

@@ -110,8 +110,8 @@ class Wrapper(ABC):
             Power flow results dictionary containing:
             - voltages: Bus voltage magnitudes
             - voltage_angles: Bus voltage angles
-            - p_flows: Active power flows
-            - q_flows: Reactive power flows
+            - active_power_flows: Active power flows
+            - reactive_power_flows: Reactive power flows
             - currents: Branch current magnitudes
             - current_angles: Branch current angles
             - converged: Whether solution converged

@@ -233,8 +233,8 @@ def extract_metrics(result) -> dict:
     # Voltage / flow statistics (min, max, mean per phase)
     for attr, prefix in [
         ("voltages", "v"),
-        ("p_flows", "pf"),
-        ("q_flows", "qf"),
+        ("active_power_flows", "pf"),
+        ("reactive_power_flows", "qf"),
     ]:
         df = getattr(result, attr, None)
         if df is None:
@@ -250,7 +250,7 @@ def extract_metrics(result) -> dict:
             m[f"{prefix}_{ph}_mean"] = float(np.mean(vals))
 
     # Generator output totals
-    for attr, prefix in [("p_gens", "pg"), ("q_gens", "qg")]:
+    for attr, prefix in [("active_power_generation", "pg"), ("reactive_power_generation", "qg")]:
         df = getattr(result, attr, None)
         if df is None or df.empty:
             continue
