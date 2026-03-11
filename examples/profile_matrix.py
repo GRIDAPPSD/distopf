@@ -1,10 +1,10 @@
 import distopf as opf
 from distopf.api import create_case
-from distopf.matrix_models.multiperiod.objectives import cp_obj_loss
-from distopf.matrix_models.multiperiod.solvers import cvxpy_solve
+from distopf.matrix_models.matrix_bess.objectives import cp_obj_loss
+from distopf.matrix_models.matrix_bess.solvers import cvxpy_solve
 
-# from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP
-from distopf.matrix_models.multiperiod.base_mp import LinDistBaseMP
+# from distopf.matrix_models.matrix_bess.lindist_mp import LinDistMP
+from distopf.matrix_models.matrix_bess.base_mp import LinDistBaseMP
 from time import perf_counter
 
 import cProfile

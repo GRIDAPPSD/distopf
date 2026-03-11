@@ -4,11 +4,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import distopf as opf
-from distopf.matrix_models.multiperiod.solvers import cvxpy_solve
-from distopf.matrix_models.multiperiod.lindist_loads_mp import LinDistMPL
-from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP
-from distopf.matrix_models.multiperiod.objectives import cp_obj_cost_min
-from distopf.matrix_models.multiperiod.spatial_decomposition.enapp import solve_enapp
+from distopf.matrix_models.matrix_bess.solvers import cvxpy_solve
+from distopf.matrix_models.matrix_bess.lindist_loads_mp import LinDistMPL
+from distopf.matrix_models.matrix_bess.lindist_mp import LinDistMP
+from distopf.matrix_models.matrix_bess.objectives import cp_obj_cost_min
+from distopf.matrix_models.matrix_bess.spatial_decomposition.enapp import solve_enapp
 from distopf.api import create_case
 from distopf import CASES_DIR
 import plotly.express as px

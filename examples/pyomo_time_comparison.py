@@ -10,10 +10,10 @@ from distopf import (
     # plot_network,
     # plot_polar,
 )
-from distopf.matrix_models.multiperiod.solvers import cp_obj_loss, cvxpy_solve
+from distopf.matrix_models.matrix_bess.solvers import cp_obj_loss, cvxpy_solve
 
-# from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP
-from distopf.matrix_models.multiperiod.lindist_loads_mp import LinDistMPL
+# from distopf.matrix_models.matrix_bess.lindist_mp import LinDistMP
+from distopf.matrix_models.matrix_bess.lindist_loads_mp import LinDistMPL
 from time import perf_counter
 
 t0 = perf_counter()

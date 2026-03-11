@@ -894,8 +894,8 @@ def compare_with_reference(
 
     # Compare with reference solver if provided
     if model is not None:
-        from distopf.matrix_models.multiperiod.solvers import cvxpy_solve
-        from distopf.matrix_models.multiperiod.objectives import cp_obj_none
+        from distopf.matrix_models.matrix_bess.solvers import cvxpy_solve
+        from distopf.matrix_models.matrix_bess.objectives import cp_obj_none
 
         res = cvxpy_solve(model, cp_obj_none)
         ref_voltages = model.get_voltages(res.x)
@@ -1321,7 +1321,7 @@ def _apply_gen_setpoints_to_case(
 if __name__ == "__main__":
     from distopf.api import create_case
     from distopf import CASES_DIR
-    from distopf.matrix_models.multiperiod.lindist_mp import LinDistMP
+    from distopf.matrix_models.matrix_bess.lindist_mp import LinDistMP
     from distopf.dss_importer import DSSToCSVConverter
 
     # Load case from CSV files

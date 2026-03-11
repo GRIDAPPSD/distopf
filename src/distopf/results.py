@@ -1,7 +1,7 @@
 """Unified result dataclasses for power flow and OPF analysis.
 
 This module provides standard result containers that work across all solver
-backends (matrix, pyomo, multiperiod, FBS). The goal is to provide a consistent
+backends (matrix, pyomo, matrix_bess, FBS). The goal is to provide a consistent
 API regardless of which solver was used.
 
 # TODO: Rename user-facing variable names to be more user-friendly:
@@ -27,7 +27,7 @@ class PowerFlowResult:
     """Unified result container for power flow and OPF analysis.
 
     This dataclass provides a standard interface for accessing results
-    from any solver backend (matrix, pyomo, multiperiod, FBS). It also
+    from any solver backend (matrix, pyomo, matrix_bess, FBS). It also
     supports benchmarking and cross-backend comparison via optional
     backend metadata fields.
 
@@ -60,9 +60,9 @@ class PowerFlowResult:
     solve_time : float or None
         Solution time in seconds (if available)
     solver : str
-        Name of the solver used ("matrix", "pyomo", "multiperiod", "fbs")
+        Name of the solver used ("matrix", "pyomo", "matrix_bess", "fbs")
     backend : str or None
-        Backend identifier for benchmarking (e.g., "pyomo", "multiperiod", "matrix", "fbs")
+        Backend identifier for benchmarking (e.g., "pyomo", "matrix_bess", "matrix", "fbs")
     termination_condition : str or None
         Solver termination condition (e.g., "optimal", "infeasible", "unbounded")
     error_message : str or None
@@ -132,7 +132,7 @@ class PowerFlowResult:
     )
 
     # case metadata
-    backend: Optional[str] = None  # e.g., "pyomo", "multiperiod", "matrix", "fbs"
+    backend: Optional[str] = None  # e.g., "pyomo", "matrix_bess", "matrix", "fbs"
     termination_condition: Optional[str] = (
         None  # e.g., "optimal", "infeasible", "unbounded"
     )

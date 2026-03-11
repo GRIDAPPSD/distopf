@@ -126,7 +126,7 @@ class TestBackendSelection:
 
     def test_multiperiod_model_creation(self):
         """to_matrix_model with multiperiod=True creates multiperiod model."""
-        from distopf.matrix_models.multiperiod import LinDistBaseMP
+        from distopf.matrix_models.matrix_bess import LinDistBaseMP
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13", n_steps=2)
         model = case.to_matrix_model(multiperiod=True)
@@ -170,7 +170,7 @@ class TestBackendConsistency:
         assert "t" in r.voltages.columns, "voltages missing 't' column"
 
     def test_multiperiod_warns_on_control_regulators(self):
-        """Multiperiod backend should warn when control_regulators is used."""
+        """Matrix BESS backend should warn when control_regulators is used."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13", n_steps=1)
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")

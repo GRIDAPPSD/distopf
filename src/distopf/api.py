@@ -37,13 +37,13 @@ def _get_wrapper_registry() -> dict:
     if _WRAPPER_REGISTRY is None:
         from distopf.wrappers import (
             MatrixWrapper,
-            MultiperiodWrapper,
+            MatrixBessWrapper,
             PyomoWrapper,
         )
 
         _WRAPPER_REGISTRY = {
             "matrix": MatrixWrapper,
-            "multiperiod": MultiperiodWrapper,
+            "matrix_bess": MatrixBessWrapper,
             "pyomo": PyomoWrapper,
         }
     return _WRAPPER_REGISTRY
@@ -52,6 +52,7 @@ def _get_wrapper_registry() -> dict:
 # Aliases that map to a registry key + extra kwargs
 _BACKEND_ALIASES: dict[str, tuple[str, dict]] = {
     "nlp": ("pyomo", {"model_type": "branchflow"}),
+    "multiperiod": ("matrix_bess", {}),
 }
 
 
@@ -61,7 +62,7 @@ def _resolve_backend(name: str) -> tuple:
     Parameters
     ----------
     name : str
-        Backend name (e.g., "pyomo", "nlp", "matrix", "multiperiod")
+        Backend name (e.g., "pyomo", "nlp", "matrix", "matrix_bess")
 
     Returns
     -------
@@ -410,7 +411,7 @@ class Case:
         backend : str, optional
             Optimization backend to use:
             - "matrix": CVXPY/CLARABEL (fast, convex problems only)
-            - "multiperiod": Multi-period matrix model (supports batteries, schedules)
+            - "matrix_bess": Multi-period matrix model (supports batteries, schedules)
             - "pyomo": Pyomo/IPOPT (NLP, LinDistFlow model)
             - "nlp": Pyomo/IPOPT or MINLP (nonlinear BranchFlow model)
             - None: Auto-detect based on n_steps and bat_data
@@ -526,7 +527,7 @@ class Case:
         >>> # Multi-period model with batteries
         >>> case = create_case(CASES_DIR / "csv" / "ieee13_bat", n_steps=24)
         >>> model = case.to_matrix_model(multiperiod=True)
-        >>> from distopf.matrix_models.multiperiod import cvxpy_solve, cp_obj_loss
+        >>> from distopf.matrix_models.matrix_bess import cvxpy_solve, cp_obj_loss
         >>> result = cvxpy_solve(model, cp_obj_loss)
         """
         # Auto-detect multiperiod
@@ -534,7 +535,7 @@ class Case:
             multiperiod = False
 
         if multiperiod:
-            from distopf.matrix_models.multiperiod import LinDistMPL
+            from distopf.matrix_models.matrix_bess import LinDistMPL
 
             # Update gen_data control variable if specified
             gen_data = self.gen_data

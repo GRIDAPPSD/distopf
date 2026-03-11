@@ -16,7 +16,7 @@ class Wrapper(ABC):
     """Abstract base for OPF optimization wrappers.
 
     Each wrapper encapsulates model creation, solving, and result extraction
-    for a particular optimization approach (matrix convex, multiperiod, NLP).
+    for a particular optimization approach (matrix convex, matrix_bess, NLP).
     """
 
     def __init__(self, case: Case) -> None:
@@ -31,7 +31,7 @@ class Wrapper(ABC):
         Parameters
         ----------
         wrapper_name : str
-            Name of the wrapper (e.g., "multiperiod", "pyomo")
+            Name of the wrapper (e.g., "matrix_bess", "pyomo")
         parameter : str
             Parameter name that's unsupported
         """
