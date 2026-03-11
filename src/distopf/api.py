@@ -419,7 +419,7 @@ class Case:
             If True, return raw result object instead of DataFrames
         duals : bool, default False
             If True (Pyomo backend only), extract dual variables from constraints.
-            Duals are stored on result.raw_result as dual_power_balance_p, etc.
+            Duals are stored directly on the result as dual_power_balance_p, etc.
         verbose : bool, default False
             If True, print diagnostic information about the solve: backend
             selection, schedule multiplier summaries, and timing.

@@ -220,6 +220,17 @@ class PyomoWrapper(Wrapper):
         objective_value = getattr(self.result, "objective_value", None)
         solve_time = getattr(self.result, "solve_time", None)
 
+        # Extract duals if available on the raw result
+        dual_power_balance_p = getattr(self.result, "dual_power_balance_p", None)
+        dual_power_balance_q = getattr(self.result, "dual_power_balance_q", None)
+        dual_voltage_drop = getattr(self.result, "dual_voltage_drop", None)
+        dual_voltage_limits_lower = getattr(
+            self.result, "dual_voltage_limits_lower", None
+        )
+        dual_voltage_limits_upper = getattr(
+            self.result, "dual_voltage_limits_upper", None
+        )
+
         return PowerFlowResult(
             voltages=self.get_voltages(),
             active_power_flows=self.get_p_flows(),
@@ -235,6 +246,11 @@ class PyomoWrapper(Wrapper):
             p_charge=p_charge,
             p_discharge=p_discharge,
             soc=soc,
+            dual_power_balance_p=dual_power_balance_p,
+            dual_power_balance_q=dual_power_balance_q,
+            dual_voltage_drop=dual_voltage_drop,
+            dual_voltage_limits_lower=dual_voltage_limits_lower,
+            dual_voltage_limits_upper=dual_voltage_limits_upper,
             objective_value=objective_value,
             converged=True,
             solver=solver_name,

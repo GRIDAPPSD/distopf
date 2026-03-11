@@ -132,6 +132,13 @@ class PowerFlowResult:
     currents: Optional[pd.DataFrame] = None
     current_angles: Optional[pd.DataFrame] = None
 
+    # Dual variables (populated when duals=True, Pyomo only)
+    dual_power_balance_p: Optional[pd.DataFrame] = None
+    dual_power_balance_q: Optional[pd.DataFrame] = None
+    dual_voltage_drop: Optional[pd.DataFrame] = None
+    dual_voltage_limits_lower: Optional[pd.DataFrame] = None
+    dual_voltage_limits_upper: Optional[pd.DataFrame] = None
+
     # Solver metadata
     objective_value: Optional[float] = None
     converged: bool = True
