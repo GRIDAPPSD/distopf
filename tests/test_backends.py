@@ -93,17 +93,23 @@ class TestObjectiveAliases:
 
 
 class TestBackendSelection:
-    """Test backend auto-selection and explicit backend usage."""
+    """Test backend registry and explicit backend usage."""
 
-    def test_auto_selects_matrix_for_control_regulator(self):
-        """Cases that want regulator taps should auto-select pyomo backend."""
-        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        assert case._select_backend(control_regulators=True) == "pyomo"
+    def test_resolve_backend_pyomo(self):
+        """Pyomo backend should resolve correctly."""
+        from distopf.api import _resolve_backend
 
-    def test_auto_selects_multiperiod_for_n_steps(self):
-        """Cases with n_steps > 1 should auto-select pyomo."""
-        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13", n_steps=24)
-        assert case._select_backend() == "pyomo"
+        cls, _ = _resolve_backend("pyomo")
+        from distopf.backends.pyomo_backend import PyomoBackend
+
+        assert cls is PyomoBackend
+
+    def test_resolve_backend_unknown_raises(self):
+        """Unknown backend should raise ValueError."""
+        from distopf.api import _resolve_backend
+
+        with pytest.raises(ValueError, match="Unknown backend"):
+            _resolve_backend("nonexistent")
 
     def test_explicit_matrix_backend(self):
         """Can explicitly use matrix backend."""

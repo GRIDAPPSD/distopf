@@ -23,6 +23,63 @@ from distopf.utils import (
 )
 
 
+# =============================================================================
+# Backend registry — simple dict replaces BackendSelector class
+# =============================================================================
+
+# Lazy-populated on first use to avoid circular/heavy imports at module load
+_BACKEND_REGISTRY: dict | None = None
+
+
+def _get_backend_registry() -> dict:
+    """Lazy-load backend registry on first use."""
+    global _BACKEND_REGISTRY
+    if _BACKEND_REGISTRY is None:
+        from distopf.backends import (
+            MatrixBackend,
+            MultiperiodBackend,
+            PyomoBackend,
+            NlpBackend,
+        )
+
+        _BACKEND_REGISTRY = {
+            "matrix": MatrixBackend,
+            "multiperiod": MultiperiodBackend,
+            "pyomo": PyomoBackend,
+            "nlp": NlpBackend,
+        }
+    return _BACKEND_REGISTRY
+
+
+def _resolve_backend(name: str) -> tuple:
+    """Resolve backend name to (backend_class, extra_kwargs).
+
+    Parameters
+    ----------
+    name : str
+        Backend name (e.g., "pyomo", "nlp", "matrix", "multiperiod")
+
+    Returns
+    -------
+    tuple
+        (backend_class, extra_kwargs) where extra_kwargs is a dict of
+        additional keyword arguments to pass to solve().
+
+    Raises
+    ------
+    ValueError
+        If backend name is not recognized.
+    """
+    name = name.lower().strip()
+    registry = _get_backend_registry()
+    if name not in registry:
+        raise ValueError(
+            f"Unknown backend: '{name}'. "
+            f"Supported: {', '.join(sorted(registry))}"
+        )
+    return registry[name], {}
+
+
 class Case:
     """
     Primary data container and workflow class for DistOPF.
@@ -363,8 +420,6 @@ class Case:
             If raw_result=True: backend-specific result object
 
         """
-        from distopf.backend_selector import BackendSelector
-
         handler = self._enable_verbose() if verbose else None
         try:
             # Resolve objective alias at entry point (single point of resolution)
@@ -384,42 +439,34 @@ class Case:
             )
             self._log_schedule_summary()
 
-            # Route to appropriate backend using BackendSelector
-            selector = BackendSelector(self)
-            result = selector.solve(
+            # Select backend (default: pyomo)
+            if backend is None:
+                backend = "pyomo"
+
+            backend_cls, extra_kwargs = _resolve_backend(backend)
+            kwargs.update(extra_kwargs)
+
+            backend_obj = backend_cls(self)
+
+            # Set control variable if specified (updates gen_data)
+            if control_variable is not None:
+                backend_obj.set_control_variable(control_variable)
+
+            result = backend_obj.solve(
                 objective=objective,
-                control_variable=control_variable,
                 control_regulators=control_regulators,
                 control_capacitors=control_capacitors,
-                backend=backend,
                 raw_result=raw_result,
                 duals=duals,
                 **kwargs,
             )
 
-            logger.info("OPF completed (backend=%s)", backend or "auto")
+            logger.info("OPF completed (backend=%s)", backend)
             return result
         finally:
             if handler:
                 self._disable_verbose(handler)
 
-    def _select_backend(
-        self, control_regulators=False, control_capacitors=False
-    ) -> str:
-        """
-        Convenience wrapper to determine the best backend for this Case.
-
-        Returns
-        -------
-        str
-            Selected backend name as determined by :class:`BackendSelector`.
-        """
-        from distopf.backend_selector import BackendSelector
-
-        selector = BackendSelector(self)
-        return selector.select(
-            control_regulators=control_regulators, control_capacitors=control_capacitors
-        )
 
     # -------------------------------------------------------------------------
     # Model Creation Methods (for advanced users)
@@ -472,7 +519,7 @@ class Case:
         """
         # Auto-detect multiperiod
         if multiperiod is None:
-            multiperiod = self._select_backend() == "multiperiod"
+            multiperiod = False
 
         if multiperiod:
             from distopf.matrix_models.multiperiod import LinDistMPL

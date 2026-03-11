@@ -16,11 +16,12 @@ def small_case():
 class TestNlpBackendSelection:
     """Test that backend='nlp' is properly registered and selectable."""
 
-    def test_backend_nlp_in_factory(self):
-        """Test that 'nlp' backend is registered in BackendSelector."""
-        from distopf.backend_selector import BackendSelector
+    def test_backend_nlp_in_registry(self):
+        """Test that 'nlp' backend is registered in the backend registry."""
+        from distopf.api import _resolve_backend
 
-        assert "nlp" in BackendSelector.BACKEND_FACTORY
+        backend_cls, _ = _resolve_backend("nlp")
+        assert backend_cls is NlpBackend
 
     def test_backend_nlp_is_nlp_backend_class(self):
         """Test that 'nlp' backend can be instantiated."""
@@ -28,7 +29,6 @@ class TestNlpBackendSelection:
         import distopf as opf
 
         case = opf.create_case("src/distopf/cases/csv/2Bus-1ph-batt")
-        # Directly import and instantiate NlpBackend (avoid lazy loading issue)
         backend = NlpBackend(case)
         assert isinstance(backend, NlpBackend)
 
