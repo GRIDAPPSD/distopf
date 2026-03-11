@@ -1,17 +1,17 @@
-"""Nonlinear Pyomo backend for NLP-capable OPF (IPOPT/MINLP solvers)."""
+"""Nonlinear Pyomo wrapper for NLP-capable OPF (IPOPT/MINLP solvers)."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional, Union
-from distopf.backends.base import Backend
+from distopf.wrappers.base import Wrapper
 
 if TYPE_CHECKING:
     import pandas as pd
     from distopf.results import PowerFlowResult
 
 
-class NlpBackend(Backend):
-    """Nonlinear Pyomo/IPOPT backend for NLP optimization using BranchFlow model."""
+class NlpWrapper(Wrapper):
+    """Nonlinear Pyomo/IPOPT wrapper for NLP optimization using BranchFlow model."""
 
     def solve(
         self,
@@ -21,7 +21,7 @@ class NlpBackend(Backend):
         raw_result: bool = False,
         **kwargs: Any,
     ) -> Union[PowerFlowResult, Any]:
-        """Run OPF using Pyomo/IPOPT backend (NLP-capable, nonlinear BranchFlow model).
+        """Run OPF using Pyomo/IPOPT wrapper (NLP-capable, nonlinear BranchFlow model).
 
         Parameters
         ----------

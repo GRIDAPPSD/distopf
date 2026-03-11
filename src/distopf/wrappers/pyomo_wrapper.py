@@ -1,17 +1,17 @@
-"""Pyomo backend for NLP-capable OPF (IPOPT solver)."""
+"""Pyomo wrapper for NLP-capable OPF (IPOPT solver)."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional, Union
-from distopf.backends.base import Backend
+from distopf.wrappers.base import Wrapper
 
 if TYPE_CHECKING:
     import pandas as pd
     from distopf.results import PowerFlowResult
 
 
-class PyomoBackend(Backend):
-    """Pyomo/IPOPT backend for NLP optimization."""
+class PyomoWrapper(Wrapper):
+    """Pyomo/IPOPT wrapper for NLP optimization."""
 
     def solve(
         self,
@@ -21,7 +21,7 @@ class PyomoBackend(Backend):
         raw_result: bool = False,
         **kwargs: Any,
     ) -> Union[PowerFlowResult, Any]:
-        """Run OPF using Pyomo/IPOPT backend (NLP-capable).
+        """Run OPF using Pyomo/IPOPT wrapper (NLP-capable).
 
         Parameters
         ----------
@@ -212,7 +212,7 @@ class PyomoBackend(Backend):
     def get_power_flows(self) -> pd.DataFrame:
         """Extract branch power flow results (P flows).
 
-        Note: Pyomo backend returns active power flows, not complex apparent power.
+        Note: Pyomo wrapper returns active power flows, not complex apparent power.
         """
         return self.result.p_flow
 

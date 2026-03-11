@@ -1,10 +1,10 @@
-"""Matrix backend for single-step convex OPF (CVXPY/CLARABEL)."""
+"""Matrix wrapper for single-step convex OPF (CVXPY/CLARABEL)."""
 
 from __future__ import annotations
 
 import numpy as np
 from typing import TYPE_CHECKING, Any, Optional, Union, Callable
-from distopf.backends.base import Backend
+from distopf.wrappers.base import Wrapper
 
 from distopf.matrix_models.base import LinDistBase
 from distopf.cases import CASES_DIR
@@ -184,8 +184,8 @@ def auto_solve(model: LinDistBase, objective_function=None, **kwargs):
         return lp_solve(model, objective_function)  # type: ignore
 
 
-class MatrixBackend(Backend):
-    """Single-period matrix backend using CVXPY/CLARABEL solver."""
+class MatrixWrapper(Wrapper):
+    """Single-period matrix wrapper using CVXPY/CLARABEL solver."""
 
     def solve(
         self,

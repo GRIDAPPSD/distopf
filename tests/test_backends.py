@@ -100,9 +100,9 @@ class TestBackendSelection:
         from distopf.api import _resolve_backend
 
         cls, _ = _resolve_backend("pyomo")
-        from distopf.backends.pyomo_backend import PyomoBackend
+        from distopf.wrappers.pyomo_wrapper import PyomoWrapper
 
-        assert cls is PyomoBackend
+        assert cls is PyomoWrapper
 
     def test_resolve_backend_unknown_raises(self):
         """Unknown backend should raise ValueError."""

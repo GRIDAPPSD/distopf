@@ -24,35 +24,35 @@ from distopf.utils import (
 
 
 # =============================================================================
-# Backend registry — simple dict replaces BackendSelector class
+# Wrapper registry — simple dict replaces BackendSelector class
 # =============================================================================
 
 # Lazy-populated on first use to avoid circular/heavy imports at module load
-_BACKEND_REGISTRY: dict | None = None
+_WRAPPER_REGISTRY: dict | None = None
 
 
-def _get_backend_registry() -> dict:
-    """Lazy-load backend registry on first use."""
-    global _BACKEND_REGISTRY
-    if _BACKEND_REGISTRY is None:
-        from distopf.backends import (
-            MatrixBackend,
-            MultiperiodBackend,
-            PyomoBackend,
-            NlpBackend,
+def _get_wrapper_registry() -> dict:
+    """Lazy-load wrapper registry on first use."""
+    global _WRAPPER_REGISTRY
+    if _WRAPPER_REGISTRY is None:
+        from distopf.wrappers import (
+            MatrixWrapper,
+            MultiperiodWrapper,
+            PyomoWrapper,
+            NlpWrapper,
         )
 
-        _BACKEND_REGISTRY = {
-            "matrix": MatrixBackend,
-            "multiperiod": MultiperiodBackend,
-            "pyomo": PyomoBackend,
-            "nlp": NlpBackend,
+        _WRAPPER_REGISTRY = {
+            "matrix": MatrixWrapper,
+            "multiperiod": MultiperiodWrapper,
+            "pyomo": PyomoWrapper,
+            "nlp": NlpWrapper,
         }
-    return _BACKEND_REGISTRY
+    return _WRAPPER_REGISTRY
 
 
 def _resolve_backend(name: str) -> tuple:
-    """Resolve backend name to (backend_class, extra_kwargs).
+    """Resolve backend name to (wrapper_class, extra_kwargs).
 
     Parameters
     ----------
@@ -71,7 +71,7 @@ def _resolve_backend(name: str) -> tuple:
         If backend name is not recognized.
     """
     name = name.lower().strip()
-    registry = _get_backend_registry()
+    registry = _get_wrapper_registry()
     if name not in registry:
         raise ValueError(
             f"Unknown backend: '{name}'. "

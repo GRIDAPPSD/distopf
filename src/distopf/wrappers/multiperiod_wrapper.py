@@ -1,17 +1,17 @@
-"""Multiperiod backend for time-series OPF (batteries, schedules)."""
+"""Multiperiod wrapper for time-series OPF (batteries, schedules)."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional, Union
-from distopf.backends.base import Backend
+from distopf.wrappers.base import Wrapper
 
 if TYPE_CHECKING:
     import pandas as pd
     from distopf.results import PowerFlowResult
 
 
-class MultiperiodBackend(Backend):
-    """Multi-period matrix backend (supports batteries and schedules)."""
+class MultiperiodWrapper(Wrapper):
+    """Multi-period matrix wrapper (supports batteries and schedules)."""
 
     def solve(
         self,
@@ -28,9 +28,9 @@ class MultiperiodBackend(Backend):
         objective : str, callable, or None
             Optimization objective function
         control_regulators : bool
-            Not supported in multiperiod backend (ignored with warning)
+            Not supported in multiperiod wrapper (ignored with warning)
         control_capacitors : bool
-            Not supported in multiperiod backend (ignored with warning)
+            Not supported in multiperiod wrapper (ignored with warning)
         raw_result : bool
             If True, return raw solver result instead of PowerFlowResult
         **kwargs

@@ -1,4 +1,4 @@
-"""Abstract base class for optimization backends."""
+"""Abstract base class for optimization wrappers."""
 
 from __future__ import annotations
 
@@ -12,31 +12,31 @@ if TYPE_CHECKING:
     from distopf.results import PowerFlowResult
 
 
-class Backend(ABC):
-    """Abstract base for OPF optimization backends.
+class Wrapper(ABC):
+    """Abstract base for OPF optimization wrappers.
 
-    Each backend encapsulates model creation, solving, and result extraction
+    Each wrapper encapsulates model creation, solving, and result extraction
     for a particular optimization approach (matrix convex, multiperiod, NLP).
     """
 
     def __init__(self, case: Case) -> None:
-        """Initialize backend with a Case instance."""
+        """Initialize wrapper with a Case instance."""
         self.case = case
         self.model: Any = None
         self.result: Any = None
 
-    def _warn_unsupported(self, backend_name: str, parameter: str) -> None:
+    def _warn_unsupported(self, wrapper_name: str, parameter: str) -> None:
         """Warn about unsupported parameters.
 
         Parameters
         ----------
-        backend_name : str
-            Name of the backend (e.g., "multiperiod", "pyomo")
+        wrapper_name : str
+            Name of the wrapper (e.g., "multiperiod", "pyomo")
         parameter : str
             Parameter name that's unsupported
         """
         warnings.warn(
-            f"{parameter} is not supported by {backend_name} backend; ignoring.",
+            f"{parameter} is not supported by {wrapper_name} wrapper; ignoring.",
             UserWarning,
             stacklevel=4,
         )
@@ -136,20 +136,20 @@ class Backend(ABC):
         raw_result: bool = False,
         **kwargs: Any,
     ) -> Union[PowerFlowResult, Any]:
-        """Solve the OPF problem using this backend.
+        """Solve the OPF problem using this wrapper.
 
         Parameters
         ----------
         objective : str, callable, or None
             Optimization objective function
         control_regulators : bool
-            Whether to include regulator tap control (backend-specific support)
+            Whether to include regulator tap control (wrapper-specific support)
         control_capacitors : bool
-            Whether to include capacitor switching control (backend-specific support)
+            Whether to include capacitor switching control (wrapper-specific support)
         raw_result : bool
             If True, return raw solver result instead of PowerFlowResult
         **kwargs
-            Backend-specific solver options
+            Wrapper-specific solver options
 
         Returns
         -------
@@ -187,6 +187,6 @@ class Backend(ABC):
     def get_q_caps(self) -> Optional[pd.DataFrame]:
         """Extract capacitor reactive power results from solved model.
 
-        Returns None if not available for this backend/model.
+        Returns None if not available for this wrapper/model.
         """
         return None
