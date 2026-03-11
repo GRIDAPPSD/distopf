@@ -20,7 +20,6 @@ print("=" * 60)
 # Plot 1: Network diagram with voltage coloring
 print("\n1. Network Plot (voltage heatmap)")
 print("   Shows the entire network topology with voltage levels")
-print("   Green = nominal voltage, Red = low, Blue = high")
 result.plot_network(v_min=0.95, v_max=1.05).show(renderer="browser")
 
 # Plot 2: Voltage profile

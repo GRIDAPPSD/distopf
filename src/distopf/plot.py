@@ -179,18 +179,20 @@ def voltage_differences(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure
     return fig
 
 
-def plot_power_flows(s: pd.DataFrame) -> go.Figure:
+def plot_power_flows(s: pd.DataFrame, t=None) -> go.Figure:
     """
     Plot the active and reactive power flowing into each bus on each phase.
     Parameters
     ----------
     s : pd.DataFrame
+    t : int or None
+        Time step to plot. Defaults to 0 when a ``t`` column is present.
 
     Returns
     -------
     fig : Plotly figure object
     """
-    s = s.copy()
+    s = _choose_t(s, t)
     s = s.melt(
         ignore_index=True,
         id_vars=["fb", "tb", "from_name", "to_name"],
