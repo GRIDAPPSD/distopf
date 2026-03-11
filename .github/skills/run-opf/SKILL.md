@@ -1,6 +1,6 @@
 ---
 name: run-opf
-description: 'Run optimal power flow (OPF) or power flow (PF) cases using distopf. Use when: user asks to run OPF, run power flow, solve loss minimization, minimize curtailment, compare backends, run FBS, run forward-backward sweep, run pyomo OPF, run multiperiod OPF, battery dispatch, voltage optimization, DER control, distribution system analysis.'
+description: 'Run optimal power flow (OPF) or power flow (PF) cases using distopf. Use when: user asks to run OPF, run power flow, solve loss minimization, minimize curtailment, compare backends, run FBS, run forward-backward sweep, run pyomo OPF, run multiperiod OPF, run matrix_bess, battery dispatch, voltage optimization, DER control, distribution system analysis.'
 argument-hint: 'Describe the analysis: e.g. "run loss minimization on ieee123_30der with Q control"'
 ---
 
@@ -9,7 +9,7 @@ argument-hint: 'Describe the analysis: e.g. "run loss minimization on ieee123_30
 ## When to Use
 
 - User asks to run an optimal power flow (OPF) or power flow (PF) analysis
-- User wants to compare results across backends (matrix, multiperiod, pyomo)
+- User wants to compare results across backends (matrix, matrix_bess, pyomo)
 - User wants to minimize losses, curtailment, or optimize voltage
 - User wants to run a multi-period analysis with batteries
 - User wants to run a forward-backward sweep power flow
@@ -34,7 +34,7 @@ Determine from the user's request:
 | **Test case** | See [Available Cases](#available-cases) | `ieee13` |
 | **Objective** | See [Objectives](#objectives) | `loss_min` |
 | **Control variable** | `""`, `"P"`, `"Q"`, `"PQ"` | `"PQ"` |
-| **Backend** | `"matrix"`, `"multiperiod"`, `"pyomo"`, `None` (auto) | `None` |
+| **Backend** | `"matrix"`, `"matrix_bess"` (alias: `"multiperiod"`), `"pyomo"`, `None` (auto) | `None` |
 | **Voltage limits** | `v_min`, `v_max` (p.u.) | 0.95, 1.05 |
 | **Multi-period** | `n_steps`, `delta_t` | 1, 1.0 |
 
@@ -129,7 +129,7 @@ result = case.run_fbs(max_iterations=100, tolerance=1e-6, verbose=True)
 result = case.run_opf(
     objective="loss_min",        # See Objectives table
     control_variable="PQ",       # "", "P", "Q", "PQ"
-    backend="pyomo",             # "matrix", "multiperiod", "pyomo", "nlp", or None
+    backend="pyomo",             # "matrix", "matrix_bess", "pyomo", or None (aliases: "multiperiod", "nlp")
     control_regulators=False,    # Mixed-integer regulator tap control
     control_capacitors=False,    # Mixed-integer capacitor switching
     duals=False,                 # Extract dual variables (pyomo only)
@@ -137,6 +137,14 @@ result = case.run_opf(
 ```
 
 ### Access Results
+
+> **Canonical names**: Result fields have been renamed (e.g., `voltage_magnitudes`, `active_power_flows`,
+> `reactive_power_flows`, `active_power_generation`, `reactive_power_generation`, `active_power_loads`,
+> `reactive_power_loads`, `capacitor_reactive_power`, `battery_active_power`). The short names shown below
+> (e.g., `voltages`, `p_flows`, `q_gens`) still work as aliases.
+>
+> **Duals**: When `duals=True` (pyomo only), dual variables are accessible directly on the result object,
+> e.g. `result.dual_power_balance_p`, `result.dual_power_balance_q`, `result.dual_voltage_drop`.
 
 **IMPORTANT: Result DataFrame Structure**
 
@@ -271,10 +279,12 @@ Load with: `create_case(CASES_DIR / "csv" / "<case_name>")`
 | Backend | Solver | Strengths | Limitations |
 |---------|--------|-----------|-------------|
 | `"matrix"` | CVXPY/CLARABEL | Fast, convex | No batteries, no NLP |
-| `"multiperiod"` | CVXPY/CLARABEL | Batteries, time-series | Convex only |
+| `"matrix_bess"` | CVXPY/CLARABEL | Batteries, time-series | Convex only |
 | `"pyomo"` | IPOPT | NLP, flexible constraints | Slower |
-| `"nlp"` | IPOPT | Full nonlinear BranchFlow | Slowest |
+| `"pyomo"` + `model_type="branchflow"` | IPOPT | Full nonlinear BranchFlow | Slowest |
 | `None` | Auto-select | Picks best available | — |
+
+> **Aliases**: `"multiperiod"` still works as an alias for `"matrix_bess"`. `"nlp"` still works as an alias for `backend="pyomo", model_type="branchflow"`.
 
 ## Script Templates
 
@@ -489,7 +499,7 @@ print(f"Status: {results.solver.termination_condition}")
 | Pyomo fails immediately on 24h schedule | Load profile out of feasible range for case | Run 1-step feasibility first; for `ieee13` default limits, keep load multipliers near `0.90..1.05` |
 | Zero generation with Q control | Control variable encoding | Check `control_variable="Q"` means P fixed, Q optimized |
 | Matrix vs Pyomo mismatch | Model differences | Compare at same `v_min`/`v_max`; check scaling |
-| Battery SOC all zeros | Wrong backend or no bat_data | Use `multiperiod` or `pyomo` backend with battery case |
+| Battery SOC all zeros | Wrong backend or no bat_data | Use `matrix_bess` (or alias `multiperiod`) or `pyomo` backend with battery case |
 | Import error | Missing dependency | Run `uv sync` to install dependencies |
 | Voltage range shows huge numbers (>1.1) | Index columns included in stats | Filter to phase columns only: `df[["a","b","c"]]` — see [Access Results](#access-results) |
 | `TypeError` on `result.solve_time` formatting | `solve_time` is `None` (pyomo backend) | Don't use `:.2f` format; use `print(result.solve_time)` directly |

@@ -65,12 +65,12 @@ result = case.run_opf(objective="curtail_min", control_variable="P", v_max=1.05,
 result.plot_network().show(renderer="browser")
 ```
 
-## Optimization Backends
+## Optimization Wrappers
 
-DistOPF supports multiple optimization backends for solving OPF problems:
+DistOPF supports multiple optimization wrappers for solving OPF problems:
 
-### Linear Backend (backend='pyomo')
-The default linear backend uses the LinDistFlow model with CVXPY or Pyomo solvers.
+### Pyomo Wrapper — LinDistFlow (default)
+The default Pyomo wrapper uses the LinDistFlow model (`model_type="lindist"`).
 - **Model**: Linear approximation of power flow equations
 - **Solver**: CVXPY or Pyomo with linear solvers
 - **Speed**: Fast, suitable for real-time applications
@@ -79,11 +79,12 @@ The default linear backend uses the LinDistFlow model with CVXPY or Pyomo solver
 ```python
 import distopf as opf
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
-result = case.run_opf(backend="pyomo", objective="loss")
+result = case.run_opf(backend="pyomo", objective="loss")  # model_type="lindist" is the default
 ```
 
-### Nonlinear Backend (backend='nlp')
-The nonlinear backend uses the BranchFlow model with IPOPT or MINLP solvers for higher accuracy.
+### Pyomo Wrapper — BranchFlow
+The BranchFlow model type uses nonlinear power flow equations with IPOPT or MINLP solvers for higher accuracy.
+Use `backend="pyomo", model_type="branchflow"`. The shorthand `backend="nlp"` also works.
 - **Model**: Nonlinear power flow equations (exact)
 - **Solver**: IPOPT (continuous) or MINLP solvers like Bonmin/Couenne (discrete controls)
 - **Speed**: Slower than linear, but more accurate
@@ -96,7 +97,8 @@ For continuous optimization without discrete controls:
 import distopf as opf
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
 result = case.run_opf(
-    backend="nlp",
+    backend="pyomo",
+    model_type="branchflow",
     objective="loss",
     solver="ipopt",
 )
@@ -113,7 +115,8 @@ case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
 fbs_result = fbs_solve(case)  # Optional: run FBS first
 
 result = case.run_opf(
-    backend="nlp",
+    backend="pyomo",
+    model_type="branchflow",
     objective="loss",
     initialize="fbs",  # Initialize from FBS results
     solver="ipopt",
@@ -127,7 +130,8 @@ Enable regulator tap optimization and capacitor switching with MINLP solvers:
 import distopf as opf
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
 result = case.run_opf(
-    backend="nlp",
+    backend="pyomo",
+    model_type="branchflow",
     objective="loss",
     control_regulators=True,      # Enable regulator tap control
     control_capacitors=True,       # Enable capacitor switching
@@ -136,8 +140,18 @@ result = case.run_opf(
 )
 ```
 
-#### Backend Comparison
-| Feature | Linear (pyomo) | Nonlinear (nlp) |
+### Matrix BESS Wrapper (Multi-Period with Batteries)
+The `matrix_bess` wrapper supports multi-period (time-series) optimization with battery energy storage.
+The shorthand `backend="multiperiod"` also works as an alias.
+
+```python
+import distopf as opf
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der_batt")
+result = case.run_opf(backend="matrix_bess", objective="loss")
+```
+
+#### Wrapper Comparison
+| Feature | LinDistFlow (lindist) | BranchFlow (branchflow) |
 |---------|---|---|
 | Model Type | LinDistFlow (linear) | BranchFlow (nonlinear) |
 | Solver | CVXPY, Pyomo | IPOPT, MINLP |
@@ -152,10 +166,38 @@ result = case.run_opf(
 - **MINLP Solvers**: Install Bonmin or Couenne via `conda install -c conda-forge bonmin couenne`
 
 #### Known Limitations
-- NLP backend requires a compatible solver (IPOPT or MINLP)
+- The branchflow model type requires a compatible solver (IPOPT or MINLP)
 - Convergence may be slow for large systems or difficult cases
 - Some cases may be infeasible with the nonlinear model
 - Discrete controls require MINLP solvers which may be slower than continuous optimization
+
+### Result Fields
+
+`PowerFlowResult` uses descriptive field names. Short aliases are also accepted for backward compatibility.
+
+| Field Name | Alias |
+|---|---|
+| `active_power_flows` | `p_flows` |
+| `reactive_power_flows` | `q_flows` |
+| `active_power_generation` | `p_gens` |
+| `reactive_power_generation` | `q_gens` |
+| `active_power_loads` | `p_loads` |
+| `reactive_power_loads` | `q_loads` |
+| `capacitor_reactive_power` | `q_caps` |
+| `battery_active_power` | `p_bats` |
+| `voltage_magnitudes` | `voltages` |
+
+#### Dual Variables
+When running with `duals=True`, dual variables are accessible on the result object:
+
+```python
+result = case.run_opf(backend="pyomo", objective="loss", duals=True)
+result.dual_power_balance_p
+result.dual_power_balance_q
+result.dual_voltage_drop
+result.dual_voltage_limits_lower
+result.dual_voltage_limits_upper
+```
 
 ## Using a custom model.
 Create CSVs formatted as shown below and store them in a single folder. The csv names must match exactly as shown. 

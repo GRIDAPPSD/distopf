@@ -143,14 +143,14 @@ Key Concepts
 **Backend (Solver)**
   Which optimization engine to use:
   - "matrix": CVXPY + CLARABEL (fast, convex problems)
-  - "pyomo": Pyomo + IPOPT (flexible, nonlinear problems)
+  - "pyomo": Pyomo + IPOPT (flexible, nonlinear problems; supports model_type="branchflow" for exact NLP)
+  - "matrix_bess": Multi-period with batteries (CVXPY + CLARABEL)
 
 **Results**
   After solving, you get:
-  - voltages: Voltage magnitude/angle at each bus
-  - power_flows: Active and reactive power on each line
-  - p_gens: Active power from each generator
-  - q_gens: Reactive power from each generator
+  - voltage_magnitudes: Voltage magnitude at each bus (alias: voltages)
+  - active_power_flows / reactive_power_flows: Power on each line (aliases: p_flows, q_flows)
+  - active_power_generation / reactive_power_generation: Generator output (aliases: p_gens, q_gens)
 
 Common Workflows
 ================
@@ -186,7 +186,7 @@ Resources
 
 For more information:
 - README.md: Project overview
-- src/distopf/backends/base.py: Backend API documentation
+- src/distopf/wrappers/base.py: Wrapper API documentation
 - Copilot instructions: Development guidelines
 - Unit tests (tests/): More detailed examples
 

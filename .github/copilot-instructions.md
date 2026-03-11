@@ -5,35 +5,49 @@ DistOPF is a multi-phase, unbalanced optimal power flow (OPF) tool for distribut
 
 - **Matrix models** (`matrix_models/`): CVXPY/CLARABEL for strictly convex problems
 - **Pyomo models** (`pyomo_models/`): IPOPT for non-linear problems (**active development focus**)
-- **Multi-period matrix** (`matrix_models/multiperiod/`): Time-series optimization with batteries
+- **Matrix BESS** (`matrix_models/matrix_bess/`): Time-series optimization with batteries using matrix formulation
 
 ## Architecture
 
 ### Module Organization
 ```
 distopf/
-├── importer.py          # Case class - standard data container for all models
+├── api.py               # Case class, create_case(), run_opf(), wrapper registry
+├── importer.py          # Data import and Case data container
+├── results.py           # PowerFlowResult dataclass
 ├── distOPF.py           # DistOPFCase - high-level API wrapping matrix models
 ├── fbs.py               # Forward-Backward Sweep power flow solver
-├── matrix_models/       # Single-step LinDist* (legacy, no batteries)
-│   └── multiperiod/     # Time-series optimization (supports batteries, n_steps≥1)
-├── pyomo_models/        # NLP-capable models with modular constraints (active development)
+├── wrappers/            # Solver wrappers (dispatch layer)
+│   ├── base.py          # Wrapper base class
+│   ├── matrix_wrapper.py      # Single-step CVXPY/CLARABEL
+│   ├── matrix_bess_wrapper.py # Multi-period with batteries
+│   └── pyomo_wrapper.py       # Pyomo (lindist + branchflow model types)
+├── matrix_models/       # Single-step LinDist* (no batteries)
+│   └── matrix_bess/     # Multi-period with battery support (n_steps≥1)
+├── pyomo_models/        # Pyomo model formulations (active development)
 ├── dss_importer/        # OpenDSS → CSV (limited validation coverage)
 └── cim_importer/        # CIM XML → CSV (limited validation coverage)
 ```
 
+### Wrapper Registry
+Wrappers are registered in `api.py` via a simple dict (`_WRAPPER_REGISTRY`). Aliases (`_BACKEND_ALIASES`) map shorthand names:
+- `"nlp"` → `("pyomo", {"model_type": "branchflow"})`
+- `"multiperiod"` → `("matrix_bess", {})`
+
 ### Model Selection Guide
-| Use Case | Model Type | Solver |
-|----------|-----------|--------|
-| Convex OPF (loss min, curtailment) | `LinDistModel` | CVXPY/CLARABEL |
-| Non-linear constraints | `pyomo_models/` | IPOPT |
-| Multi-period / batteries | `multiperiod/` or Pyomo | CVXPY or IPOPT |
-| Single-step with battery | Multi-period with `n_steps=1` | - |
+| Use Case | Wrapper | Model Type | Solver |
+|----------|---------|-----------|--------|
+| Convex OPF (loss min, curtailment) | `matrix` or `pyomo` | lindist (default) | CVXPY or IPOPT |
+| Non-linear constraints | `pyomo` | branchflow | IPOPT |
+| Multi-period / batteries | `matrix_bess` | - | CVXPY/CLARABEL |
+| Discrete controls (regs/caps) | `pyomo` | branchflow | MINLP |
 
 ### Key Classes
-- `Case` (importer.py): Holds `branch_data`, `bus_data`, `gen_data`, `cap_data`, `reg_data`, `bat_data`, `schedules`
-- `LinDistBase` (matrix_models/base.py): Base for single-step matrix models (no `bat_data`)
-- `LinDistBaseMP` (matrix_models/multiperiod/): Multi-period base with battery support
+- `Case` (api.py): Holds `branch_data`, `bus_data`, `gen_data`, `cap_data`, `reg_data`, `bat_data`, `schedules`
+- `PowerFlowResult` (results.py): Dataclass with named fields (`active_power_flows`, etc.) and optional duals
+- `Wrapper` (wrappers/base.py): Base class for all solver wrappers
+- `LinDistBase` (matrix_models/base.py): Base for single-step matrix models
+- `LinDistBaseMP` (matrix_models/matrix_bess/): Multi-period base with battery support
 - `LindistModelProtocol` (pyomo_models/protocol.py): Type protocol for Pyomo models
 
 ## Development Commands
@@ -95,7 +109,9 @@ Access via `opf.CASES_DIR / "csv" / "ieee123_30der"`.
 ## Important Notes
 - **Pyomo is active development**: New features go here; excluded from type checking
 - Matrix and Pyomo results should match within `1e-5` tolerance (see `test_verify_pyomo.py`)
-- **Batteries only in**: `pyomo_models/` and `matrix_models/multiperiod/` (not single-step matrix)
+- **Batteries only in**: `pyomo_models/` and `matrix_models/matrix_bess/` (not single-step matrix)
 - **Importers (CIM/DSS)**: Functional but lack comprehensive validation testing
 - Swing bus is the voltage source; all other buses are PQ type
 - Generator `control_variable`: `""` (constant), `"P"` (active), `"Q"` (reactive), `"PQ"` (both)
+- **PowerFlowResult fields**: Use descriptive names (`active_power_flows`, etc.); short aliases (`p_flows`) still work
+- **Duals**: Pass `duals=True` to `run_opf()` to surface dual variables directly on the result object
