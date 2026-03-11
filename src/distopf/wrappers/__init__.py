@@ -4,20 +4,17 @@ This module provides abstract Wrapper interface and concrete implementations:
 - Wrapper (ABC): Abstract base class for all wrappers
 - MatrixWrapper: Single-step convex OPF (CVXPY/CLARABEL)
 - MultiperiodWrapper: Time-series OPF with batteries/schedules
-- PyomoWrapper: NLP-capable OPF (IPOPT)
-- NlpWrapper: Nonlinear OPF (IPOPT/MINLP, BranchFlow model)
+- PyomoWrapper: OPF via IPOPT (LinDistFlow or BranchFlow via model_type kwarg)
 """
 
 from distopf.wrappers.base import Wrapper
 from distopf.wrappers.matrix_wrapper import MatrixWrapper
 from distopf.wrappers.multiperiod_wrapper import MultiperiodWrapper
 from distopf.wrappers.pyomo_wrapper import PyomoWrapper
-from distopf.wrappers.nlp_wrapper import NlpWrapper
 
 __all__ = [
     "Wrapper",
     "MatrixWrapper",
     "MultiperiodWrapper",
     "PyomoWrapper",
-    "NlpWrapper",
 ]

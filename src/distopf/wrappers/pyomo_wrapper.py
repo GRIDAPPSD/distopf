@@ -1,4 +1,8 @@
-"""Pyomo wrapper for NLP-capable OPF (IPOPT solver)."""
+"""Pyomo wrapper for OPF (IPOPT solver).
+
+Supports both LinDistFlow (linear) and BranchFlow (nonlinear) models
+via the `model_type` parameter.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,12 @@ if TYPE_CHECKING:
 
 
 class PyomoWrapper(Wrapper):
-    """Pyomo/IPOPT wrapper for NLP optimization."""
+    """Pyomo/IPOPT wrapper for OPF optimization.
+
+    Supports two model types:
+    - "lindist" (default): LinDistFlow linear approximation
+    - "branchflow": Nonlinear BranchFlow model (NLP)
+    """
 
     def solve(
         self,
@@ -21,7 +30,7 @@ class PyomoWrapper(Wrapper):
         raw_result: bool = False,
         **kwargs: Any,
     ) -> Union[PowerFlowResult, Any]:
-        """Run OPF using Pyomo/IPOPT wrapper (NLP-capable).
+        """Run OPF using Pyomo/IPOPT.
 
         Parameters
         ----------
@@ -36,16 +45,22 @@ class PyomoWrapper(Wrapper):
             If True, return raw Pyomo PyoResult object instead of PowerFlowResult
         **kwargs
             Additional options:
-            - circular_constraints : bool, default True
-                Use circular (quadratic) constraints for generators, batteries,
-                and thermal limits. If False, use octagonal (linear) approximations.
+            - model_type : str, default "lindist"
+                "lindist" for LinDistFlow, "branchflow" for nonlinear BranchFlow.
+            - circular_constraints : bool
+                Use circular (quadratic) constraints. Default False for lindist, True for branchflow.
             - thermal_constraints : bool, default False
                 Add thermal limit constraints on branch power flows.
-            - equality_only : bool, default False
+            - equality_only : bool, default False (lindist only)
                 Only add equality constraints (power flow, voltage drop).
-                Skips voltage/thermal/generator limits.
-            - reg_tap_change_limit : int or None
+            - reg_tap_change_limit : int or None (lindist only)
                 Max tap change per timestep (only if control_regulators=True)
+            - initialize : str or None (branchflow only)
+                Warm-start strategy: 'fbs' to initialize from FBS results.
+            - solver : str, default 'ipopt'
+                Solver to use. 'ipopt' for continuous, 'bonmin'/'couenne' for MINLP.
+            - duals : bool, default False
+                Extract dual variables from constraints.
 
         Returns
         -------
@@ -53,6 +68,33 @@ class PyomoWrapper(Wrapper):
             If raw_result=False: PowerFlowResult with all results
             If raw_result=True: Pyomo PyoResult object with all variable results
         """
+        model_type = kwargs.pop("model_type", "lindist")
+
+        if model_type == "branchflow":
+            return self._solve_branchflow(
+                objective=objective,
+                control_regulators=control_regulators,
+                control_capacitors=control_capacitors,
+                raw_result=raw_result,
+                **kwargs,
+            )
+        return self._solve_lindist(
+            objective=objective,
+            control_regulators=control_regulators,
+            control_capacitors=control_capacitors,
+            raw_result=raw_result,
+            **kwargs,
+        )
+
+    def _solve_lindist(
+        self,
+        objective,
+        control_regulators,
+        control_capacitors,
+        raw_result,
+        **kwargs,
+    ):
+        """Solve using LinDistFlow model."""
         from distopf.pyomo_models import (
             create_lindist_model,
             add_constraints,
@@ -63,7 +105,6 @@ class PyomoWrapper(Wrapper):
         from distopf.results import PowerFlowResult
         import pyomo.environ as pyo  # type: ignore[import-untyped]
 
-        # Extract pyomo-specific options from kwargs
         circular_constraints = kwargs.pop("circular_constraints", False)
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         equality_only = kwargs.pop("equality_only", False)
@@ -77,14 +118,12 @@ class PyomoWrapper(Wrapper):
         soc_weight = kwargs.pop("soc_weight", None)
         solver = kwargs.pop("solver", "ipopt")
 
-        # Create Pyomo model
         self.model = create_lindist_model(
             self.case,
             control_capacitors=control_capacitors,
             control_regulators=control_regulators,
         )
 
-        # Add constraints with configuration
         add_constraints(
             self.model,
             circular_constraints=circular_constraints,
@@ -95,7 +134,6 @@ class PyomoWrapper(Wrapper):
             reg_tap_change_limit=reg_tap_change_limit,
         )
 
-        # Set objective
         obj_rule = self._resolve_objective(objective)
         if equality_only:
             obj = create_penalized_objective(
@@ -109,46 +147,85 @@ class PyomoWrapper(Wrapper):
             set_objective(self.model, obj)
         else:
             self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
-        # Solve
+
         self.result = solve(self.model, solver=solver, duals=duals)
 
         if raw_result:
             return self.result
 
-        # Extract results (result is PyoResult from solve())
-        voltages_df = self.get_voltages()
-        p_flows_df = self.get_p_flows()
-        q_flows_df = self.get_q_flows()
-        p_gens = self.get_p_gens()
-        q_gens = self.get_q_gens()
+        return self._build_result(solver_name=solver)
 
-        # Extract additional results (may not exist in all models)
+    def _solve_branchflow(
+        self,
+        objective,
+        control_regulators,
+        control_capacitors,
+        raw_result,
+        **kwargs,
+    ):
+        """Solve using nonlinear BranchFlow model."""
+        from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
+        from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
+        from distopf.pyomo_models.solvers import solve
+        import pyomo.environ as pyo  # type: ignore[import-untyped]
+
+        circular_constraints = kwargs.pop("circular_constraints", True)
+        thermal_constraints = kwargs.pop("thermal_constraints", False)
+        initialize = kwargs.pop("initialize", "fbs")
+        solver_name = kwargs.pop("solver", "ipopt")
+
+        if (control_regulators or control_capacitors) and solver_name == "ipopt":
+            raise ValueError(
+                "Discrete controls (control_regulators/control_capacitors) require a MINLP solver. "
+                "Use solver='bonmin' or solver='couenne', or disable discrete controls."
+            )
+
+        self.model = create_nl_branchflow_model(self.case)
+
+        add_nlp_constraints(
+            self.model,
+            circular_constraints=circular_constraints,
+            thermal_constraints=thermal_constraints,
+            control_regulators=control_regulators,
+            control_capacitors=control_capacitors,
+        )
+
+        if initialize == "fbs":
+            self._initialize_from_fbs()
+
+        obj_rule = self._resolve_objective(objective)
+        self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
+
+        self.result = solve(self.model, solver=solver_name)
+
+        if raw_result:
+            return self.result
+
+        return self._build_result(solver_name=solver_name)
+
+    def _build_result(self, solver_name: str):
+        """Build PowerFlowResult from solved pyomo model."""
+        from distopf.results import PowerFlowResult
+
         q_caps = getattr(self.result, "q_cap", None)
         tap_ratios = getattr(self.result, "reg_ratio", None)
         p_loads = getattr(self.result, "p_load", None)
         q_loads = getattr(self.result, "q_load", None)
-
-        # Batteries (present in the Pyomo model, but were not being surfaced)
         p_bats = getattr(self.result, "p_bat", None)
         q_bats = getattr(self.result, "q_bat", None)
         p_charge = getattr(self.result, "p_charge", None)
         p_discharge = getattr(self.result, "p_discharge", None)
         soc = getattr(self.result, "soc", None)
 
-        # Get metadata from pyomo result
-        objective_value = None
-        solve_time = None
-        if hasattr(self.result, "objective_value"):
-            objective_value = self.result.objective_value
-        if hasattr(self.result, "solve_time"):
-            solve_time = self.result.solve_time
+        objective_value = getattr(self.result, "objective_value", None)
+        solve_time = getattr(self.result, "solve_time", None)
 
         return PowerFlowResult(
-            voltages=voltages_df,
-            p_flows=p_flows_df,
-            q_flows=q_flows_df,
-            p_gens=p_gens,
-            q_gens=q_gens,
+            voltages=self.get_voltages(),
+            p_flows=self.get_p_flows(),
+            q_flows=self.get_q_flows(),
+            p_gens=self.get_p_gens(),
+            q_gens=self.get_q_gens(),
             p_loads=p_loads,
             q_loads=q_loads,
             q_caps=q_caps,
@@ -160,13 +237,105 @@ class PyomoWrapper(Wrapper):
             soc=soc,
             objective_value=objective_value,
             converged=True,
-            solver="ipopt",
+            solver=solver_name,
             solve_time=solve_time,
             result_type="opf",
             raw_result=self.result,
             model=self.model,
             case=self.case,
         )
+
+    def _initialize_from_fbs(self) -> None:
+        """Initialize BranchFlow model variables from FBS power flow solution."""
+        from distopf.fbs import fbs_solve
+        import numpy as np
+        from math import pi
+
+        fbs_results = fbs_solve(self.case)
+
+        # Initialize voltages
+        v_data = {}
+        v_reg_data = {}
+        for _id, ph, t in self.model.bus_phase_set * self.model.time_set:
+            v_mag = fbs_results.voltages.loc[
+                (fbs_results.voltages.id == _id), ph
+            ].to_numpy()[0]
+            v_data[(_id, ph, t)] = v_mag**2
+            if (_id, ph) in self.model.reg_phase_set:
+                v_reg_data[(_id, ph, t)] = v_mag**2
+        self.model.v2.set_values(v_data)
+        self.model.v2_reg.set_values(v_reg_data)
+
+        # Initialize power flows
+        p_data = {}
+        q_data = {}
+        for _id, ph, t in self.model.branch_phase_set * self.model.time_set:
+            p_flow = fbs_results.p_flows.loc[
+                (fbs_results.p_flows.tb == _id), ph
+            ].to_numpy()[0]
+            q_flow = fbs_results.q_flows.loc[
+                (fbs_results.q_flows.tb == _id), ph
+            ].to_numpy()[0]
+            p_data[(_id, ph, t)] = p_flow
+            q_data[(_id, ph, t)] = q_flow
+        self.model.p_flow.set_values(p_data)
+        self.model.q_flow.set_values(q_data)
+
+        # Initialize current magnitudes (squared)
+        l_data = {}
+        for _id, ph, t in self.model.branch_phase_set * self.model.time_set:
+            i_mag = fbs_results.currents.loc[
+                (fbs_results.currents.tb == _id), ph
+            ].to_numpy()[0]
+            l_data[(_id, ph + ph, t)] = i_mag**2
+
+        # Initialize cross-phase current magnitudes
+        for _id, phases, t in self.model.bus_phase_pair_set * self.model.time_set:
+            ph1 = phases[0]
+            ph2 = phases[1]
+            if ph1 == ph2:
+                continue
+            if (_id, ph1 + ph1, t) in l_data and (_id, ph2 + ph2, t) in l_data:
+                l_data[(_id, ph1 + ph2, t)] = np.sqrt(
+                    l_data[_id, ph1 + ph1, t] * l_data[_id, ph2 + ph2, t]
+                )
+        self.model.l_flow.set_values(l_data)
+
+        # Initialize current angle differences
+        fbs_results.current_angles["ab"] = (
+            fbs_results.current_angles.a - fbs_results.current_angles.b
+        ) % 360
+        fbs_results.current_angles["bc"] = (
+            fbs_results.current_angles.b - fbs_results.current_angles.c
+        ) % 360
+        fbs_results.current_angles["ca"] = (
+            fbs_results.current_angles.c - fbs_results.current_angles.a
+        ) % 360
+        fbs_results.current_angles["ba"] = -fbs_results.current_angles.ab
+        fbs_results.current_angles["cb"] = -fbs_results.current_angles.bc
+        fbs_results.current_angles["ac"] = -fbs_results.current_angles.ca
+        fbs_results.current_angles["aa"] = (
+            fbs_results.current_angles.a - fbs_results.current_angles.a
+        )
+        fbs_results.current_angles["bb"] = (
+            fbs_results.current_angles.b - fbs_results.current_angles.b
+        )
+        fbs_results.current_angles["cc"] = (
+            fbs_results.current_angles.c - fbs_results.current_angles.c
+        )
+
+        angle_data = {
+            (_id, phases): float(
+                fbs_results.current_angles.loc[
+                    fbs_results.current_angles.tb == _id, phases
+                ].tolist()[0]
+            )
+            * pi
+            / 180
+            for _id, phases in self.model.bus_angle_phase_pair_set
+        }
+        for key in self.model.d:
+            self.model.d[key] = angle_data[key]
 
     def _resolve_objective(self, objective: Any) -> Any:
         """Resolve objective string to Pyomo objective function."""
@@ -183,7 +352,6 @@ class PyomoWrapper(Wrapper):
         if callable(objective):
             return objective
 
-        # String objective - map to pyomo objective rules
         obj_lower = objective.lower().strip()
 
         objective_map = {
@@ -210,10 +378,7 @@ class PyomoWrapper(Wrapper):
         return self.result.voltages
 
     def get_power_flows(self) -> pd.DataFrame:
-        """Extract branch power flow results (P flows).
-
-        Note: Pyomo wrapper returns active power flows, not complex apparent power.
-        """
+        """Extract branch power flow results (P flows)."""
         return self.result.p_flow
 
     def get_p_flows(self) -> pd.DataFrame:
@@ -234,9 +399,6 @@ class PyomoWrapper(Wrapper):
 
     def get_all_results(self) -> dict[str, pd.DataFrame]:
         """Get all variable results from the solved model.
-
-        The PyoResult object dynamically extracts all Pyomo variables
-        from the model. This method returns them as a dictionary.
 
         Returns
         -------

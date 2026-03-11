@@ -39,16 +39,20 @@ def _get_wrapper_registry() -> dict:
             MatrixWrapper,
             MultiperiodWrapper,
             PyomoWrapper,
-            NlpWrapper,
         )
 
         _WRAPPER_REGISTRY = {
             "matrix": MatrixWrapper,
             "multiperiod": MultiperiodWrapper,
             "pyomo": PyomoWrapper,
-            "nlp": NlpWrapper,
         }
     return _WRAPPER_REGISTRY
+
+
+# Aliases that map to a registry key + extra kwargs
+_BACKEND_ALIASES: dict[str, tuple[str, dict]] = {
+    "nlp": ("pyomo", {"model_type": "branchflow"}),
+}
 
 
 def _resolve_backend(name: str) -> tuple:
@@ -62,7 +66,7 @@ def _resolve_backend(name: str) -> tuple:
     Returns
     -------
     tuple
-        (backend_class, extra_kwargs) where extra_kwargs is a dict of
+        (wrapper_class, extra_kwargs) where extra_kwargs is a dict of
         additional keyword arguments to pass to solve().
 
     Raises
@@ -71,11 +75,19 @@ def _resolve_backend(name: str) -> tuple:
         If backend name is not recognized.
     """
     name = name.lower().strip()
+
+    # Check aliases first (e.g., "nlp" → "pyomo" + model_type="branchflow")
+    if name in _BACKEND_ALIASES:
+        canonical, extra_kwargs = _BACKEND_ALIASES[name]
+        registry = _get_wrapper_registry()
+        return registry[canonical], extra_kwargs
+
     registry = _get_wrapper_registry()
     if name not in registry:
+        supported = sorted(set(registry) | set(_BACKEND_ALIASES))
         raise ValueError(
             f"Unknown backend: '{name}'. "
-            f"Supported: {', '.join(sorted(registry))}"
+            f"Supported: {', '.join(supported)}"
         )
     return registry[name], {}
 

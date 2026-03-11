@@ -1,8 +1,8 @@
-"""Tests for the nonlinear OPF (NLP) wrapper."""
+"""Tests for the nonlinear OPF (NLP/BranchFlow) via PyomoWrapper."""
 
 import pytest
 import distopf as opf
-from distopf.wrappers.nlp_wrapper import NlpWrapper
+from distopf.wrappers.pyomo_wrapper import PyomoWrapper
 from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
 from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
 
@@ -17,20 +17,18 @@ class TestNlpBackendSelection:
     """Test that backend='nlp' is properly registered and selectable."""
 
     def test_backend_nlp_in_registry(self):
-        """Test that 'nlp' backend is registered in the backend registry."""
+        """Test that 'nlp' backend resolves to PyomoWrapper with branchflow."""
         from distopf.api import _resolve_backend
 
-        backend_cls, _ = _resolve_backend("nlp")
-        assert backend_cls is NlpWrapper
+        wrapper_cls, extra_kwargs = _resolve_backend("nlp")
+        assert wrapper_cls is PyomoWrapper
+        assert extra_kwargs == {"model_type": "branchflow"}
 
-    def test_backend_nlp_is_nlp_wrapper_class(self):
-        """Test that 'nlp' backend can be instantiated."""
-        from distopf.wrappers.nlp_wrapper import NlpWrapper
-        import distopf as opf
-
+    def test_backend_nlp_instantiates_pyomo_wrapper(self):
+        """Test that 'nlp' alias creates a PyomoWrapper."""
         case = opf.create_case("src/distopf/cases/csv/2Bus-1ph-batt")
-        wrapper = NlpWrapper(case)
-        assert isinstance(wrapper, NlpWrapper)
+        wrapper = PyomoWrapper(case)
+        assert isinstance(wrapper, PyomoWrapper)
 
 
 class TestNlpModelCreation:
@@ -75,15 +73,14 @@ class TestNlpModelCreation:
         assert hasattr(model, "cap_mccormick_lower_2")
 
     def test_nlp_wrapper_instantiation(self, small_case):
-        """Test that NlpWrapper can be instantiated."""
-        wrapper = NlpWrapper(small_case)
+        """Test that PyomoWrapper can be instantiated for branchflow."""
+        wrapper = PyomoWrapper(small_case)
         assert wrapper is not None
         assert wrapper.case is small_case
 
     def test_nlp_wrapper_model_building(self, small_case):
-        """Test that NlpWrapper can build a model without solving."""
-        wrapper = NlpWrapper(small_case)
-        # Manually build the model (normally done in solve())
+        """Test that branchflow model can be built without solving."""
+        wrapper = PyomoWrapper(small_case)
         from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
         from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
 
@@ -97,28 +94,28 @@ class TestNlpBackendSolverValidation:
 
     def test_discrete_controls_require_minlp_solver(self, small_case):
         """Test that discrete controls with IPOPT solver raises error."""
-        wrapper = NlpWrapper(small_case)
+        wrapper = PyomoWrapper(small_case)
         with pytest.raises(ValueError, match="MINLP solver"):
             wrapper.solve(
                 control_regulators=True,
                 solver="ipopt",
+                model_type="branchflow",
             )
 
     def test_discrete_capacitors_require_minlp_solver(self, small_case):
         """Test that capacitor control with IPOPT solver raises error."""
-        wrapper = NlpWrapper(small_case)
+        wrapper = PyomoWrapper(small_case)
         with pytest.raises(ValueError, match="MINLP solver"):
             wrapper.solve(
                 control_capacitors=True,
                 solver="ipopt",
+                model_type="branchflow",
             )
 
     def test_continuous_optimization_allows_ipopt(self, small_case):
         """Test that continuous optimization (no discrete controls) allows IPOPT."""
-        wrapper = NlpWrapper(small_case)
-        # This should not raise an error (though it may fail to solve if IPOPT not available)
+        wrapper = PyomoWrapper(small_case)
         try:
-            # Just test that the validation passes; actual solve may fail if solver unavailable
             from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
             from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
 
@@ -126,10 +123,8 @@ class TestNlpBackendSolverValidation:
             add_nlp_constraints(
                 wrapper.model, control_regulators=False, control_capacitors=False
             )
-            # If we get here, validation passed
             assert True
         except Exception:
-            # Solver may not be available, but validation should have passed
             pass
 
 
