@@ -26,7 +26,7 @@ def test_run_pf_returns_powerflowresult_and_unpacking():
 def test_run_opf_returns_powerflowresult_and_unpacking_matrix():
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 
-    res = case.run_opf("loss", backend="matrix")
+    res = case.run_opf("loss", wrapper="matrix")
     assert isinstance(res, PowerFlowResult)
     assert hasattr(res, "objective_value")
 
@@ -35,14 +35,14 @@ def test_run_opf_returns_powerflowresult_and_unpacking_matrix():
 def test_run_opf_returns_powerflowresult_and_unpacking_pyomo():
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 
-    res = case.run_opf("loss", backend="pyomo")
+    res = case.run_opf("loss", wrapper="pyomo")
     assert isinstance(res, PowerFlowResult)
     assert res.voltages is not None
 
 
 def test_result_save_and_summary(tmp_path):
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-    res = case.run_opf("loss", backend="matrix")
+    res = case.run_opf("loss", wrapper="matrix")
 
     # summary
     s = res.summary()
@@ -146,7 +146,9 @@ class TestPowerFlowResultMethods:
 
     def test_plot_power_flows_raises_missing_q(self):
         """plot_power_flows() raises when only active_power_flows present."""
-        result = PowerFlowResult(active_power_flows=pd.DataFrame({"a": [1], "b": [1], "c": [1]}))
+        result = PowerFlowResult(
+            active_power_flows=pd.DataFrame({"a": [1], "b": [1], "c": [1]})
+        )
         with pytest.raises(RuntimeError, match="No results available"):
             result.plot_power_flows()
 

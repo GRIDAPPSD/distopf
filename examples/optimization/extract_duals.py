@@ -10,7 +10,7 @@ import distopf as opf
 
 # Create and solve case with duals
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
 # Access pre-extracted duals
 print("Power Balance (Active) Duals:")

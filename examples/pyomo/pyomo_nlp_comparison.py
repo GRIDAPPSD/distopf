@@ -1,13 +1,13 @@
 """
-Example: Comparison of Linear (Pyomo) vs Nonlinear (NLP) OPF backends.
+Example: Comparison of Linear (Pyomo) vs Nonlinear (BranchFlow) OPF.
 
-This example demonstrates how to compare results from the linear backend
-(backend='pyomo') with the nonlinear backend (backend='nlp') using the
-unified Case.run_opf() API.
+This example demonstrates how to compare results from the linear wrapper
+(wrapper='pyomo') with the nonlinear branchflow formulation (formulation='branchflow')
+using the unified Case.run_opf() API.
 
 Key features:
 - Compares linear and nonlinear optimization results
-- Uses FBS initialization for NLP backend
+- Uses FBS initialization for the branchflow formulation
 - Demonstrates result extraction and comparison
 - Shows how to handle solver availability gracefully
 - Visualizes voltage and power flow comparisons across algorithms
@@ -57,13 +57,13 @@ v_fbs = fbs_results.voltages
 v_fbs["algorithm"] = "fbs"
 print("FBS solution completed")
 
-# Run Linear OPF (backend='pyomo')
+# Run Linear OPF (wrapper='pyomo')
 print("\n" + "=" * 60)
-print("Running Linear OPF (backend='pyomo')")
+print("Running Linear OPF (wrapper='pyomo')")
 print("=" * 60)
 try:
     result_linear = case.run_opf(
-        backend="pyomo",
+        wrapper="pyomo",
         objective="loss",
         raw_result=False,
     )
@@ -76,13 +76,13 @@ except Exception as e:
     print(f"Linear OPF failed: {e}")
     v_linear = None
 
-# Run Nonlinear OPF (backend='nlp')
+# Run Nonlinear OPF (formulation='branchflow')
 print("\n" + "=" * 60)
-print("Running Nonlinear OPF (backend='nlp')")
+print("Running Nonlinear OPF (formulation='branchflow')")
 print("=" * 60)
 try:
     result_nlp = case.run_opf(
-        backend="nlp",
+        formulation="branchflow",
         objective="loss",
         initialize="fbs",  # Initialize from FBS results
         solver="ipopt",

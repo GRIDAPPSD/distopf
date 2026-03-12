@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from distopf.wrappers.base import Wrapper
 
 if TYPE_CHECKING:
@@ -34,7 +34,11 @@ class MatrixBessWrapper(Wrapper):
         raw_result : bool
             If True, return raw solver result instead of PowerFlowResult
         **kwargs
-            Additional solver options
+            Additional solver options. ``model_type`` may be injected by the
+            ``formulation=`` routing in ``Case.run_opf()``:
+            - None or ``"lindist_mpl"`` (default): ``LinDistMPL``
+            - ``"lindist_mp"``: ``LinDistMP``
+            - ``"lindist_cap_mi_mp"``: ``LinDistModelCapMI_MP``
 
         Returns
         -------
@@ -42,8 +46,34 @@ class MatrixBessWrapper(Wrapper):
             If raw_result=False: PowerFlowResult with all results
             If raw_result=True: Raw scipy OptimizeResult object
         """
-        from distopf.matrix_models.matrix_bess import LinDistMPL, cvxpy_solve
+        from distopf.matrix_models.matrix_bess import (
+            LinDistMP,
+            LinDistMPL,
+            cvxpy_solve,
+        )
         from distopf.results import PowerFlowResult
+
+        # Pop model_type injected by formulation= routing (not a solver kwarg)
+        model_type = kwargs.pop("model_type", None)
+
+        # Select BESS model class from model_type
+        model_class = cast(type[Any], LinDistMPL)
+        if model_type is None or model_type == "lindist_mpl":
+            model_class = LinDistMPL
+        elif model_type == "lindist_mp":
+            model_class = LinDistMP
+        elif model_type == "lindist_cap_mi_mp":
+            from distopf.matrix_models.matrix_bess.lindist_capacitor_mi_mp import (
+                LinDistModelCapMI_MP,
+            )
+
+            model_class = LinDistModelCapMI_MP
+        else:
+            raise ValueError(
+                f"Unknown matrix_bess model_type: '{model_type}'. "
+                "Use formulation= with one of: 'lindist_mp', 'lindist_mpl', "
+                "'lindist_cap_mi_mp'."
+            )
 
         # Warn about unsupported parameters
         if control_regulators:
@@ -52,7 +82,7 @@ class MatrixBessWrapper(Wrapper):
             self._warn_unsupported("matrix_bess", "control_capacitors")
 
         # Create matrix_bess model (uses gen_data.control_variable per-row)
-        self.model = LinDistMPL(
+        self.model = model_class(
             branch_data=self.case.branch_data,
             bus_data=self.case.bus_data,
             gen_data=self.case.gen_data,

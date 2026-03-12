@@ -17,7 +17,7 @@ s_base = case.bus_data["s_base"].iloc[0]
 
 # Run OPF with loss minimization while controlling Q for voltage support
 # Note: matrix backend only supports "loss_min"; use pyomo backend for voltage_dev
-result = case.run_opf("loss_min", control_variable="Q", backend="matrix")
+result = case.run_opf("loss_min", control_variable="Q", wrapper="matrix")
 
 # Extract numeric voltage data (phases a, b, c)
 voltages = result.voltages[["a", "b", "c"]]

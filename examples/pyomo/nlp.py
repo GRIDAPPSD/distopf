@@ -1,12 +1,12 @@
 """
-Example: Nonlinear OPF using the new backend='nlp' API.
+Example: Nonlinear OPF using the formulation='branchflow' API.
 
-This example demonstrates how to use the new NLP backend for nonlinear optimal
-power flow optimization. The NLP backend uses the BranchFlow model with IPOPT
-(for continuous optimization) or MINLP solvers (for discrete controls).
+This example demonstrates how to use the branchflow formulation for nonlinear optimal
+power flow optimization. The branchflow formulation uses the nonlinear BranchFlow model
+with IPOPT (for continuous optimization) or MINLP solvers (for discrete controls).
 
 Key features:
-- Uses case.run_opf(backend='nlp', ...) for simple API
+- Uses case.run_opf(formulation='branchflow', ...) for simple API
 - Supports optional initialization from FBS results
 - Supports discrete control variables (regulators, capacitors)
 - Returns standard PowerFlowResult objects
@@ -40,7 +40,7 @@ fbs_results = fbs_solve(case)
 print("\nRunning NLP OPF with FBS initialization...")
 try:
     result = case.run_opf(
-        backend="nlp",
+        formulation="branchflow",
         objective="loss",
         initialize="fbs",  # Initialize from FBS results
         solver="ipopt",
@@ -61,7 +61,7 @@ print("Example: NLP OPF with discrete controls (requires MINLP solver)")
 print("=" * 60)
 try:
     result_discrete = case.run_opf(
-        backend="nlp",
+        formulation="branchflow",
         objective="loss",
         control_regulators=True,
         control_capacitors=True,

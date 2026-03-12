@@ -13,19 +13,19 @@ def small_case():
     return opf.create_case("src/distopf/cases/csv/2Bus-1ph-batt")
 
 
-class TestNlpBackendSelection:
-    """Test that backend='nlp' is properly registered and selectable."""
+class TestNlpWrapperSelection:
+    """Test that formulation='branchflow' is properly registered and selectable."""
 
-    def test_backend_nlp_in_registry(self):
-        """Test that 'nlp' backend resolves to PyomoWrapper with branchflow."""
-        from distopf.api import _resolve_backend
+    def test_formulation_branchflow_routes_to_pyomo(self):
+        """Test that 'branchflow' formulation resolves to PyomoWrapper with model_type."""
+        from distopf.api import _resolve_wrapper
 
-        wrapper_cls, extra_kwargs = _resolve_backend("nlp")
+        wrapper_cls, extra_kwargs = _resolve_wrapper(None, "branchflow")
         assert wrapper_cls is PyomoWrapper
         assert extra_kwargs == {"model_type": "branchflow"}
 
-    def test_backend_nlp_instantiates_pyomo_wrapper(self):
-        """Test that 'nlp' alias creates a PyomoWrapper."""
+    def test_branchflow_instantiates_pyomo_wrapper(self):
+        """Test that formulation='branchflow' creates a PyomoWrapper."""
         case = opf.create_case("src/distopf/cases/csv/2Bus-1ph-batt")
         wrapper = PyomoWrapper(case)
         assert isinstance(wrapper, PyomoWrapper)
@@ -128,15 +128,15 @@ class TestNlpBackendSolverValidation:
             pass
 
 
-class TestNlpBackendIntegration:
-    """Integration tests for NLP backend with Case API."""
+class TestNlpIntegration:
+    """Integration tests for branchflow formulation with Case API."""
 
-    def test_case_run_opf_with_nlp_backend(self, small_case):
-        """Test that Case.run_opf() accepts backend='nlp'."""
-        # This test just checks that the backend is accepted
+    def test_case_run_opf_with_branchflow_formulation(self, small_case):
+        """Test that Case.run_opf() accepts formulation='branchflow'."""
+        # This test just checks that the formulation is accepted
         # Actual solve may fail if IPOPT not available or model is infeasible
         try:
-            result = small_case.run_opf(backend="nlp", raw_result=False)
+            result = small_case.run_opf(formulation="branchflow", raw_result=False)
             assert result is not None
         except Exception as e:
             # If solver not available or model infeasible, that's OK for this test
@@ -146,11 +146,11 @@ class TestNlpBackendIntegration:
             ):
                 raise
 
-    def test_case_run_opf_nlp_with_initialization(self, small_case):
-        """Test that Case.run_opf() with backend='nlp' accepts initialize flag."""
+    def test_case_run_opf_branchflow_with_initialization(self, small_case):
+        """Test that Case.run_opf() with formulation='branchflow' accepts initialize flag."""
         try:
             result = small_case.run_opf(
-                backend="nlp", initialize="fbs", raw_result=False
+                formulation="branchflow", initialize="fbs", raw_result=False
             )
             assert result is not None
         except Exception as e:

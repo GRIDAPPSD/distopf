@@ -14,7 +14,7 @@ case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 
 # Run OPF with loss minimization
 # DERs can control both active (P) and reactive (Q) power
-result = case.run_opf("loss_min", control_variable="PQ", backend="matrix")
+result = case.run_opf("loss_min", control_variable="PQ", wrapper="matrix")
 
 # Get base power for unit conversions
 s_base = case.bus_data["s_base"].iloc[0]

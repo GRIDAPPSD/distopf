@@ -19,7 +19,7 @@ s_base = case.bus_data["s_base"].iloc[0]
 print("\nScenario A: DERs provide only active power (P only)")
 case_a = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 case_a.gen_data["control_variable"] = "P"
-result_a = case_a.run_opf("loss_min", backend="matrix")
+result_a = case_a.run_opf("loss_min", wrapper="matrix")
 v_a = result_a.voltages[["a", "b", "c"]].apply(pd.to_numeric, errors="coerce")
 vmin_a = v_a.min().min()
 vmax_a = v_a.max().max()
@@ -31,7 +31,7 @@ print(f"  Losses: {result_a.objective_value * s_base / 1e6:.6f} MW")
 print("\nScenario B: DERs provide active and reactive power (PQ)")
 case_b = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 case_b.gen_data["control_variable"] = "PQ"
-result_b = case_b.run_opf("loss_min", backend="matrix")
+result_b = case_b.run_opf("loss_min", wrapper="matrix")
 v_b = result_b.voltages[["a", "b", "c"]].apply(pd.to_numeric, errors="coerce")
 vmin_b = v_b.min().min()
 vmax_b = v_b.max().max()

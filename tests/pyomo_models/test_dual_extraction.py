@@ -25,7 +25,7 @@ class TestDualExtractionHighLevel:
     def test_run_opf_with_duals_true(self):
         """Test that Case.run_opf(duals=True) extracts duals on result directly"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         assert result.dual_power_balance_p is not None
         assert isinstance(result.dual_power_balance_p, pd.DataFrame)
@@ -34,14 +34,14 @@ class TestDualExtractionHighLevel:
     def test_run_opf_with_duals_false(self):
         """Test that Case.run_opf(duals=False) does not extract duals"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=False)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=False)
 
         assert result.dual_power_balance_p is None
 
     def test_run_opf_duals_accessible_via_raw_result(self):
         """Test that duals are still accessible via result.raw_result"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         assert isinstance(result.raw_result.dual_power_balance_p, pd.DataFrame)
         assert not result.raw_result.dual_power_balance_p.empty
@@ -49,7 +49,7 @@ class TestDualExtractionHighLevel:
     def test_dual_dataframe_has_correct_columns(self):
         """Test that dual DataFrames have correct columns"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         expected_columns = {"id", "name", "t", "phase", "dual"}
         actual_columns = set(result.dual_power_balance_p.columns)
@@ -58,7 +58,7 @@ class TestDualExtractionHighLevel:
     def test_dual_values_are_numeric(self):
         """Test that dual values are numeric"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         assert pd.api.types.is_numeric_dtype(
             result.dual_power_balance_p["dual"]
@@ -73,7 +73,7 @@ class TestDualExtractionHighLevel:
     def test_dual_dataframe_no_null_values(self):
         """Test that dual DataFrames have no null values"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         assert not result.dual_power_balance_p.isnull().any().any()
         assert not result.dual_power_balance_q.isnull().any().any()
@@ -82,7 +82,7 @@ class TestDualExtractionHighLevel:
     def test_dual_id_name_consistency(self):
         """Test that id and name columns are consistent"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         df = result.dual_power_balance_p
         for bus_id in df["id"].unique():
@@ -92,7 +92,7 @@ class TestDualExtractionHighLevel:
     def test_dual_time_index_consistency(self):
         """Test that time indices are consistent"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         df = result.dual_power_balance_p
         assert (df["t"] >= 0).all()
@@ -101,7 +101,7 @@ class TestDualExtractionHighLevel:
     def test_dual_phase_values_valid(self):
         """Test that phase values are valid"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         df = result.dual_power_balance_p
         valid_phases = {"a", "b", "c"}
@@ -110,7 +110,7 @@ class TestDualExtractionHighLevel:
     def test_dual_values_reasonable_magnitude(self):
         """Test that dual values have reasonable magnitude"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         assert (
             result.dual_power_balance_p["dual"]
@@ -126,7 +126,7 @@ class TestDualExtractionHighLevel:
     def test_get_dual_specific_constraint(self):
         """Test get_dual() for specific constraint"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         duals_df = result.raw_result.get_dual("power_balance_p")
         assert isinstance(duals_df, pd.DataFrame)
@@ -136,7 +136,7 @@ class TestDualExtractionHighLevel:
     def test_get_dual_nonexistent_constraint(self):
         """Test get_dual() for nonexistent constraint returns empty DataFrame"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         duals_df = result.raw_result.get_dual("nonexistent_constraint")
         assert isinstance(duals_df, pd.DataFrame)
@@ -145,7 +145,7 @@ class TestDualExtractionHighLevel:
     def test_get_all_duals_returns_dict(self):
         """Test get_all_duals() returns dictionary"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         all_duals = result.raw_result.get_all_duals()
         assert isinstance(all_duals, dict)
@@ -154,7 +154,7 @@ class TestDualExtractionHighLevel:
     def test_get_all_duals_contains_common_constraints(self):
         """Test get_all_duals() contains common constraint types"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         all_duals = result.raw_result.get_all_duals()
         # Should contain at least some of these
@@ -170,7 +170,7 @@ class TestDualExtractionHighLevel:
     def test_get_all_duals_values_are_dataframes(self):
         """Test that all values in get_all_duals() are DataFrames"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         all_duals = result.raw_result.get_all_duals()
         for constraint_name, duals_df in all_duals.items():
@@ -184,7 +184,7 @@ class TestDualExtractionHighLevel:
     def test_get_dual_matches_pre_extracted(self):
         """Test that get_dual() on raw_result matches result-level duals"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         # Get via raw_result method
         duals_method = result.raw_result.get_dual("power_balance_p")
@@ -196,7 +196,7 @@ class TestDualExtractionHighLevel:
     def test_get_all_duals_includes_pre_extracted(self):
         """Test that get_all_duals() includes pre-extracted constraints"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf(objective="loss", backend="pyomo", duals=True)
+        result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         all_duals = result.raw_result.get_all_duals()
 
@@ -208,10 +208,10 @@ class TestDualExtractionHighLevel:
     def test_multiple_runs_with_duals(self):
         """Test that multiple runs with duals work correctly"""
         case1 = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result1 = case1.run_opf(objective="loss", backend="pyomo", duals=True)
+        result1 = case1.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         case2 = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result2 = case2.run_opf(objective="loss", backend="pyomo", duals=True)
+        result2 = case2.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         assert result1.dual_power_balance_p is not None
         assert result2.dual_power_balance_p is not None

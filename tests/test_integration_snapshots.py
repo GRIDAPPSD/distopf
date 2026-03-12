@@ -1,6 +1,6 @@
 """Integration snapshot tests for DistOPF.
 
-These tests run various model/backend/case/objective combinations and compare
+These tests run various model/wrapper/case/objective combinations and compare
 results against stored reference data to catch regressions. If a code change
 alters numerical results, the affected scenario will fail with a clear diff.
 
@@ -39,20 +39,20 @@ SCENARIOS = [
     # ── Forward-backward sweep ──
     {"id": "ieee13_fbs", "case": "ieee13", "method": "fbs"},
     {"id": "ieee123_fbs", "case": "ieee123_30der", "method": "fbs"},
-    # ── Matrix backend (CVXPY / CLARABEL) ──
+    # ── Matrix wrapper (CVXPY / CLARABEL) ──
     {
         "id": "ieee13_mat_loss",
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
     },
     {
         "id": "ieee13_mat_loss_Q",
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_variable": "Q",
     },
     {
@@ -60,7 +60,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_variable": "Q",
     },
     {
@@ -68,7 +68,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "curtail_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_variable": "P",
     },
     {
@@ -76,7 +76,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_variable": "PQ",
     },
     {
@@ -84,16 +84,16 @@ SCENARIOS = [
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_capacitors": True,
     },
-    # ── Pyomo backend (IPOPT) ──
+    # ── Pyomo wrapper (IPOPT) ──
     {
         "id": "ieee13_pyo_loss",
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "pyomo",
+        "wrapper": "pyomo",
         "requires_ipopt": True,
     },
     {
@@ -101,7 +101,7 @@ SCENARIOS = [
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "pyomo",
+        "wrapper": "pyomo",
         "control_variable": "Q",
         "requires_ipopt": True,
     },
@@ -110,7 +110,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "pyomo",
+        "wrapper": "pyomo",
         "control_variable": "Q",
         "requires_ipopt": True,
     },
@@ -119,17 +119,17 @@ SCENARIOS = [
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "pyomo",
+        "wrapper": "pyomo",
         "control_variable": "PQ",
         "requires_ipopt": True,
     },
-    # ── Multiperiod backend (single-step for comparable results) ──
+    # ── Multiperiod wrapper (single-step for comparable results) ──
     {
         "id": "ieee13_mp_loss",
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "multiperiod",
+        "wrapper": "matrix_bess",
         "n_steps": 1,
     },
     {
@@ -137,7 +137,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "multiperiod",
+        "wrapper": "matrix_bess",
         "control_variable": "Q",
         "n_steps": 1,
     },
@@ -147,7 +147,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_variable": "Q",
         "ignore_schedule": True,
     },
@@ -156,7 +156,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "ignore_gen": True,
     },
     {"id": "ieee13_heavy_pf", "case": "ieee13", "method": "pf", "load_mult": 1.5},
@@ -193,7 +193,8 @@ _MODIFY_KEYS = frozenset(
 )
 _OPF_KEYS = frozenset(
     {
-        "backend",
+        "wrapper",
+        "formulation",
         "control_variable",
         "control_regulators",
         "control_capacitors",
@@ -250,7 +251,10 @@ def extract_metrics(result) -> dict:
             m[f"{prefix}_{ph}_mean"] = float(np.mean(vals))
 
     # Generator output totals
-    for attr, prefix in [("active_power_generation", "pg"), ("reactive_power_generation", "qg")]:
+    for attr, prefix in [
+        ("active_power_generation", "pg"),
+        ("reactive_power_generation", "qg"),
+    ]:
         df = getattr(result, attr, None)
         if df is None or df.empty:
             continue

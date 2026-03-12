@@ -35,7 +35,7 @@ class TestSmokeTests:
     def test_smoke_ieee13_matrix_loss(self):
         """Load ieee13 → run_opf(loss, matrix) → verify results."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf("loss", backend="matrix")
+        result = case.run_opf("loss", wrapper="matrix")
         assert isinstance(result, PowerFlowResult)
         assert result.voltages is not None
         assert result.objective_value is not None
@@ -43,7 +43,7 @@ class TestSmokeTests:
     def test_smoke_ieee123_30der_q_control(self):
         """Load ieee123_30der → run_opf with Q control → verify results."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-        result = case.run_opf("loss", control_variable="Q", backend="matrix")
+        result = case.run_opf("loss", control_variable="Q", wrapper="matrix")
         assert isinstance(result, PowerFlowResult)
         assert result.active_power_generation is not None
         assert result.reactive_power_generation is not None
@@ -51,7 +51,7 @@ class TestSmokeTests:
     def test_smoke_ieee123_30der_matrix_curtail(self):
         """Load ieee123_30der → run_opf(curtail, matrix) → verify results."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-        result = case.run_opf("curtail", control_variable="P", backend="matrix")
+        result = case.run_opf("curtail", control_variable="P", wrapper="matrix")
         assert isinstance(result, PowerFlowResult)
         assert result.voltages is not None
 
@@ -59,14 +59,14 @@ class TestSmokeTests:
     def test_smoke_ieee13_pyomo_loss(self):
         """Load ieee13 → run_opf(loss, pyomo) → verify results."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        result = case.run_opf("loss", backend="pyomo")
+        result = case.run_opf("loss", wrapper="pyomo")
         assert isinstance(result, PowerFlowResult)
         assert result.converged
 
     def test_smoke_ieee13_multiperiod_single_step(self):
-        """Load ieee13 with n_steps=1 → run_opf(multiperiod) → verify results."""
+        """Load ieee13 with n_steps=1 → run_opf(matrix_bess) → verify results."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13", n_steps=1)
-        result = case.run_opf("loss", backend="multiperiod")
+        result = case.run_opf("loss", wrapper="matrix_bess")
         assert isinstance(result, PowerFlowResult)
         assert result.voltages is not None
 
@@ -114,7 +114,7 @@ class TestSmokeTests:
     def test_smoke_run_opf_with_p_control(self):
         """Run OPF with P control variable."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-        result = case.run_opf("curtail", control_variable="P", backend="matrix")
+        result = case.run_opf("curtail", control_variable="P", wrapper="matrix")
         assert result is not None
 
 
@@ -124,7 +124,7 @@ class TestFBSWithOPFSetpoints:
     def test_run_fbs_with_opf_setpoints_basic(self):
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 
-        opf_res = case.run_opf("loss", backend="matrix")
+        opf_res = case.run_opf("loss", wrapper="matrix")
         fbs_res = opf.run_fbs_with_opf_setpoints(case, opf_res)
 
         assert isinstance(fbs_res, opf.PowerFlowResult)
@@ -133,7 +133,7 @@ class TestFBSWithOPFSetpoints:
     def test_run_fbs_with_opf_setpoints_q_only(self):
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 
-        opf_res = case.run_opf("loss", backend="matrix")
+        opf_res = case.run_opf("loss", wrapper="matrix")
         partial = opf.PowerFlowResult(
             active_power_generation=None, reactive_power_generation=opf_res.reactive_power_generation, result_type="opf"
         )

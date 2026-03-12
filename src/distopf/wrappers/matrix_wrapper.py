@@ -15,6 +15,8 @@ from distopf.matrix_models.lindist_capacitor_regulator_mi import (
 from distopf.matrix_models.lindist_p_gen import LinDistModelPGen
 from distopf.matrix_models.lindist_q_gen import LinDistModelQGen
 from distopf.matrix_models.lindist import LinDistModel
+from distopf.matrix_models.lindist_regulator_mi import LinDistModelRegulatorMI
+from distopf.matrix_models.lindist_loads import LinDistModelL
 from distopf.matrix_models.solvers import (
     lp_solve,
     cvxpy_solve,
@@ -187,6 +189,15 @@ def auto_solve(model: LinDistBase, objective_function=None, **kwargs):
 class MatrixWrapper(Wrapper):
     """Single-period matrix wrapper using CVXPY/CLARABEL solver."""
 
+    # Maps model_type string (from formulation=) to the explicit matrix model class.
+    # When model_type is None or 'lindist', the default create_model() dispatch is used.
+    _MODEL_TYPE_MAP: dict[str, type] = {
+        "lindist_cap_mi": LinDistModelCapMI,
+        "lindist_reg_mi": LinDistModelRegulatorMI,
+        "lindist_cap_reg_mi": LinDistModelCapacitorRegulatorMI,
+        "lindist_loads": LinDistModelL,
+    }
+
     def solve(
         self,
         objective: Optional[Any] = None,
@@ -219,20 +230,30 @@ class MatrixWrapper(Wrapper):
         from distopf.distOPF import create_model, auto_solve
         from distopf.results import PowerFlowResult
 
+        # Pop model_type injected by formulation= routing (not a solver kwarg)
+        model_type = kwargs.pop("model_type", None)
+
         # Determine control variable from gen_data (uses per-row values)
         control_variable = self._infer_control_variable()
 
-        # Create model
-        self.model = create_model(
-            control_variable=control_variable,
-            control_regulators=control_regulators,
-            control_capacitors=control_capacitors,
+        case_kwargs = dict(
             branch_data=self.case.branch_data,
             bus_data=self.case.bus_data,
             gen_data=self.case.gen_data,
             cap_data=self.case.cap_data,
             reg_data=self.case.reg_data,
         )
+
+        # Create model: explicit formulation overrides control-flag dispatch
+        if model_type is not None and model_type in self._MODEL_TYPE_MAP:
+            self.model = self._MODEL_TYPE_MAP[model_type](**case_kwargs)
+        else:
+            self.model = create_model(
+                control_variable=control_variable,
+                control_regulators=control_regulators,
+                control_capacitors=control_capacitors,
+                **case_kwargs,
+            )
 
         # Solve
         self.result = auto_solve(self.model, objective, **kwargs)
@@ -257,11 +278,23 @@ class MatrixWrapper(Wrapper):
             u_caps = self.model.get_uc(self.result.x)
 
         # Normalize: add time column to single-period results
-        voltages_df = self._add_time_column(voltages_df, position=2)
-        p_flows_df = self._add_time_column(p_flows_df, position=4)
-        q_flows_df = self._add_time_column(q_flows_df, position=4)
-        p_gens = self._add_time_column(p_gens, position=2)
-        q_gens = self._add_time_column(q_gens, position=2)
+        voltages_with_time = self._add_time_column(voltages_df, position=2)
+        p_flows_with_time = self._add_time_column(p_flows_df, position=4)
+        q_flows_with_time = self._add_time_column(q_flows_df, position=4)
+        p_gens_with_time = self._add_time_column(p_gens, position=2)
+        q_gens_with_time = self._add_time_column(q_gens, position=2)
+
+        assert voltages_with_time is not None
+        assert p_flows_with_time is not None
+        assert q_flows_with_time is not None
+        assert p_gens_with_time is not None
+        assert q_gens_with_time is not None
+
+        voltages_df = voltages_with_time
+        p_flows_df = p_flows_with_time
+        q_flows_df = q_flows_with_time
+        p_gens = p_gens_with_time
+        q_gens = q_gens_with_time
 
         return PowerFlowResult(
             voltages=voltages_df,

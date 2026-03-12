@@ -473,7 +473,7 @@ class TestIgnoreSchedule:
         case = opf.create_case(
             opf.CASES_DIR / "csv" / "ieee123_30der", ignore_schedule=True
         )
-        r = case.run_opf("loss", control_variable="Q", backend="pyomo")
+        r = case.run_opf("loss", control_variable="Q", wrapper="pyomo")
         assert r is not None
         assert r.converged
 
@@ -563,7 +563,7 @@ class TestIgnoreData:
             ignore_gen=True,
             ignore_schedule=True,
         )
-        r = case.run_opf("loss", backend="pyomo")
+        r = case.run_opf("loss", wrapper="pyomo")
         assert r is not None
 
 
@@ -722,7 +722,7 @@ class TestVerboseLogging:
     def test_run_opf_verbose_produces_output(self, capsys):
         """run_opf(verbose=True) should print diagnostic info to stderr."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        case.run_opf("loss", backend="matrix", verbose=True)
+        case.run_opf("loss", wrapper="matrix", verbose=True)
         captured = capsys.readouterr()
         assert "Running OPF" in captured.err
         assert "Schedules" in captured.err
@@ -731,7 +731,7 @@ class TestVerboseLogging:
     def test_run_opf_verbose_false_no_output(self, capsys):
         """run_opf(verbose=False) should not print diagnostic info."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        case.run_opf("loss", backend="matrix", verbose=False)
+        case.run_opf("loss", wrapper="matrix", verbose=False)
         captured = capsys.readouterr()
         assert "Running OPF" not in captured.err
 
@@ -749,7 +749,7 @@ class TestVerboseLogging:
         handlers_before = len(logger.handlers)
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        case.run_opf("loss", backend="matrix", verbose=True)
+        case.run_opf("loss", wrapper="matrix", verbose=True)
 
         assert len(logger.handlers) == handlers_before
 
@@ -760,7 +760,7 @@ class TestVerboseLogging:
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         try:
-            case.run_opf("loss", backend="invalid_backend", verbose=True)
+            case.run_opf("loss", wrapper="invalid_wrapper", verbose=True)
         except ValueError:
             pass
 

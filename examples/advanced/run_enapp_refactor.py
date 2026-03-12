@@ -52,7 +52,7 @@ def main():
     # Full-case OPF (backend auto-selected or force multiperiod)
     result_c = case.run_opf(
         objective=cp_obj_cost_min,
-        backend="multiperiod",
+        wrapper="matrix_bess",
         solver=cp.CLARABEL,
         demand_charge=demand_charge,
         cost_curve=case.schedules.price.to_numpy(),

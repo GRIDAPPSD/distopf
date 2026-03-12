@@ -49,48 +49,129 @@ def _get_wrapper_registry() -> dict:
     return _WRAPPER_REGISTRY
 
 
-# Aliases that map to a registry key + extra kwargs
-_BACKEND_ALIASES: dict[str, tuple[str, dict]] = {
-    "nlp": ("pyomo", {"model_type": "branchflow"}),
-    "multiperiod": ("matrix_bess", {}),
+# Maps formulation name → (default_wrapper, model_type, compatible_wrappers)
+# This is the public API for selecting a specific math formulation.
+_FORMULATION_REGISTRY: dict[str, dict] = {
+    # Pyomo BranchFlow (nonlinear, IPOPT/MINLP)
+    "branchflow": {
+        "default_wrapper": "pyomo",
+        "model_type": "branchflow",
+        "compatible_wrappers": ["pyomo"],
+    },
+    # LinDistFlow — supported by both pyomo (default) and matrix
+    "lindist": {
+        "default_wrapper": "pyomo",
+        "model_type": "lindist",
+        "compatible_wrappers": ["pyomo", "matrix"],
+    },
+    # Matrix single-step formulations
+    "lindist_cap_mi": {
+        "default_wrapper": "matrix",
+        "model_type": "lindist_cap_mi",
+        "compatible_wrappers": ["matrix"],
+    },
+    "lindist_reg_mi": {
+        "default_wrapper": "matrix",
+        "model_type": "lindist_reg_mi",
+        "compatible_wrappers": ["matrix"],
+    },
+    "lindist_cap_reg_mi": {
+        "default_wrapper": "matrix",
+        "model_type": "lindist_cap_reg_mi",
+        "compatible_wrappers": ["matrix"],
+    },
+    "lindist_loads": {
+        "default_wrapper": "matrix",
+        "model_type": "lindist_loads",
+        "compatible_wrappers": ["matrix"],
+    },
+    # Multi-period BESS formulations (matrix_bess only)
+    "lindist_mp": {
+        "default_wrapper": "matrix_bess",
+        "model_type": "lindist_mp",
+        "compatible_wrappers": ["matrix_bess"],
+    },
+    "lindist_mpl": {
+        "default_wrapper": "matrix_bess",
+        "model_type": "lindist_mpl",
+        "compatible_wrappers": ["matrix_bess"],
+    },
+    "lindist_cap_mi_mp": {
+        "default_wrapper": "matrix_bess",
+        "model_type": "lindist_cap_mi_mp",
+        "compatible_wrappers": ["matrix_bess"],
+    },
 }
 
 
-def _resolve_backend(name: str) -> tuple:
-    """Resolve backend name to (wrapper_class, extra_kwargs).
+def _resolve_wrapper(wrapper: Optional[str], formulation: Optional[str]) -> tuple:
+    """Resolve wrapper + formulation to (wrapper_class, extra_kwargs).
 
     Parameters
     ----------
-    name : str
-        Backend name (e.g., "pyomo", "nlp", "matrix", "matrix_bess")
+    wrapper : str or None
+        Wrapper name: "pyomo", "matrix", or "matrix_bess". If None, the wrapper
+        is auto-selected from the formulation (or defaults to "pyomo").
+    formulation : str or None
+        Formulation name (e.g., "lindist", "branchflow", "lindist_cap_mi").
+        When provided, injects the appropriate ``model_type`` kwarg for the
+        selected wrapper and auto-selects the default wrapper if ``wrapper``
+        is None.
 
     Returns
     -------
     tuple
-        (wrapper_class, extra_kwargs) where extra_kwargs is a dict of
-        additional keyword arguments to pass to solve().
+        (wrapper_class, extra_kwargs) where extra_kwargs is merged into the
+        kwargs forwarded to ``wrapper.solve()``.
 
     Raises
     ------
     ValueError
-        If backend name is not recognized.
+        If wrapper or formulation name is not recognized, or if the wrapper
+        and formulation are incompatible.
     """
-    name = name.lower().strip()
-
-    # Check aliases first (e.g., "nlp" → "pyomo" + model_type="branchflow")
-    if name in _BACKEND_ALIASES:
-        canonical, extra_kwargs = _BACKEND_ALIASES[name]
-        registry = _get_wrapper_registry()
-        return registry[canonical], extra_kwargs
-
     registry = _get_wrapper_registry()
-    if name not in registry:
-        supported = sorted(set(registry) | set(_BACKEND_ALIASES))
-        raise ValueError(
-            f"Unknown backend: '{name}'. "
-            f"Supported: {', '.join(supported)}"
-        )
-    return registry[name], {}
+
+    # Neither specified → default to pyomo with no extra kwargs
+    if wrapper is None and formulation is None:
+        return registry["pyomo"], {}
+
+    # Validate wrapper name if provided
+    if wrapper is not None:
+        wrapper = wrapper.lower().strip()
+        if wrapper not in registry:
+            supported = sorted(registry)
+            raise ValueError(
+                f"Unknown wrapper: '{wrapper}'. "
+                f"Supported: {', '.join(supported)}"
+            )
+
+    # Validate formulation name if provided
+    extra_kwargs: dict = {}
+    if formulation is not None:
+        formulation = formulation.lower().strip()
+        if formulation not in _FORMULATION_REGISTRY:
+            supported = sorted(_FORMULATION_REGISTRY)
+            raise ValueError(
+                f"Unknown formulation: '{formulation}'. "
+                f"Supported: {', '.join(supported)}"
+            )
+        form_info = _FORMULATION_REGISTRY[formulation]
+        extra_kwargs["model_type"] = form_info["model_type"]
+        if wrapper is None:
+            # Auto-select the default wrapper for this formulation
+            wrapper = form_info["default_wrapper"]
+        elif wrapper not in form_info["compatible_wrappers"]:
+            compatible = ", ".join(
+                f"'{w}'" for w in form_info["compatible_wrappers"]
+            )
+            raise ValueError(
+                f"Formulation '{formulation}' is not compatible with "
+                f"wrapper '{wrapper}'. "
+                f"Compatible wrappers: {compatible}"
+            )
+
+    return registry[wrapper], extra_kwargs
 
 
 class Case:
@@ -377,7 +458,8 @@ class Case:
         control_variable: Optional[str] = None,
         control_regulators: bool = False,
         control_capacitors: bool = False,
-        backend: Optional[str] = None,
+        wrapper: Optional[str] = None,
+        formulation: Optional[str] = None,
         raw_result: bool = False,
         duals: bool = False,
         verbose: bool = False,
@@ -405,32 +487,43 @@ class Case:
             - "Q": Control reactive power
             - "PQ": Control both
         control_regulators : bool, default False
-            Enable mixed-integer regulator tap optimization (matrix backend only)
+            Enable mixed-integer regulator tap optimization
         control_capacitors : bool, default False
-            Enable mixed-integer capacitor switching optimization (matrix backend only)
-        backend : str, optional
-            Optimization backend to use:
+            Enable mixed-integer capacitor switching optimization
+        wrapper : str, optional
+            Solver wrapper to use:
             - "matrix": CVXPY/CLARABEL (fast, convex problems only)
             - "matrix_bess": Multi-period matrix model (supports batteries, schedules)
-            - "pyomo": Pyomo/IPOPT (NLP, LinDistFlow model)
-            - "nlp": Pyomo/IPOPT or MINLP (nonlinear BranchFlow model)
-            - None: Auto-detect based on n_steps and bat_data
+            - "pyomo": Pyomo/IPOPT (NLP-capable, supports lindist and branchflow)
+            - None: Auto-selected from ``formulation``, or defaults to "pyomo"
+        formulation : str, optional
+            Math formulation to use. Auto-selects the appropriate wrapper when
+            ``wrapper`` is not specified. Options:
+            - "lindist": Linear DistFlow (pyomo default; also in matrix)
+            - "branchflow": Nonlinear BranchFlow (pyomo + IPOPT/MINLP)
+            - "lindist_cap_mi": LinDist + capacitor MILP (matrix)
+            - "lindist_reg_mi": LinDist + regulator MILP (matrix)
+            - "lindist_cap_reg_mi": LinDist + capacitor+regulator MILP (matrix)
+            - "lindist_loads": LinDist loads variant (matrix)
+            - "lindist_mp": Multi-period LinDist (matrix_bess)
+            - "lindist_mpl": Multi-period LinDist loads (matrix_bess, default)
+            - "lindist_cap_mi_mp": Multi-period + capacitor MILP (matrix_bess)
         raw_result : bool, default False
             If True, return raw result object instead of DataFrames
         duals : bool, default False
-            If True (Pyomo backend only), extract dual variables from constraints.
+            If True (pyomo wrapper only), extract dual variables from constraints.
             Duals are stored directly on the result as dual_power_balance_p, etc.
         verbose : bool, default False
-            If True, print diagnostic information about the solve: backend
+            If True, print diagnostic information about the solve: wrapper
             selection, schedule multiplier summaries, and timing.
         **kwargs
             Additional arguments passed to solver (e.g., target, error_percent, solver)
 
         Returns
         -------
-        tuple or result object
-            If raw_result=False: (voltages_df, power_flows_df, p_gens_df, q_gens_df)
-            If raw_result=True: backend-specific result object
+        PowerFlowResult
+            Result object containing voltages, power flows, and generation data.
+            If raw_result=True, returns the wrapper-specific raw result instead.
 
         """
         handler = self._enable_verbose() if verbose else None
@@ -442,30 +535,27 @@ class Case:
                 objective = resolve_objective_alias(objective)
 
             logger.info(
-                "Running OPF: objective=%s, control_variable=%s, backend=%s, "
-                "n_steps=%d, start_step=%d",
+                "Running OPF: objective=%s, control_variable=%s, "
+                "wrapper=%s, formulation=%s, n_steps=%d, start_step=%d",
                 objective,
                 control_variable,
-                backend,
+                wrapper,
+                formulation,
                 self.n_steps,
                 self.start_step,
             )
             self._log_schedule_summary()
 
-            # Select backend (default: pyomo)
-            if backend is None:
-                backend = "pyomo"
-
-            backend_cls, extra_kwargs = _resolve_backend(backend)
+            wrapper_cls, extra_kwargs = _resolve_wrapper(wrapper, formulation)
             kwargs.update(extra_kwargs)
 
-            backend_obj = backend_cls(self)
+            wrapper_obj = wrapper_cls(self)
 
             # Set control variable if specified (updates gen_data)
             if control_variable is not None:
-                backend_obj.set_control_variable(control_variable)
+                wrapper_obj.set_control_variable(control_variable)
 
-            result = backend_obj.solve(
+            result = wrapper_obj.solve(
                 objective=objective,
                 control_regulators=control_regulators,
                 control_capacitors=control_capacitors,
@@ -474,7 +564,9 @@ class Case:
                 **kwargs,
             )
 
-            logger.info("OPF completed (backend=%s)", backend)
+            logger.info(
+                "OPF completed (wrapper=%s, formulation=%s)", wrapper, formulation
+            )
             return result
         finally:
             if handler:

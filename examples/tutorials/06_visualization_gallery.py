@@ -11,7 +11,7 @@ import distopf as opf
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 
 # Run OPF
-result = case.run_opf("loss_min", control_variable="PQ", backend="matrix")
+result = case.run_opf("loss_min", control_variable="PQ", wrapper="matrix")
 
 print("=" * 60)
 print("DistOPF Visualization Suite")

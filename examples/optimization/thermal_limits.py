@@ -3,7 +3,7 @@ import distopf.matrix_models.matrix_bess as mpopf
 import pandas as pd
 import numpy as np
 
-backend = "matrix"
+wrapper = "matrix"
 control_variable = "P"
 
 
@@ -23,7 +23,7 @@ case.bus_data.v_max = 1.08
 case.bat_data = None
 # case.bus_data.v_min = 0
 print(case.branch_data.head())
-results = case.run_opf(objective, control_variable=control_variable, backend=backend)
+results = case.run_opf(objective, control_variable=control_variable, wrapper=wrapper)
 s_flows = results.p_flows.copy()
 s_flows.a = np.sqrt(results.p_flows.a**2 + results.q_flows.a**2)
 s_flows.b = np.sqrt(results.p_flows.b**2 + results.q_flows.b**2)
@@ -36,7 +36,7 @@ case.branch_data.loc[case.branch_data.tb == 2, ["sa_max", "sb_max", "sc_max"]] =
     1.205 * 1.0823921
 )
 print(case.branch_data.head())
-results = case.run_opf(objective, control_variable=control_variable, backend=backend)
+results = case.run_opf(objective, control_variable=control_variable, wrapper=wrapper)
 s_flows = results.p_flows.copy()
 s_flows.a = np.sqrt(results.p_flows.a**2 + results.q_flows.a**2)
 s_flows.b = np.sqrt(results.p_flows.b**2 + results.q_flows.b**2)

@@ -38,7 +38,7 @@ A sequential learning path covering core DistOPF concepts.
 | `01_simple_power_flow.py` | Basics | Load network, run power flow, plot |
 | `02_loss_minimization.py` | Objective | Most common OPF use case with DER control |
 | `03_voltage_optimization.py` | Objective | Reactive power control for voltage support |
-| `04_comparing_backends.py` | Solvers | Matrix vs Pyomo backend comparison |
+| `04_comparing_wrappers.py` | Solvers | Matrix vs Pyomo wrapper comparison |
 | `05_control_strategies.py` | Control | P, Q, PQ, and fixed DER control strategies |
 | `06_visualization_gallery.py` | Plotting | All available visualization functions |
 | `07_quick_start.py` | Template | Minimal working OPF example |
@@ -67,13 +67,13 @@ Pyomo-based formulations including NLP, mixed-integer, and multiperiod.
 | `build_your_own_opf.py` | Marimo: Build a modular Pyomo OPF from scratch (24h multiperiod) | `create_lindist_model()`, `add_*_constraints()`, custom objectives, batteries |
 | `build_your_own_opf_static.py` | Marimo: Static single-step modular Pyomo OPF | Pyomo constraints, penalized objectives, network visualization |
 | `pyomo_tests.py` | Basic Pyomo model with constraints and loss objective | Pyomo setup, constraint configuration, `equality_only=True` |
-| `pyomo_nlp_comparison.py` | Compare linear (Pyomo) vs nonlinear (NLP) backends | `backend="pyomo"` vs `backend="nlp"`, FBS initialization |
+| `pyomo_nlp_comparison.py` | Compare linear Pyomo vs nonlinear BranchFlow solves | `wrapper="pyomo"` vs `formulation="branchflow"`, FBS initialization |
 | `pyomo_multiperiod.py` | 24-hour multiperiod optimization with batteries | Battery SOC constraints, energy limits, time-series scheduling |
 | `pyomo_regulator_control.py` | Optimize regulator tap positions over 24 hours | Regulator tap MILP, continuous control variables, HiGHS solver |
 | `pyomo_mi.py` | Capacitor and regulator mixed-integer control | MILP for capacitor switching, regulator tap optimization |
 | `pyomo_time_comparison.py` | Benchmark matrix vs Pyomo solver performance | Build/solve time profiling, `matrix_bess` vs Pyomo |
 | `pyomo_dss_example.py` | Load DSS case and solve with Pyomo | `create_lindist_model()`, DSS import, loss objective |
-| `nlp.py` | Nonlinear OPF with optional FBS initialization | `backend="nlp"`, IPOPT/Bonmin, discrete regulator/capacitor control |
+| `nlp.py` | Nonlinear OPF with optional FBS initialization | `formulation="branchflow"`, IPOPT/Bonmin, discrete regulator/capacitor control |
 
 ## `optimization/` — Objectives & Constraints
 
@@ -139,7 +139,7 @@ Performance benchmarking, distributed algorithms, and experimental scripts.
   - `"Q"`: Control reactive power only
   - `"PQ"`: Control both active and reactive power
 
-**Backend (Solver)**
+**Wrapper / Formulation**
   Which optimization engine to use:
   - `"matrix"`: CVXPY + CLARABEL (fast, convex problems)
   - `"pyomo"`: Pyomo + IPOPT (flexible, nonlinear problems; supports `model_type="branchflow"` for exact NLP)
@@ -155,10 +155,10 @@ Performance benchmarking, distributed algorithms, and experimental scripts.
 
 | Scenario | Start With | Tips |
 |----------|-----------|------|
-| Minimize losses | `tutorials/02_loss_minimization.py` | Set `control_variable="PQ"`, use `backend="matrix"` |
+| Minimize losses | `tutorials/02_loss_minimization.py` | Set `control_variable="PQ"`, use `wrapper="matrix"` |
 | Voltage regulation | `tutorials/03_voltage_optimization.py` | Focus on Q or PQ control |
 | Compare control strategies | `tutorials/05_control_strategies.py` | Modify `control_variable` per generator |
-| Choose a solver | `tutorials/04_comparing_backends.py` | Convex → matrix, nonlinear → pyomo |
+| Choose a solver | `tutorials/04_comparing_wrappers.py` | Convex → matrix, nonlinear → pyomo |
 | Analyze results | `tutorials/10_working_with_results.py` | Use `result.voltages.to_csv()` for export |
 | Pyomo custom model | `pyomo/build_your_own_opf.py` | Compose constraints modularly |
 | Batteries / multiperiod | `pyomo/pyomo_multiperiod.py` | Define schedules and SOC limits |
@@ -169,7 +169,7 @@ Performance benchmarking, distributed algorithms, and experimental scripts.
 1. **Fastest first run**: Start with `tutorials/01_simple_power_flow.py` (no optimization, just PF)
 2. **Template for your work**: Copy `tutorials/07_quick_start.py` and modify network name
 3. **Debug control strategies**: Use `print(case.gen_data['control_variable'])` to verify
-4. **Compare backends**: Run same problem with both `"matrix"` and `"pyomo"` backends
+4. **Compare wrappers**: Run the same problem with both `"matrix"` and `"pyomo"` wrappers
 5. **Export results**: Use `result.voltages.to_csv()` to save for Excel analysis
 
 ## Resources

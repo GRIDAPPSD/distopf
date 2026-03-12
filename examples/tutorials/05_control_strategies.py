@@ -22,7 +22,7 @@ print("\nScenario 1: Only substation active power control")
 case1 = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 # Set all DERs to fixed output (no control)
 case1.gen_data["control_variable"] = ""
-result1 = case1.run_opf("loss_min", backend="matrix")
+result1 = case1.run_opf("loss_min", wrapper="matrix")
 v1 = result1.voltages[["a", "b", "c"]]
 print(f"  Min voltage: {v1.min().min():.4f} p.u.")
 print(f"  Max voltage: {v1.max().max():.4f} p.u.")
@@ -32,7 +32,7 @@ print(f"  Losses: {result1.objective_value * s_base / 1e6:.6f} MW")
 print("\nScenario 2: All generators control P and Q")
 case2 = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 case2.gen_data["control_variable"] = "PQ"
-result2 = case2.run_opf("loss_min", backend="pyomo")
+result2 = case2.run_opf("loss_min", wrapper="pyomo")
 v2 = result2.voltages[["a", "b", "c"]]
 print(f"  Min voltage: {v2.min().min():.4f} p.u.")
 print(f"  Max voltage: {v2.max().max():.4f} p.u.")
@@ -42,7 +42,7 @@ print(f"  Losses: {result2.objective_value * s_base / 1e6:.6f} MW")
 print("\nScenario 3: DERs control Q only")
 case3 = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 case3.gen_data["control_variable"] = "Q"
-result3 = case3.run_opf("loss_min", backend="matrix")
+result3 = case3.run_opf("loss_min", wrapper="matrix")
 v3 = result3.voltages[["a", "b", "c"]]
 print(f"  Min voltage: {v3.min().min():.4f} p.u.")
 print(f"  Max voltage: {v3.max().max():.4f} p.u.")
