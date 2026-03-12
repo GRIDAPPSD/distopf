@@ -14,8 +14,7 @@ result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
 # Access pre-extracted duals
 print("Power Balance (Active) Duals:")
-print(result.raw_result.dual_power_balance_p.head())
-
+print(result.dual_power_balance_p.head())
 # Generic extraction for any constraint
 print("\nAll constraints with duals:")
 all_duals = result.raw_result.get_all_duals()
