@@ -162,8 +162,7 @@ result = case.run_opf(backend="matrix_bess", objective="loss")
 | Solver Availability | Common | Requires IPOPT/MINLP |
 
 #### Solver Requirements
-- **IPOPT**: Install via `conda install -c conda-forge ipopt` or `apt-get install coinor-libipopt-dev`
-- **MINLP Solvers**: Install Bonmin or Couenne via `conda install -c conda-forge bonmin couenne`
+- **IPOPT**: Install via `conda install -c conda-forge ipopt`. On Ubuntu, `apt-get install coinor-libipopt-dev` only installs headers and shared libraries; it does not provide the `ipopt` executable that Pyomo's `SolverFactory("ipopt")` expects.
 
 #### Known Limitations
 - The branchflow model type requires a compatible solver (IPOPT or MINLP)
