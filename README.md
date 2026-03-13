@@ -31,6 +31,17 @@ minimization, and generation curtailment minimization, where either generator re
 ```
 pip install distopf
 ```
+
+### Optional Extras
+
+| Extra | Install command | Purpose |
+|-------|----------------|---------|
+| `cim` | `pip install distopf[cim]` | CIM XML file import support (requires pre-release packages `cim-graph` and `gridappsd-python`) |
+
+> **Note:** The `cim` extra depends on pre-release packages. If you do not need CIM file support, a plain
+> `pip install distopf` is sufficient. CIM functionality will raise an informative `ImportError` if those
+> packages are not installed.
+
 ## Developer Installation
 To install the latest version from github:
  
@@ -42,6 +53,10 @@ To install the latest version from github:
 4. From the directory where the DistOPF package is stored, run:
 
 `pip install -e .`
+
+To also install the optional CIM extra in editable mode:
+
+`pip install -e ".[cim]"`
 
 This installs your local DistOPF package the python environment you activated. The `-e` option enables editable 
 mode, which allows you to directly edit the package and see changes immediately reflected in your environment 
@@ -340,6 +355,28 @@ import distopf as opf
 case = opf.create_case(
     data_path="path/to/your_model_directory/model.dss",
 )
+```
+
+# CIM XML Interface
+
+To load a power system model from a CIM XML file, install the optional `cim` extra first:
+
+```
+pip install distopf[cim]
+```
+
+Then pass the path to your `.xml` file:
+
+```python
+import distopf as opf
+case = opf.create_case(data_path="path/to/model.xml")
+```
+
+If the `cim` extra is not installed, calling `create_case` with a `.xml` file will raise:
+
+```
+ImportError: CIM file support requires optional dependencies.
+Install them with: pip install distopf[cim]
 ```
 
 # Citing this tool
