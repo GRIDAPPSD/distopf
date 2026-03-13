@@ -1,6 +1,6 @@
 [project]
 name = "distopf"
-version = "0.3.0"
+version = "0.4.0"
 description = "A package for solving unbalanced three-phase distribution system optimal power flow problems."
 readme = "README.md"
 authors = [
