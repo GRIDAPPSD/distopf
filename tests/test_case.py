@@ -3,7 +3,6 @@ describe/metadata, ignore flags, verbose logging, and backward compatibility."""
 
 import json
 import logging
-import warnings
 
 import numpy as np
 import pytest
@@ -378,58 +377,6 @@ class TestCaseCreationEdgeCases:
         """Case with custom delta_t."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13", delta_t=0.5)
         assert case.delta_t == 0.5
-
-
-# ---------------------------------------------------------------------------
-# DistOPFCase backward compatibility
-# ---------------------------------------------------------------------------
-
-
-class TestDistOPFCaseCompat:
-    """Test DistOPFCase backward compatibility."""
-
-    def test_distopfcase_creation(self):
-        """DistOPFCase should work with deprecation warning."""
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            case = opf.DistOPFCase(data_path=opf.CASES_DIR / "csv" / "ieee13")
-            dep = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep) >= 1
-        assert case.branch_data is not None
-
-    def test_distopfcase_run_pf(self):
-        """DistOPFCase.run_pf() should work."""
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            case = opf.DistOPFCase(data_path=opf.CASES_DIR / "csv" / "ieee13")
-        v, p, q = case.run_pf()
-        assert v is not None
-        assert len(v) > 0
-
-    def test_distopfcase_run(self):
-        """DistOPFCase.run() should work with loss_min."""
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            case = opf.DistOPFCase(
-                data_path=opf.CASES_DIR / "csv" / "ieee13",
-                objective_function="loss_min",
-            )
-        v, p, q, pg, qg = case.run()
-        assert v is not None
-        assert pg is not None
-
-    def test_distopfcase_with_config_params(self):
-        """DistOPFCase should accept config parameters."""
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            case = opf.DistOPFCase(
-                data_path=opf.CASES_DIR / "csv" / "ieee13",
-                v_min=0.9,
-                v_max=1.1,
-                load_mult=1.1,
-            )
-        assert case.v_min == 0.9
-        assert case.load_mult == 1.1
 
 
 # ---------------------------------------------------------------------------

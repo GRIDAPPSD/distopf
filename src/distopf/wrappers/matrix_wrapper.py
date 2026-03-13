@@ -227,7 +227,6 @@ class MatrixWrapper(Wrapper):
             If raw_result=False: PowerFlowResult with all results
             If raw_result=True: Raw scipy OptimizeResult object
         """
-        from distopf.distOPF import create_model, auto_solve
         from distopf.results import PowerFlowResult
 
         # Pop model_type injected by formulation= routing (not a solver kwarg)

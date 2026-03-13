@@ -197,7 +197,7 @@ class LinDistBase(BaseModel):
 
     >>> import distopf as opf
     >>> # Prepare the case data
-    >>> case = opf.DistOPFCase(data_path="ieee123_30der")
+    >>> case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
     >>> # Initialize the LinDistModel
     >>> model = LinDistModel(
     ...     branch_data=case.branch_data,

@@ -15,11 +15,10 @@ distopf/
 ├── api.py               # Case class, create_case(), run_opf(), wrapper registry
 ├── importer.py          # Data import and Case data container
 ├── results.py           # PowerFlowResult dataclass
-├── distOPF.py           # DistOPFCase - high-level API wrapping matrix models
 ├── fbs.py               # Forward-Backward Sweep power flow solver
 ├── wrappers/            # Solver wrappers (dispatch layer)
 │   ├── base.py          # Wrapper base class
-│   ├── matrix_wrapper.py      # Single-step CVXPY/CLARABEL
+│   ├── matrix_wrapper.py      # Single-step CVXPY/CLARABEL + matrix helper funcs
 │   ├── matrix_bess_wrapper.py # Multi-period with batteries
 │   └── pyomo_wrapper.py       # Pyomo (lindist + branchflow model types)
 ├── matrix_models/       # Single-step LinDist* (no batteries)

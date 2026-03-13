@@ -530,7 +530,7 @@ class Case:
         try:
             # Resolve objective alias at entry point (single point of resolution)
             if isinstance(objective, str):
-                from distopf.distOPF import resolve_objective_alias
+                from distopf.wrappers.matrix_wrapper import resolve_objective_alias
 
                 objective = resolve_objective_alias(objective)
 
@@ -648,7 +648,7 @@ class Case:
                 delta_t=self.delta_t,
             )
         else:
-            from distopf.distOPF import create_model
+            from distopf.wrappers.matrix_wrapper import create_model
 
             return create_model(
                 control_variable=control_variable,

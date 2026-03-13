@@ -5,11 +5,11 @@ This example demonstrates how to modify generators using the new Case API.
 It shows loading a case with existing generators, modifying their properties,
 and running optimal power flow.
 
-Note: The old DistOPFCase had add_generator() and add_capacitor() methods
-that are not yet available in the new Case API. For cases without generators,
+Note: Previous APIs had add_generator() and add_capacitor() methods
+that are not available in the Case API. For cases without generators,
 users should either:
 1. Create generator data CSV files for their case
-2. Use DistOPFCase (deprecated but still available)
+2. Create a DataFrame and pass it via create_case(..., gen_data=...)
 3. Directly manipulate the gen_data DataFrame (requires understanding internal format)
 """
 

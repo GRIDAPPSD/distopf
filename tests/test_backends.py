@@ -9,10 +9,8 @@ import pytest
 import pyomo.environ as pyo
 
 import distopf as opf
-from distopf.distOPF import (
+from distopf.wrappers.matrix_wrapper import (
     OBJECTIVE_ALIASES,
-    _get_data_from_path,
-    _handle_path_input,
     auto_solve,
     create_model,
     resolve_objective_alias,
@@ -409,35 +407,25 @@ class TestAutoSolve:
 
 
 # ---------------------------------------------------------------------------
-# Path handling
+# Path handling via create_case
 # ---------------------------------------------------------------------------
 
 
-class TestHandlePathInput:
-    """Test _handle_path_input path resolution."""
+class TestCreateCasePathHandling:
+    """Test path handling through create_case entrypoint."""
 
-    def test_absolute_path_returned(self):
-        """Absolute path should be returned as-is."""
-        p = Path("/some/absolute/path")
-        assert _handle_path_input(p) == p
+    def test_existing_directory_path(self):
+        """An existing case directory path should resolve through create_case."""
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
+        assert case.branch_data is not None
 
-    def test_relative_existing_path(self):
-        """Relative path that exists in CWD should be resolved."""
-        p = _handle_path_input(opf.CASES_DIR / "csv" / "ieee13")
-        assert p.exists()
-
-    def test_cases_dir_shortcut(self):
-        """Paths findable in CASES_DIR/csv/ should resolve."""
-        p = _handle_path_input(Path("ieee13"))
-        assert p.exists()
-
-    def test_get_data_from_path_nonexistent_raises(self):
-        """_get_data_from_path with non-existent path should raise."""
+    def test_nonexistent_path_raises(self):
+        """create_case with non-existent path should raise."""
         with pytest.raises(FileNotFoundError):
-            _get_data_from_path(Path("/nonexistent/path"))
+            opf.create_case(Path("/nonexistent/path"))
 
-    def test_get_data_from_path_file_not_dss_raises(self):
-        """_get_data_from_path with a regular file should raise."""
+    def test_file_not_dss_raises(self):
+        """create_case with non-DSS regular file should raise."""
         with tempfile.NamedTemporaryFile(suffix=".csv") as f:
-            with pytest.raises(ValueError, match="must point to a directory"):
-                _get_data_from_path(Path(f.name))
+            with pytest.raises(ValueError, match="Cannot determine model type"):
+                opf.create_case(Path(f.name))

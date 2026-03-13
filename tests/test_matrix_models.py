@@ -3,7 +3,7 @@
 import pandas as pd
 
 import distopf as opf
-from distopf.distOPF import auto_solve
+from distopf.wrappers.matrix_wrapper import auto_solve
 
 
 class TestMatrixModelResultExtraction:

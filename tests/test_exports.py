@@ -1,7 +1,5 @@
 """Tests for DistOPF public API exports and lazy loading."""
 
-import warnings
-
 import distopf as opf
 
 
@@ -31,19 +29,6 @@ class TestCoreExports:
         assert hasattr(case, "gen_data")
         assert hasattr(case, "bat_data")
         assert hasattr(case, "schedules")
-
-    def test_distopfcase_still_works(self):
-        """Verify DistOPFCase still works (backward compatibility)."""
-        assert hasattr(opf, "DistOPFCase")
-        # Should emit deprecation warning
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            case = opf.DistOPFCase(data_path=opf.CASES_DIR / "csv" / "ieee13")
-            dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep_warnings) == 1
-            assert "deprecated" in str(dep_warnings[0].message).lower()
-        assert case.branch_data is not None
-        assert case.bus_data is not None
 
     def test_fbs_solve_exported(self):
         """fbs_solve should be accessible from main module."""
@@ -219,7 +204,6 @@ class TestAllExports:
         """Test distopf.__all__ contains key exports."""
         assert "Case" in opf.__all__
         assert "create_case" in opf.__all__
-        assert "DistOPFCase" in opf.__all__
         assert "CASES_DIR" in opf.__all__
         assert "fbs_solve" in opf.__all__
         assert "FBS" in opf.__all__

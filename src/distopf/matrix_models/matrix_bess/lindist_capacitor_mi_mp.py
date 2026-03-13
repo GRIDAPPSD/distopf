@@ -61,7 +61,7 @@ class LinDistModelCapMI_MP(LinDistBaseMP):
     Examples
     --------
     >>> import distopf as opf
-    >>> case = opf.DistOPFCase(data_path="ieee123_caps")
+    >>> case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_caps")
     >>> model = LinDistModelCapMI_MP(
     ...     branch_data=case.branch_data,
     ...     bus_data=case.bus_data,
