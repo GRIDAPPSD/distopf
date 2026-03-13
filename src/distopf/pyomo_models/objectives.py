@@ -9,6 +9,11 @@ sqrt2 = sqrt(2)
 # ======================================================================================
 
 
+def none_rule(model: LindistModelProtocol):
+    """Trivial objective function that returns 0."""
+    return 0
+
+
 def loss_objective_rule(model: LindistModelProtocol):
     """
     Calculate total system losses using the resistance parameters.

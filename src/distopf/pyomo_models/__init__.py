@@ -69,6 +69,7 @@ from distopf.pyomo_models.results import PyoResult, get_values, get_voltages
 
 # Objectives
 from distopf.pyomo_models.objectives import (
+    none_rule,
     loss_objective,
     loss_objective_rule,
     create_penalized_objective,
@@ -115,6 +116,7 @@ __all__ = [
     "get_values",
     "get_voltages",
     # Objectives
+    "none_rule",
     "loss_objective",
     "loss_objective_rule",
     "create_penalized_objective",

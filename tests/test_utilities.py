@@ -76,6 +76,37 @@ class TestUtilityFunctions:
         assert "control_variable" in result.columns
         assert "gen_shape" in result.columns
 
+    def test_handle_gen_input_fills_empty_control_variable_cells(self):
+        """handle_gen_input should normalize NaN control_variable values to empty strings."""
+        gen = pd.DataFrame(
+            {
+                "id": [1],
+                "name": ["gen1"],
+                "pa": [0.1],
+                "pb": [0.1],
+                "pc": [0.1],
+                "qa": [0.0],
+                "qb": [0.0],
+                "qc": [0.0],
+                "sa_max": [0.5],
+                "sb_max": [0.5],
+                "sc_max": [0.5],
+                "phases": ["abc"],
+                "qa_max": [0.5],
+                "qb_max": [0.5],
+                "qc_max": [0.5],
+                "qa_min": [-0.5],
+                "qb_min": [-0.5],
+                "qc_min": [-0.5],
+                "control_variable": [float("nan")],
+            }
+        )
+
+        with warnings.catch_warnings(record=True):
+            result = handle_gen_input(gen)
+
+        assert result.loc[0, "control_variable"] == ""
+
     def test_handle_cap_input_none(self):
         """handle_cap_input(None) returns empty DataFrame."""
         result = handle_cap_input(None)

@@ -148,6 +148,17 @@ class TestCaseValidatorDetailed:
         assert is_valid
         assert len(errors) == 0
 
+    def test_nan_generator_control_variable_is_treated_as_empty(self):
+        """NaN control_variable values from CSV parsing should not fail validation."""
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
+        case.gen_data.loc[:, "control_variable"] = float("nan")
+
+        validator = CaseValidator(case)
+        is_valid, errors, warns = validator.validate_all()
+
+        assert is_valid
+        assert not any("invalid control_variable" in error for error in errors)
+
 
 # ---------------------------------------------------------------------------
 # Case methods (run_pf, run_fbs, run_opf, to_model, copy, etc.)

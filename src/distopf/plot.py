@@ -964,6 +964,10 @@ def plot_network(
         if "fb" not in _s.columns:
             _s["fb"] = _s["tb"].map(from_bus_map)
         _s = _choose_t(_s, t)
+    if p_gen is not None and p_gen.shape[0] == 0:
+        p_gen = None
+    if q_gen is not None and q_gen.shape[0] == 0:
+        q_gen = None
     if p_gen is not None:
         p_gen = _choose_t(p_gen, t)
     if q_gen is not None:
@@ -1090,17 +1094,36 @@ def _process_branch_data(branch_data, bus_data, _s, phase_list, edge_scale, edge
 
 
 def _process_gen_data(gen_data, p_gen, q_gen):
+    """Merge generator setpoints from result frames into gen_data.
+
+    Supports both legacy wide format (columns a/b/c) and the newer normalized
+    format that includes a time column ``t``.
+    """
+
     gen_data.index = gen_data.id.to_numpy() - 1
+
+    def _latest_abc(df):
+        if df is None:
+            return None
+        # If time-series, take the last time step for plotting
+        if "t" in df.columns:
+            df = df.sort_values(["id", "t"]).groupby("id", as_index=False).tail(1)
+        df.index = df.id.to_numpy() - 1
+        return df
+
+    p_gen = _latest_abc(p_gen)
+    q_gen = _latest_abc(q_gen)
+
     if p_gen is not None:
-        p_gen.index = p_gen.id.to_numpy() - 1
-        gen_data.pa = p_gen.a
-        gen_data.pb = p_gen.b
-        gen_data.pc = p_gen.c
+        gen_data["pa"] = p_gen["a"].to_numpy()
+        gen_data["pb"] = p_gen["b"].to_numpy()
+        gen_data["pc"] = p_gen["c"].to_numpy()
+
     if q_gen is not None:
-        q_gen.index = q_gen.id.to_numpy() - 1
-        gen_data.qa = q_gen.a
-        gen_data.qb = q_gen.b
-        gen_data.qc = q_gen.c
+        gen_data["qa"] = q_gen["a"].to_numpy()
+        gen_data["qb"] = q_gen["b"].to_numpy()
+        gen_data["qc"] = q_gen["c"].to_numpy()
+
     return gen_data
 
 
@@ -1155,8 +1178,8 @@ def _make_edge_traces(branch_data, show_phases, show_reactive_power):
             and show_phases.lower() not in edge.phases.lower()
         ):
             dash = "dot"
-        if edge.type == "switch":
-            dash = "dash"
+        # if edge.type == "switch":
+        #     dash = "dash"
         color = "darkblue"
         if direction < 0:
             color = "maroon"

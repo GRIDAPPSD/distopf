@@ -356,6 +356,7 @@ class PyomoWrapper(Wrapper):
     def _resolve_objective(self, objective: Any) -> Any:
         """Resolve objective string to Pyomo objective function."""
         from distopf.pyomo_models.objectives import (
+            none_rule,
             loss_objective_rule,
             substation_power_objective_rule,
             voltage_deviation_objective_rule,
@@ -363,7 +364,7 @@ class PyomoWrapper(Wrapper):
         )
 
         if objective is None:
-            return loss_objective_rule
+            return none_rule
 
         if callable(objective):
             return objective

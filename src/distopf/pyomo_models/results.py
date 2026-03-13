@@ -68,8 +68,7 @@ class PyoResult:
             "power_balance_p",
             "power_balance_q",
             "voltage_drop",
-            "voltage_limits_lower",
-            "voltage_limits_upper",
+            "voltage_limits",
         ]
 
         for constraint_name in common_constraints:

@@ -296,7 +296,7 @@ class PowerFlowResult:
         from distopf.plot import plot_network
 
         return plot_network(
-            self.model,
+            self.case,
             v=self.voltages,
             p_flow=self.active_power_flows,
             q_flow=self.reactive_power_flows,

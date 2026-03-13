@@ -854,6 +854,7 @@ class FBS:
             converged=self.converged,
             solver="fbs",
             result_type="fbs",  # FBS - iteration returns 6 values
+            model=self,  # for plotting helpers expecting result.model
             case=self.case,
         )
         return results

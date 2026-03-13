@@ -51,6 +51,8 @@ def handle_gen_input(gen_data: Optional[pd.DataFrame]) -> pd.DataFrame:
         )
     if "control_variable" not in gen_data.columns:
         gen_data["control_variable"] = ""
+    else:
+        gen_data["control_variable"] = gen_data["control_variable"].fillna("")
     if "gen_shape" not in gen_data.columns:
         gen_data["gen_shape"] = "PV"
         warnings.warn(

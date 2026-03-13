@@ -4,8 +4,8 @@ This module centralizes all Case validation logic in one place,
 making it easier to maintain, test, and extend validation rules.
 """
 
+import pandas as pd
 from typing import List, Tuple
-from numpy import nan
 
 
 class CaseValidator:
@@ -80,11 +80,15 @@ class CaseValidator:
         if self.case.gen_data is not None and len(self.case.gen_data) > 0:
             valid_cv = {"", "P", "Q", "PQ"}
             for _, row in self.case.gen_data.iterrows():
-                cv = str(row.get("control_variable", "")).upper()
+                raw_cv = row.get("control_variable", "")
+                if pd.isna(raw_cv):
+                    cv = ""
+                else:
+                    cv = str(raw_cv).strip().upper()
                 if cv not in valid_cv:
                     self.errors.append(
                         f"Generator {row['name']}: invalid control_variable "
-                        f"'{row.get('control_variable', '')}'. Must be one of: {valid_cv}"
+                        f"'{raw_cv}'. Must be one of: {valid_cv}"
                     )
 
         # Phase consistency validation (warnings only)
