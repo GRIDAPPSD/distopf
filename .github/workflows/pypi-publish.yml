@@ -8,6 +8,9 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
