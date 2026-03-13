@@ -763,13 +763,11 @@ wheels = [
 
 [[package]]
 name = "distopf"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "altdss", extra = ["all"] },
-    { name = "cim-graph" },
     { name = "cvxpy" },
-    { name = "gridappsd-python" },
     { name = "highspy" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "networkx", version = "3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -782,6 +780,12 @@ dependencies = [
     { name = "pyscipopt" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.16.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+
+[package.optional-dependencies]
+cim = [
+    { name = "cim-graph" },
+    { name = "gridappsd-python" },
 ]
 
 [package.dev-dependencies]
@@ -805,9 +809,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "altdss", extras = ["all"], specifier = ">=0.2.4" },
-    { name = "cim-graph", specifier = "==0.4.1a2" },
+    { name = "cim-graph", marker = "extra == 'cim'", specifier = "==0.4.1a2" },
     { name = "cvxpy", specifier = ">=1.7.2" },
-    { name = "gridappsd-python", specifier = "==2025.3.2a13" },
+    { name = "gridappsd-python", marker = "extra == 'cim'", specifier = "==2025.3.2a13" },
     { name = "highspy", specifier = ">=1.13.0" },
     { name = "networkx", specifier = ">=3.4.2" },
     { name = "numpy", specifier = ">=2.2.6" },
@@ -818,6 +822,7 @@ requires-dist = [
     { name = "pyscipopt", specifier = ">=6.0.0" },
     { name = "scipy", specifier = ">=1.15.3" },
 ]
+provides-extras = ["cim"]
 
 [package.metadata.requires-dev]
 dev = [

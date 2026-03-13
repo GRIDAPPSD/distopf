@@ -1403,7 +1403,13 @@ def create_case_from_cim(
     try:
         # Lazy import to avoid loading cimgraph at module load time
         from distopf.cim_importer import CIMToCSVConverter
+    except ImportError as e:
+        raise ImportError(
+            "CIM file support requires optional dependencies. "
+            "Install them with: pip install distopf[cim]"
+        ) from e
 
+    try:
         cim_parser = CIMToCSVConverter(data_path)
         data = cim_parser.convert()
 
