@@ -10,8 +10,6 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "cim-graph==0.4.1a2",
-    "gridappsd-python==2025.3.2a13",
     "cvxpy>=1.7.2",
     "networkx>=3.4.2",
     "numpy>=2.2.6",
@@ -23,6 +21,12 @@ dependencies = [
     "altdss[all]>=0.2.4",
     "pyscipopt>=6.0.0",
     "highspy>=1.13.0",
+]
+
+[project.optional-dependencies]
+cim = [
+    "cim-graph==0.4.1a2",
+    "gridappsd-python==2025.3.2a13",
 ]
 
 [build-system]
