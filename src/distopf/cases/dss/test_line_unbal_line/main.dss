@@ -1,0 +1,24 @@
+Clear 
+
+new circuit.test_line
+~ basekv=4.16 pu=1.000 phases=3 bus1=1  
+
+New linecode.mtx601 nphases=3 BaseFreq=60 
+~ rmatrix = (0.3465 | 0.1560 0.3375 | 0.1580 0.1535 0.3414 ) 
+~ xmatrix = (1.0179 | 0.5017 1.0478 | 0.4236 0.3849 1.0348 ) 
+~ units=mi 
+
+!LINE DEFINITIONS 
+New Line.12    Phases=3 Bus1=1.1.2.3   Bus2=2.1.2.3  LineCode=mtx601 Length=2000 units=ft 
+New Line.23    Phases=3 Bus1=2.1.2.3   Bus2=3.1.2.3  LineCode=mtx601 Length=2000 units=ft 
+
+!LOAD DEFINITIONS
+New Load.3a Bus1=3.1     Phases=1 Conn=Wye  Model=1 kV=2.40177  kW=1000   kvar=500 
+New Load.3b Bus1=3.2     Phases=1 Conn=Wye  Model=1 kV=2.40177  kW=1000   kvar=500 
+New Load.3c Bus1=3.3     Phases=1 Conn=Wye  Model=1 kV=2.40177  kW=1000   kvar=500 
+
+Set Voltagebases=[4.16]
+Set LoadMult=1.0
+calcv
+Solve
+

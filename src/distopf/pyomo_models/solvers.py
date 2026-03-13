@@ -1,19 +1,21 @@
 from distopf.pyomo_models.protocol import LindistModelProtocol
-from distopf.pyomo_models.results import OpfResult
+from distopf.pyomo_models.results import PyoResult
 import pyomo.environ as pyo
-from time import perf_counter
 
 
-def solve(model: LindistModelProtocol) -> OpfResult:
-    # t0 = perf_counter()
+def solve(model: LindistModelProtocol, solver="ipopt", duals=True) -> PyoResult:
+    if solver is None:
+        solver = "ipopt"
+    if duals:
+        model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
     # Solve the model
-    results = pyo.SolverFactory("ipopt").solve(model)
-    # t1 = perf_counter()
-    # Extract and display results
+    results = pyo.SolverFactory(solver).solve(model)
+
     if results.solver.status == pyo.SolverStatus.ok:
         print("Optimization successful!")
-        print(f"Objective value: {pyo.value(model.objective)}")
-        res = OpfResult(model)
+        obj_value = pyo.value(model.objective)
+        print(f"Objective value: {obj_value}")
+        res = PyoResult(model, objective_value=obj_value, extract_duals=duals)
 
     else:
         raise ValueError(results.solver.status)

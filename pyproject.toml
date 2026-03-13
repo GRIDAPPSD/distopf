@@ -1,6 +1,6 @@
 [project]
 name = "distopf"
-version = "0.3.0"
+version = "0.4.0"
 description = "A package for solving unbalanced three-phase distribution system optimal power flow problems."
 readme = "README.md"
 authors = [
@@ -11,15 +11,18 @@ authors = [
 requires-python = ">=3.10"
 dependencies = [
     "cim-graph==0.4.1a2",
-    "gridappsd-python>=2025.3.2a1,<2026.0.0",
+    "gridappsd-python==2025.3.2a13",
     "cvxpy>=1.7.2",
     "networkx>=3.4.2",
     "numpy>=2.2.6",
-    "opendssdirect-py==0.8.4",
+    "opendssdirect-py>=0.9.4",
     "plotly>=6.3.0",
     "scipy>=1.15.3",
     "pyomo>=6.9.4",
     "pandas>=2.3.3",
+    "altdss[all]>=0.2.4",
+    "pyscipopt>=6.0.0",
+    "highspy>=1.13.0",
 ]
 
 [build-system]

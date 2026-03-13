@@ -1,7 +1,7 @@
 __pycache__/*
 *.pyc
 build/*
-.mypy_cache/*
+**/.mypy_cache/
 .idea/*
 *.zip
 *.ipynb
@@ -9,3 +9,8 @@ build/*
 .python-version
 */__marimo__/*
 examples/layouts/*
+.zed/debug.json
+.zed/tasks.json
+/.vscode/
+*.code-workspace
+scratch/*

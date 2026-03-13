@@ -53,23 +53,122 @@ without reinstalling.
 ### Unconstrained Power Flow
 ```python
 import distopf as opf
-case = opf.DistOPFCase(data_path="ieee123")
-case.run_pf()  # run an unconstrained power flow
-case.plot_network().show(renderer="browser")
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
+result = case.run_pf()
+result.plot_network().show(renderer="browser")
 ```
 ### DER Curtailment Minimization
 ```python
 import distopf as opf
-case = opf.DistOPFCase(
-    data_path="ieee123_30der",  
-    control_variable="P",  # Control DER active power injection
-    objective_function="curtail_min",  # DER Curtailment Minimization
-    v_max=1.05, v_min=0.95, 
-    gen_mult=10  # multiply generator output by 10
-)
-case.run()
-case.plot_network().show(renderer="browser")
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
+result = case.run_opf(objective="curtail_min", control_variable="P", v_max=1.05, v_min=0.95, gen_mult=10)
+result.plot_network().show(renderer="browser")
 ```
+
+## Optimization Wrappers
+
+DistOPF supports multiple optimization wrappers for solving OPF problems:
+
+### Pyomo Wrapper — LinDistFlow (default)
+The default Pyomo wrapper uses the LinDistFlow model (`model_type="lindist"`).
+- **Model**: Linear approximation of power flow equations
+- **Solver**: Pyomo with linear solvers
+- **Speed**: Fast, suitable for real-time applications
+- **Accuracy**: Good for systems with small voltage deviations
+
+```python
+import distopf as opf
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
+result = case.run_opf(wrapper="pyomo", objective="loss")  # model_type="lindist" is the default
+```
+
+### Pyomo Wrapper — BranchFlow
+The BranchFlow model type uses nonlinear power flow equations with IPOPT or MINLP solvers for higher accuracy.
+Use `model_type="branchflow"`.
+- **Model**: Nonlinear power flow equations (exact)
+- **Solver**: IPOPT (continuous) or MINLP using Gurobi if installed (discrete controls)
+- **Speed**: Slower than linear, but more accurate
+- **Accuracy**: Nonlinear power flow representation
+
+#### Continuous Optimization (IPOPT)
+For continuous optimization without discrete controls:
+
+```python
+import distopf as opf
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
+result = case.run_opf(
+    model_type="branchflow",
+    objective="loss",
+    solver="ipopt",
+)
+```
+
+#### Discrete Controls (MINLP)
+Enable regulator tap optimization and capacitor switching with MINLP solvers:
+
+```python
+import distopf as opf
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
+result = case.run_opf(
+    wrapper="pyomo",
+    model_type="branchflow",
+    objective="loss",
+    control_regulators=True,      # Enable regulator tap control
+    control_capacitors=True,       # Enable capacitor switching
+    initialize="fbs",              # Recommended for discrete controls
+    solver="gurobi",               # MINLP compatible solver 
+)
+```
+
+### Matrix BESS Wrapper (Multi-Period with Batteries)
+The `matrix_bess` wrapper supports multi-period (time-series) optimization with battery energy storage.
+The shorthand `wrapper="matrix_bess"` also works as an alias.
+
+```python
+import distopf as opf
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der_batt")
+result = case.run_opf(wrapper="matrix_bess", objective="loss")
+```
+
+#### Wrapper Comparison
+| Feature | Matrix/Matrix BESS | Pyomo  |
+|---------|---|---|
+| Model Type | LinDistFlow (linear) | LinDistFlow or Non-Linear BranchFlow |
+| Formulation | Matrix-based | Algebraic equations |
+| Solver API | Scipy or CVXPY | Pyomo |
+| Prefered Solver | HiGHs or Clarabel | IPOPT, Gurobi, Knitro |
+
+#### Solver Requirements
+- **IPOPT**: Install via `conda install -c conda-forge ipopt`. On Ubuntu, `apt-get install coinor-libipopt-dev` only installs headers and shared libraries; it does not provide the `ipopt` executable that Pyomo's `SolverFactory("ipopt")` expects.
+
+
+### Result Fields
+
+`PowerFlowResult` uses descriptive field names. Short aliases are also accepted for backward compatibility.
+
+| Field Name | Alias |
+|---|---|
+| `active_power_flows` | `p_flows` |
+| `reactive_power_flows` | `q_flows` |
+| `active_power_generation` | `p_gens` |
+| `reactive_power_generation` | `q_gens` |
+| `active_power_loads` | `p_loads` |
+| `reactive_power_loads` | `q_loads` |
+| `capacitor_reactive_power` | `q_caps` |
+| `battery_active_power` | `p_bats` |
+| `voltage_magnitudes` | `voltages` |
+
+#### Dual Variables
+When running with `duals=True`, dual variables are accessible on the result object:
+
+```python
+result = case.run_opf(wrapper="pyomo", objective="loss", duals=True)
+result.dual_power_balance_p
+result.dual_power_balance_q
+result.dual_voltage_drop
+result.dual_voltage_limits
+```
+
 ## Using a custom model.
 Create CSVs formatted as shown below and store them in a single folder. The csv names must match exactly as shown. 
 Column order is not important. 
@@ -80,10 +179,11 @@ Column order is not important.
    -gen_data.csv
    -cap_data.csv
    -reg_data.csv
+   -bat_data.csv
 ```
 ```python
 import distopf as opf
-case = opf.DistOPFCase(
+case = opf.create_case(
     data_path="path/to/your_model_directory",
 )
 ```
@@ -97,12 +197,16 @@ bus_data = pd.read_csv("path/to/your_model_directory/bus_data.csv", header=0)
 gen_data = pd.read_csv("path/to/your_model_directory/gen_data.csv", header=0)
 cap_data = pd.read_csv("path/to/your_model_directory/cap_data.csv", header=0)
 reg_data = pd.read_csv("path/to/your_model_directory/reg_data.csv", header=0)
-case = opf.DistOPFCase(
+bat_data = pd.read_csv("path/to/your_model_directory/bat_data.csv", header=0)
+schedules = pd.read_csv("path/to/your_model_directory/schedules.csv", header=0)  # Optional for multi-period cases
+case = opf.Case(
     branch_data=branch_data,
     bus_data=bus_data,
     gen_data=gen_data,
     cap_data=cap_data,
-    reg_data=reg_data
+    reg_data=reg_data,
+    bat_data=bat_data,
+    schedules=schedules
 )
 
 ```
@@ -160,9 +264,9 @@ case = opf.DistOPFCase(
 - name: regulator name 
 - tap_a, tap_b, tap_c: tap position (p.u.) -16 to +16; 0 is no tap change
 
-## DistOPFCase Options
+## Case Options
 ```
-    Use this class to create a distOPF case, run it, and save and plot results.
+    Use `Case` or `create_case()` to create and run a case. Call `run_pf()` or `run_opf()` to obtain a `PowerFlowResult`.
     Parameters
     ----------
     config: str or dict
@@ -233,10 +337,36 @@ You may also run using an OpenDSS model file as input.
 
 ```python
 import distopf as opf
-case = opf.DistOPFCase(
+case = opf.create_case(
     data_path="path/to/your_model_directory/model.dss",
 )
 ```
 
 # Citing this tool
-Paper coming soon.
+
+Gray, Nathan T., Dubey, Anamika, Reiman, Andrew P., "DistOPF: Advanced Solutions for Distribution Optimal Power Flow Analysis - DistOPF v0.2 Documentation," (2025), https://doi.org/10.2172/2999990 
+```
+@techreport{osti_2999990,
+  author       = {Gray, Nathan T. and Dubey, Anamika and Reiman, Andrew P. and Sadnan, Rabayet},
+  title        = {DistOPF: Advanced Solutions for Distribution Optimal Power Flow Analysis - DistOPF v0.2 Documentation},
+  institution  = {Pacific Northwest National Laboratory (PNNL), Richland, WA (United States)},
+  doi          = {10.2172/2999990},
+  url          = {https://www.osti.gov/biblio/2999990},
+  place        = {United States},
+  year         = {2025},
+  month        = {03}}
+
+
+```
+R. Sadnan, N. Gray, A. Bose, A. Dubey and K. P. Schneider, "Scaling Distributed Optimal Renewable Energy Coordination in Unbalanced Distribution Systems," in IEEE Transactions on Sustainable Energy, vol. 17, no. 1, pp. 3-15, Jan. 2026, doi: 10.1109/TSTE.2024.3492976.
+```
+@ARTICLE{10745555,
+  author={Sadnan, Rabayet and Gray, Nathan and Bose, Anjan and Dubey, Anamika and Schneider, Kevin P.},
+  journal={IEEE Transactions on Sustainable Energy}, 
+  title={Scaling Distributed Optimal Renewable Energy Coordination in Unbalanced Distribution Systems}, 
+  year={2026},
+  volume={17},
+  number={1},
+  pages={3-15},
+  doi={10.1109/TSTE.2024.3492976}}
+```

@@ -7,9 +7,22 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from distopf.matrix_models.base import LinDistBase
-from distopf.importer import Case
+from distopf.api import Case
+
+
+def _get_id_name_cols(df: pd.DataFrame) -> tuple[str, str]:
+    """Return the (id_col, name_col) pair present in df.
+
+    Supports both bus-indexed DataFrames (id, name) and
+    branch-indexed DataFrames (tb, to_name).
+    """
+    if "tb" in df.columns:
+        return "tb", "to_name" if "to_name" in df.columns else "tb"
+    return "id", "name"
+
 
 def _choose_t(df, t=None):
     df = df.copy()
@@ -78,12 +91,13 @@ def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
         v2["id"] = v2.index
     if "name" not in v2.columns:
         v2["name"] = v2["id"]
-
+    t1 = t2 = t
     if t is None and "t" in v1.columns:
         t1 = min(v1.t)
     if t is None and "t" in v2.columns:
         t2 = min(v2.t)
-    assert t1 == t2
+    if "t" in v1.columns and "t" in v2.columns:
+        assert t1 == t2
     if "t" in v1.columns:
         v1 = pd.DataFrame(v1.loc[v1.t == t1, :])
         v1 = v1.drop("t", axis=1)
@@ -165,18 +179,20 @@ def voltage_differences(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure
     return fig
 
 
-def plot_power_flows(s: pd.DataFrame) -> go.Figure:
+def plot_power_flows(s: pd.DataFrame, t=None) -> go.Figure:
     """
     Plot the active and reactive power flowing into each bus on each phase.
     Parameters
     ----------
     s : pd.DataFrame
+    t : int or None
+        Time step to plot. Defaults to 0 when a ``t`` column is present.
 
     Returns
     -------
     fig : Plotly figure object
     """
-    s = s.copy()
+    s = _choose_t(s, t)
     s = s.melt(
         ignore_index=True,
         id_vars=["fb", "tb", "from_name", "to_name"],
@@ -306,38 +322,42 @@ def plot_pq(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
         q = pd.DataFrame(q.loc[q.t == t2, :])
         q = q.drop("t", axis=1)
 
+    id_col, name_col = _get_id_name_cols(p)
+    keep = [id_col, name_col] + [c for c in ("a", "b", "c") if c in p.columns]
+    p = p[keep]
+    q = q[[id_col, name_col] + [c for c in ("a", "b", "c") if c in q.columns]]
     p = p.melt(
         ignore_index=True,
-        id_vars=["id", "name"],
+        id_vars=[id_col, name_col],
         var_name="phase",
         value_name="P",
     )
     q = q.melt(
         ignore_index=True,
-        id_vars=["id", "name"],
+        id_vars=[id_col, name_col],
         var_name="phase",
         value_name="Q",
     )
-    pq = pd.merge(p, q, how="outer", on=["id", "name", "phase"])
-    pq.id = p.id
-    pq.name = p.name
+    pq = pd.merge(p, q, how="outer", on=[id_col, name_col, "phase"])
+    pq[id_col] = p[id_col]
+    pq[name_col] = p[name_col]
     pq.phase = p.phase
     pq["P"] = p["P"]
     pq["Q"] = q["Q"]
     pq = pq.melt(
         ignore_index=False,
-        id_vars=["id", "name", "phase"],
+        id_vars=[id_col, name_col, "phase"],
         var_name="part",
         value_name="power",
     )
     fig = px.bar(
         pq,
-        x="name",
+        x=name_col,
         y="power",
         facet_col="phase",
         facet_row="part",
         color="phase",
-        labels={"name": "Bus Name"},
+        labels={name_col: "Bus Name"},
     )
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
     fig.update_layout(
@@ -468,25 +488,29 @@ def plot_polar(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
         q = pd.DataFrame(q.loc[q.t == t2, :])
         q = q.drop("t", axis=1)
 
+    id_col, name_col = _get_id_name_cols(p)
+    keep = [id_col, name_col] + [c for c in ("a", "b", "c") if c in p.columns]
+    p = p[keep]
+    q = q[[id_col, name_col] + [c for c in ("a", "b", "c") if c in q.columns]]
     p = p.melt(
         ignore_index=True,
-        id_vars=["id", "name"],
+        id_vars=[id_col, name_col],
         var_name="phase",
         value_name="value",
     )
     q = q.melt(
         ignore_index=True,
-        id_vars=["id", "name"],
+        id_vars=[id_col, name_col],
         var_name="phase",
         value_name="value",
     )
-    pq = pd.merge(p, q, how="outer", on=["id", "name", "phase"])
-    pq.id = p.id
-    pq.name = p.name
+    pq = pd.merge(p, q, how="outer", on=[id_col, name_col, "phase"])
+    pq[id_col] = p[id_col]
+    pq[name_col] = p[name_col]
     pq.phase = p.phase
     pq["p"] = p.value
     pq["q"] = q.value
-    pq["s"] = pq.p + 1j * pq.q
+    pq["s"] = pq.p.astype(float) + 1j * pq.q.astype(float)
     pq["r"] = np.abs(pq.s)
     pq["th"] = np.angle(pq.s, deg=True)
     fig = px.scatter_polar(
@@ -497,7 +521,7 @@ def plot_polar(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
         # range_theta=[-90, 90],
         start_angle=0,
         direction="counterclockwise",
-        hover_data="name",
+        hover_data=name_col,
     )
     return fig
 
@@ -533,6 +557,354 @@ def plot_batteries(p: pd.DataFrame, soc: pd.DataFrame) -> go.Figure:
         yaxis=dict(matches=None),  # Make bottom y-axis independent
         yaxis2=dict(matches=None),  # Make top y-axis independent
     )
+
+    return fig
+
+
+def calculate_nodal_distances(case):
+    """
+    Calculate the distance (number of hops) from each bus to the source (swing) bus.
+
+    Parameters
+    ----------
+    case : Case
+        Case object containing network data
+
+    Returns
+    -------
+    dict
+        Dictionary mapping bus id to distance from source bus
+    """
+    from collections import deque
+
+    # Find swing bus
+    swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
+    source_bus = swing_buses.at[swing_buses.index[0], "id"]
+
+    # Build adjacency list
+    adjacency = {}
+    for idx, branch in case.branch_data.iterrows():
+        fb = int(branch["fb"])
+        tb = int(branch["tb"])
+
+        if fb not in adjacency:
+            adjacency[fb] = []
+        if tb not in adjacency:
+            adjacency[tb] = []
+
+        adjacency[fb].append(tb)
+        adjacency[tb].append(fb)
+
+    # BFS to find distances from source bus
+    distances = {source_bus: 0}
+    queue = deque([source_bus])
+
+    while queue:
+        node = queue.popleft()
+        for neighbor in adjacency.get(node, []):
+            if neighbor not in distances:
+                distances[neighbor] = distances[node] + 1
+                queue.append(neighbor)
+
+    return distances
+
+
+def plot_voltage_vs_distance(
+    case,
+    v_data,
+    title="Voltage vs Distance from Source",
+    color_by="algorithm",
+):
+    """
+    Plot voltage on y-axis vs nodal distance from source bus on x-axis.
+    Lines follow the actual network topology (from-bus to to-bus connections).
+
+    Parameters
+    ----------
+    case : Case
+        Case object to calculate distances and branch data
+    v_data : pd.DataFrame
+        Voltage dataframe with columns: id, name, algorithm, phase, value
+    title : str
+        Plot title
+    color_by : str
+        Column name to use for color grouping (e.g., "algorithm")
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        The plotly figure
+    """
+
+    distances = calculate_nodal_distances(case)
+
+    # Add distance column to voltage data
+    v_data_copy = v_data.copy()
+    v_data_copy["distance"] = v_data_copy["id"].map(distances)
+
+    # Create subplots for each phase
+    phases = ["a", "b", "c"]
+
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[f"Phase {p.upper()}" for p in phases],
+        shared_yaxes=True,
+    )
+
+    # Get unique values for color_by column and assign colors automatically
+    color_groups = v_data_copy[color_by].unique()
+    colors = px.colors.qualitative.Plotly
+    if len(color_groups) > len(colors):
+        colors = px.colors.qualitative.Alphabet
+    color_map = {group: colors[i % len(colors)] for i, group in enumerate(color_groups)}
+
+    # Track which groups have been added to legend to avoid duplicates
+    legend_added = set()
+
+    # For each phase, group, and branch, draw a line following the network topology
+    for col_idx, phase in enumerate(phases, 1):
+        for group in color_groups:
+            # Get voltage data for this group and phase
+            v_group = v_data_copy[
+                (v_data_copy[color_by] == group) & (v_data_copy["phase"] == phase)
+            ].copy()
+
+            # Create a mapping of bus id to voltage, name, distance
+            v_map = dict(zip(v_group["id"], v_group["value"]))
+            d_map = dict(zip(v_group["id"], v_group["distance"]))
+            name_map = dict(zip(v_group["id"], v_group["name"]))
+
+            # For each branch, draw a line segment following the topology
+            for idx, branch in case.branch_data.iterrows():
+                fb = int(branch["fb"])
+                tb = int(branch["tb"])
+
+                if fb in v_map and tb in v_map:
+                    # Create hover text for both endpoints
+                    hover_text = [
+                        f"<b>{name_map[fb]}</b><br>ID: {fb}<br>Voltage: {v_map[fb]:.4f} pu<br><b>{color_by}:</b> {group}",
+                        f"<b>{name_map[tb]}</b><br>ID: {tb}<br>Voltage: {v_map[tb]:.4f} pu<br><b>{color_by}:</b> {group}",
+                    ]
+
+                    # Determine if this group should show in legend
+                    show_legend = group not in legend_added
+                    if show_legend:
+                        legend_added.add(group)
+
+                    # Draw line from from-bus to to-bus
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[d_map[fb], d_map[tb]],
+                            y=[v_map[fb], v_map[tb]],
+                            mode="lines+markers",
+                            name=str(group),
+                            line=dict(color=color_map[group], width=1),
+                            legendgroup=str(group),
+                            showlegend=show_legend,
+                            marker=dict(size=4, color=color_map[group]),
+                            hovertext=hover_text,
+                            hoverinfo="text",
+                        ),
+                        row=1,
+                        col=col_idx,
+                    )
+
+    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=1)
+    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=2)
+    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=3)
+    fig.update_yaxes(title_text="Voltage (pu)", row=1, col=1)
+    fig.update_layout(title_text=title, hovermode="closest")
+
+    return fig
+
+
+def plot_line_flow_vs_distance(
+    case,
+    flow_data,
+    flow_name="Power Flow",
+    title="Line Flow vs Distance from Source",
+    color_by="algorithm",
+):
+    """
+    Plot line flow on y-axis vs nodal distance from source bus on x-axis.
+    Each point represents the flow into the to-bus, plotted at the to-bus distance.
+    Lines connect from-bus to to-bus following network topology.
+    Hover text shows from-bus and to-bus information.
+    Parameters
+    ----------
+    case : Case
+        Case object to calculate distances and branch data
+    flow_data : pd.DataFrame
+        Line flow dataframe with columns: fb, from_name, tb, to_name, algorithm, phase, value
+    flow_name : str
+        Name of the flow type for hover text (e.g., "Active Power", "Reactive Power")
+    title : str
+        Plot title
+    color_by : str
+        Column name to use for color grouping (e.g., "algorithm", "phase", or any other column)
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        The plotly figure
+    """
+
+    distances = calculate_nodal_distances(case)
+
+    # Add distance columns for both buses
+    flow_data_copy = flow_data.copy()
+    flow_data_copy["from_distance"] = flow_data_copy["fb"].astype(int).map(distances)
+    flow_data_copy["to_distance"] = flow_data_copy["tb"].astype(int).map(distances)
+
+    # Create subplots for each phase
+    phases = ["a", "b", "c"]
+
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[f"Phase {p.upper()}" for p in phases],
+        shared_yaxes=True,
+    )
+
+    # Get unique values for color_by column and assign colors automatically
+    color_groups = flow_data_copy[color_by].unique()
+    colors = px.colors.qualitative.Plotly  # Default plotly color sequence
+    if len(color_groups) > len(colors):
+        # Use a larger color palette if needed
+        colors = px.colors.qualitative.Alphabet
+    color_map = {group: colors[i % len(colors)] for i, group in enumerate(color_groups)}
+
+    # Track which groups have been added to legend to avoid duplicates
+    legend_added = set()
+
+    # For each phase, color group, and branch, draw a line following the network topology
+    for col_idx, phase in enumerate(phases, 1):
+        for group in color_groups:
+            # Get flow data for this group and phase
+            flow_group = flow_data_copy[
+                (flow_data_copy[color_by] == group) & (flow_data_copy["phase"] == phase)
+            ].copy()
+
+            if len(flow_group) == 0:
+                continue
+
+            # Create mappings from branch (fb, tb) to flow data
+            branch_flow = {}  # (fb, tb) -> flow value for that branch
+            dist_map = {}  # bus_id -> distance
+            name_map = {}  # bus_id -> name
+
+            for idx, row in flow_group.iterrows():
+                fb = int(row["fb"])
+                tb = int(row["tb"])
+                branch_flow[(fb, tb)] = row["value"]
+                dist_map[fb] = row["from_distance"]
+                dist_map[tb] = row["to_distance"]
+                name_map[fb] = row["from_name"]
+                name_map[tb] = row["to_name"]
+
+            # For each branch, draw a line segment from from-bus to to-bus
+            for idx, branch in case.branch_data.iterrows():
+                fb = int(branch["fb"])
+                tb = int(branch["tb"])
+
+                # Check if we have flow data for this branch
+                if (fb, tb) not in branch_flow:
+                    continue
+
+                # Get the flow value for this specific branch
+                current_flow = branch_flow[(fb, tb)]
+
+                # Skip if flow is NaN
+                if np.isnan(current_flow):
+                    continue
+
+                # Get the flow value for the upstream branch (where fb is the to-bus)
+                upstream_flow = None
+                for (upstream_fb, upstream_tb), flow_val in branch_flow.items():
+                    if upstream_tb == fb and not np.isnan(flow_val):
+                        upstream_flow = flow_val
+                        break
+
+                fb_dist = dist_map.get(fb)
+                tb_dist = dist_map.get(tb)
+
+                if fb_dist is None or tb_dist is None:
+                    continue
+
+                # Determine if this group should show in legend
+                show_legend = group not in legend_added
+                if show_legend:
+                    legend_added.add(group)
+
+                # Create hover text for this branch
+                branch_hover = (
+                    f"<b>From:</b> {name_map.get(fb, fb)} (ID: {fb})<br>"
+                    f"<b>To:</b> {name_map.get(tb, tb)} (ID: {tb})<br>"
+                    f"<b>{flow_name}:</b> {current_flow:.4f}<br>"
+                    f"<b>{color_by}:</b> {group}"
+                )
+
+                # If from-bus has no upstream flow (source bus), only plot the to-bus point
+                if upstream_flow is None:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[tb_dist],
+                            y=[current_flow],
+                            mode="markers",
+                            name=str(group),
+                            line=dict(color=color_map[group], width=1),
+                            legendgroup=str(group),
+                            showlegend=show_legend,
+                            marker=dict(size=4, color=color_map[group]),
+                            hovertext=[branch_hover],
+                            hoverinfo="text",
+                        ),
+                        row=1,
+                        col=col_idx,
+                    )
+                else:
+                    # Find the upstream branch info for hover text
+                    upstream_hover = None
+                    for (upstream_fb, upstream_tb), flow_val in branch_flow.items():
+                        if upstream_tb == fb and not np.isnan(flow_val):
+                            upstream_hover = (
+                                f"<b>From:</b> {name_map.get(upstream_fb, upstream_fb)} (ID: {upstream_fb})<br>"
+                                f"<b>To:</b> {name_map.get(upstream_tb, upstream_tb)} (ID: {upstream_tb})<br>"
+                                f"<b>{flow_name}:</b> {flow_val:.4f}<br>"
+                                f"<b>{color_by}:</b> {group}"
+                            )
+                            break
+
+                    if upstream_hover is None:
+                        upstream_hover = branch_hover
+
+                    # Draw line from from-bus to to-bus
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[fb_dist, tb_dist],
+                            y=[upstream_flow, current_flow],
+                            mode="lines+markers",
+                            name=str(group),
+                            line=dict(color=color_map[group], width=1),
+                            legendgroup=str(group),
+                            showlegend=show_legend,
+                            marker=dict(size=4, color=color_map[group]),
+                            hovertext=[upstream_hover, branch_hover],
+                            hoverinfo="text",
+                        ),
+                        row=1,
+                        col=col_idx,
+                    )
+
+    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=1)
+    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=2)
+    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=3)
+    fig.update_yaxes(
+        title_text=f"{flow_name} (kW)" if "Power" in flow_name else f"{flow_name}",
+        row=1,
+        col=1,
+    )
+    fig.update_layout(title_text=title, hovermode="closest")
 
     return fig
 
@@ -587,9 +959,15 @@ def plot_network(
         _s["a"] = p_flow.a + 1j * q_flow.a
         _s["b"] = p_flow.b + 1j * q_flow.b
         _s["c"] = p_flow.c + 1j * q_flow.c
-        _s["tb"] = _s["id"]
-        _s["fb"] = _s["tb"].map(from_bus_map)
+        if "tb" not in _s.columns:
+            _s["tb"] = _s["id"]
+        if "fb" not in _s.columns:
+            _s["fb"] = _s["tb"].map(from_bus_map)
         _s = _choose_t(_s, t)
+    if p_gen is not None and p_gen.shape[0] == 0:
+        p_gen = None
+    if q_gen is not None and q_gen.shape[0] == 0:
+        q_gen = None
     if p_gen is not None:
         p_gen = _choose_t(p_gen, t)
     if q_gen is not None:
@@ -716,17 +1094,36 @@ def _process_branch_data(branch_data, bus_data, _s, phase_list, edge_scale, edge
 
 
 def _process_gen_data(gen_data, p_gen, q_gen):
+    """Merge generator setpoints from result frames into gen_data.
+
+    Supports both legacy wide format (columns a/b/c) and the newer normalized
+    format that includes a time column ``t``.
+    """
+
     gen_data.index = gen_data.id.to_numpy() - 1
+
+    def _latest_abc(df):
+        if df is None:
+            return None
+        # If time-series, take the last time step for plotting
+        if "t" in df.columns:
+            df = df.sort_values(["id", "t"]).groupby("id", as_index=False).tail(1)
+        df.index = df.id.to_numpy() - 1
+        return df
+
+    p_gen = _latest_abc(p_gen)
+    q_gen = _latest_abc(q_gen)
+
     if p_gen is not None:
-        p_gen.index = p_gen.id.to_numpy() - 1
-        gen_data.pa = p_gen.a
-        gen_data.pb = p_gen.b
-        gen_data.pc = p_gen.c
+        gen_data["pa"] = p_gen["a"].to_numpy()
+        gen_data["pb"] = p_gen["b"].to_numpy()
+        gen_data["pc"] = p_gen["c"].to_numpy()
+
     if q_gen is not None:
-        q_gen.index = q_gen.id.to_numpy() - 1
-        gen_data.qa = q_gen.a
-        gen_data.qb = q_gen.b
-        gen_data.qc = q_gen.c
+        gen_data["qa"] = q_gen["a"].to_numpy()
+        gen_data["qb"] = q_gen["b"].to_numpy()
+        gen_data["qc"] = q_gen["c"].to_numpy()
+
     return gen_data
 
 
@@ -781,7 +1178,8 @@ def _make_edge_traces(branch_data, show_phases, show_reactive_power):
             and show_phases.lower() not in edge.phases.lower()
         ):
             dash = "dot"
-
+        # if edge.type == "switch":
+        #     dash = "dash"
         color = "darkblue"
         if direction < 0:
             color = "maroon"
@@ -795,62 +1193,6 @@ def _make_edge_traces(branch_data, show_phases, show_reactive_power):
         )
         edge_traces.append(edge_trace)
     return edge_traces
-
-
-# def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
-#     text = [f"Bus: '{name}'      A   ||   B   ||   C" for name in bus_data["name"]]
-#     for i, bus_row in enumerate(bus_data.itertuples()):
-#         # if _v is not None:
-#         va = bus_row.v_a
-#         vb = bus_row.v_b
-#         vc = bus_row.v_c
-#         text[i] = text[i] + f"<br>    |V|:      {va:.3f}  {vb:.3f}  {vc:.3f}"
-
-#         pla = bus_row.pl_a
-#         plb = bus_row.pl_b
-#         plc = bus_row.pl_c
-#         qla = bus_row.ql_a
-#         qlb = bus_row.ql_b
-#         qlc = bus_row.ql_c
-#         text[i] += f"<br>    P-Load: {pla:.3f}  {plb:.3f}  {plc:.3f}"
-#         text[i] += f"<br>    Q-Load: {qla:.3f}  {qlb:.3f}  {qlc:.3f}"
-
-#         if cap_data is not None:
-#             if bus_row.id in cap_data.id.to_numpy():
-#                 q_cap = cap_data.loc[
-#                     cap_data.id == bus_row.id, ["qa", "qb", "qc"]
-#                 ].to_numpy()[0]
-#                 text[i] += (
-#                     f"<br>    Q-Cap:  {q_cap[0]:.3f}  {q_cap[1]:.3f}  {q_cap[2]:.3f}"
-#                 )
-
-#         if bus_row.id in gen_data.id.to_numpy():
-#             p_gen = gen_data.loc[
-#                 gen_data.id == bus_row.id, ["pa", "pb", "pc"]
-#             ].to_numpy()[0]
-#             q_gen = gen_data.loc[
-#                 gen_data.id == bus_row.id, ["qa", "qb", "qc"]
-#             ].to_numpy()[0]
-#             text[i] += f"<br>    P-Gen:  {p_gen[0]:.3f}  {p_gen[1]:.3f}  {p_gen[2]:.3f}"
-#             text[i] += f"<br>    Q-Gen:  {q_gen[0]:.3f}  {q_gen[1]:.3f}  {q_gen[2]:.3f}"
-#         edge = branch_data.loc[branch_data.tb == bus_row.id, :]
-#         if len(edge) == 0:
-#             continue
-#         to_name = bus_row.name
-#         fb = edge.fb.to_numpy()[0]
-#         from_name = bus_data.loc[bus_data.id == fb, "name"].to_numpy()[0]
-#         sa, sb, sc = (
-#             edge.s_a.to_numpy()[0],
-#             edge.s_b.to_numpy()[0],
-#             edge.s_c.to_numpy()[0],
-#         )
-#         new_text = (
-#             f"<br>Branch {from_name}→{to_name}"
-#             f"<br>    P flow:  {np.real(sa):.3f}  {np.real(sb):.3f}  {np.real(sc):.3f}"
-#             f"<br>    Q flow:  {np.imag(sa):.3f}  {np.imag(sb):.3f}  {np.imag(sc):.3f}"
-#         )
-#         text[i] += new_text
-#     return text
 
 
 def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
@@ -938,7 +1280,9 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
             qflow_c_str = format_phase_value(np.imag(sc), "c")
 
             hover_text += "<br>"
-            hover_text += f"<b>  Branch: {from_name} → {to_name}</b><br>"
+            hover_text += (
+                f"<b>  {edge.type.to_numpy()[0]}: {from_name} → {to_name}</b><br>"
+            )
             hover_text += f"➡️ P Flow  {pflow_a_str} {pflow_b_str} {pflow_c_str}<br>"
             hover_text += f"➡️ Q Flow  {qflow_a_str} {qflow_b_str} {qflow_c_str}<br>"
         text.append(hover_text)

@@ -4,7 +4,7 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 from numpy import sqrt, zeros
-from scipy.sparse import csr_array, lil_array  # type: ignore
+from scipy.sparse import csr_array, lil_array, vstack  # type: ignore
 import distopf as opf
 from distopf.utils import (
     handle_branch_input,
@@ -197,7 +197,7 @@ class LinDistBase(BaseModel):
 
     >>> import distopf as opf
     >>> # Prepare the case data
-    >>> case = opf.DistOPFCase(data_path="ieee123_30der")
+    >>> case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
     >>> # Initialize the LinDistModel
     >>> model = LinDistModel(
     ...     branch_data=case.branch_data,
@@ -647,7 +647,10 @@ class LinDistBase(BaseModel):
         b_ub : np.ndarray
             Array representing the inequality constraint vector.
         """
-        a_ub, b_ub = self.create_octagon_constraints()
+        a_inv, b_inv = self.create_inverter_octagon_constraints()
+        a_therm, b_therm = self.create_octagon_thermal_constraints()
+        a_ub = vstack([a_inv, a_therm])  # a_therm, a_bat
+        b_ub = np.r_[b_inv, b_therm]  # b_therm, b_bat
         return csr_array(a_ub), b_ub
 
     def create_hexagon_constraints(self) -> Tuple[csr_array, np.ndarray]:
@@ -697,7 +700,7 @@ class LinDistBase(BaseModel):
                     ineq[n_ineq] += len(ineq)
         return csr_array(a_ineq), b_ineq
 
-    def create_octagon_constraints(self) -> Tuple[csr_array, np.ndarray]:
+    def create_inverter_octagon_constraints(self) -> Tuple[csr_array, np.ndarray]:
         """
         Use an octagon to approximate the circular inequality constraint of an inverter.
         """
@@ -742,6 +745,81 @@ class LinDistBase(BaseModel):
                 # limit to right half plane
                 a_ineq[ineq[4], pg] = -1
                 b_ineq[ineq[4]] = 0
+
+                for n_ineq in range(len(ineq)):
+                    ineq[n_ineq] += len(ineq)
+        return csr_array(a_ineq), b_ineq
+
+    def create_octagon_thermal_constraints(self):
+        """
+        Create inequality constraints for the optimization problem.
+        """
+
+        # ########## Aineq and Bineq Formation ###########
+        if (
+            "sa_max" not in self.branch.columns
+            or "sb_max" not in self.branch.columns
+            or "sc_max" not in self.branch.columns
+        ):
+            return lil_array((0, self.n_x)), zeros(0)
+        n_inequalities = 8
+
+        n_rows_ineq = n_inequalities * (
+            len(np.where(~self.branch.sa_max.isna())[0])
+            + len(np.where(~self.branch.sb_max.isna())[0])
+            + len(np.where(~self.branch.sc_max.isna())[0])
+        )
+        a_ineq = lil_array((n_rows_ineq, self.n_x))
+        b_ineq = zeros(n_rows_ineq)
+        ineq = list(range(n_inequalities))
+        for tb in self.branch.tb:
+            for a in "abc":
+                j = tb - 1
+                if not self.phase_exists(a, j):
+                    continue
+                s_rated = self.branch.loc[self.branch.tb == tb, f"s{a}_max"].to_numpy()[
+                    0
+                ]
+                if np.isnan(s_rated):
+                    continue
+                pij = self.idx("pij", j, a)
+                qij = self.idx("qij", j, a)
+                coef = sqrt(2) - 1  # ~=0.4142
+                # equation indexes
+                # Right half plane. Positive Pij
+                # limit for small +Pij and large +Qij
+                a_ineq[ineq[0], pij] = coef
+                a_ineq[ineq[0], qij] = 1
+                b_ineq[ineq[0]] = s_rated
+                # limit for large +Pij and small +Qij
+                a_ineq[ineq[1], pij] = 1
+                a_ineq[ineq[1], qij] = coef
+                b_ineq[ineq[1]] = s_rated
+                # limit for large +Pij and small -Qij
+                a_ineq[ineq[2], pij] = 1
+                a_ineq[ineq[2], qij] = -coef
+                b_ineq[ineq[2]] = s_rated
+                # limit for small +Pij and large -Qij
+                a_ineq[ineq[3], pij] = coef
+                a_ineq[ineq[3], qij] = -1
+                b_ineq[ineq[3]] = s_rated
+                # Left half plane. Negative Pij
+                # limit for small -Pij and large -Qij
+                a_ineq[ineq[4], pij] = -coef
+                a_ineq[ineq[4], qij] = -1
+                b_ineq[ineq[4]] = s_rated
+                # limit for large -Pij and small -Qij
+                a_ineq[ineq[5], pij] = -1
+                a_ineq[ineq[5], qij] = -coef
+                b_ineq[ineq[5]] = s_rated
+                # limit for large -Pij and small +Qij
+                a_ineq[ineq[6], pij] = -1
+                a_ineq[ineq[6], qij] = coef
+                b_ineq[ineq[6]] = s_rated
+                # limit for small -Pij and large +Qij
+                a_ineq[ineq[7], pij] = -coef
+                a_ineq[ineq[7], qij] = 1
+                b_ineq[ineq[7]] = s_rated
 
                 for n_ineq in range(len(ineq)):
                     ineq[n_ineq] += len(ineq)
@@ -808,7 +886,7 @@ class LinDistBase(BaseModel):
                 x[self.x_maps[ph].pij] + 1j * x[self.x_maps[ph].qij]
             )
         return s_df
-    
+
     def get_p_flows(self, x):
         df = pd.DataFrame(
             columns=["fb", "tb", "from_name", "to_name", "a", "b", "c"],
@@ -823,12 +901,12 @@ class LinDistBase(BaseModel):
             tb_idxs = self.x_maps[ph].bj.to_numpy()
             tb_names = self.bus.name[tb_idxs].to_numpy()
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, "fb"] = fb_idxs + 1
-            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "id"] = tb_idxs + 1
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "tb"] = tb_idxs + 1
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, "from_name"] = fb_names
-            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "name"] = tb_names
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "to_name"] = tb_names
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, ph] = x[self.x_maps[ph].pij]
         return df
-    
+
     def get_q_flows(self, x):
         df = pd.DataFrame(
             columns=["fb", "tb", "from_name", "to_name", "a", "b", "c"],
@@ -843,9 +921,9 @@ class LinDistBase(BaseModel):
             tb_idxs = self.x_maps[ph].bj.to_numpy()
             tb_names = self.bus.name[tb_idxs].to_numpy()
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, "fb"] = fb_idxs + 1
-            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "id"] = tb_idxs + 1
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "tb"] = tb_idxs + 1
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, "from_name"] = fb_names
-            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "name"] = tb_names
+            df.loc[self.x_maps[ph].bj.to_numpy() + 1, "to_name"] = tb_names
             df.loc[self.x_maps[ph].bj.to_numpy() + 1, ph] = x[self.x_maps[ph].qij]
         return df
 

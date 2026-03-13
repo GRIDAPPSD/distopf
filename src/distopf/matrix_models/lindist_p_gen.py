@@ -127,9 +127,6 @@ class LinDistModelPGen(LinDistBase):
         a_eq[qc, vj] = -q_cap_nom
         return a_eq, b_eq
 
-    def create_inequality_constraints(self):
-        return None, None
-
     def get_device_variables(self, x, variable_map):
         if len(variable_map.keys()) == 0:
             return pd.DataFrame(columns=["id", "name", "t", "a", "b", "c"])

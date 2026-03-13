@@ -3,28 +3,18 @@ import pandas as pd
 import pyomo.environ as pyo
 import distopf as opf
 from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.importer import Case, create_case
+from distopf.api import Case, create_case
 
 
 @pytest.fixture
 def ieee13_case():
     """Fixture to load IEEE 13 test case"""
-    # return opf.DistOPFCase(
-    #     data_path=opf.CASES_DIR / "csv" / "ieee13",
-    #     objective_functions=opf.cp_obj_loss,
-    #     control_variable="PQ",
-    # )
     return create_case(data_path=opf.CASES_DIR / "csv" / "ieee13")
 
 
 @pytest.fixture
 def ieee123_30der_case():
     """Fixture to load IEEE 123 with 30 DER test case"""
-    # return opf.DistOPFCase(
-    #     data_path=opf.CASES_DIR / "csv" / "ieee123_30der",
-    #     objective_functions=opf.cp_obj_loss,
-    #     control_variable="PQ",
-    # )
     return create_case(data_path=opf.CASES_DIR / "csv" / "ieee123_30der")
 
 

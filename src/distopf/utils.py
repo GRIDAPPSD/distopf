@@ -1,3 +1,5 @@
+import warnings
+
 import pandas as pd
 from typing import Optional
 
@@ -44,10 +46,22 @@ def handle_gen_input(gen_data: Optional[pd.DataFrame]) -> pd.DataFrame:
                 "qb_min",
                 "qc_min",
                 "control_variable",
+                "gen_shape",
             ]
         )
     if "control_variable" not in gen_data.columns:
         gen_data["control_variable"] = ""
+    else:
+        gen_data["control_variable"] = gen_data["control_variable"].fillna("")
+    if "gen_shape" not in gen_data.columns:
+        gen_data["gen_shape"] = "PV"
+        warnings.warn(
+            "gen_data has no 'gen_shape' column. Defaulting to 'PV'. "
+            "If a 'PV' column exists in schedules, it will be applied to all generators. "
+            "Add a 'gen_shape' column to gen_data to control per-generator schedule shapes.",
+            UserWarning,
+            stacklevel=2,
+        )
     gen = gen_data.sort_values(by="id", ignore_index=True)
     gen.index = gen.id.to_numpy() - 1
     return gen
@@ -146,7 +160,7 @@ def handle_bus_input(bus_data: Optional[pd.DataFrame]) -> pd.DataFrame:
         if c not in bus_data.columns:
             bus_data[c] = t()
     bus = bus_data.astype(type_dict)
-    bus = bus_data.sort_values(by="id", ignore_index=True)
+    bus = bus.sort_values(by="id", ignore_index=True)
     bus.index = bus.id.to_numpy() - 1
     return bus
 
