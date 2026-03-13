@@ -142,8 +142,7 @@ def _resolve_wrapper(wrapper: Optional[str], formulation: Optional[str]) -> tupl
         if wrapper not in registry:
             supported = sorted(registry)
             raise ValueError(
-                f"Unknown wrapper: '{wrapper}'. "
-                f"Supported: {', '.join(supported)}"
+                f"Unknown wrapper: '{wrapper}'. Supported: {', '.join(supported)}"
             )
 
     # Validate formulation name if provided
@@ -162,9 +161,7 @@ def _resolve_wrapper(wrapper: Optional[str], formulation: Optional[str]) -> tupl
             # Auto-select the default wrapper for this formulation
             wrapper = form_info["default_wrapper"]
         elif wrapper not in form_info["compatible_wrappers"]:
-            compatible = ", ".join(
-                f"'{w}'" for w in form_info["compatible_wrappers"]
-            )
+            compatible = ", ".join(f"'{w}'" for w in form_info["compatible_wrappers"])
             raise ValueError(
                 f"Formulation '{formulation}' is not compatible with "
                 f"wrapper '{wrapper}'. "
@@ -571,7 +568,6 @@ class Case:
         finally:
             if handler:
                 self._disable_verbose(handler)
-
 
     # -------------------------------------------------------------------------
     # Model Creation Methods (for advanced users)
