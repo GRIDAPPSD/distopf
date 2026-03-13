@@ -139,10 +139,14 @@ def combine_powerflow_results(
 
     # Power flows
     p_list = [
-        r.active_power_flows for r in res_list if hasattr(r, "active_power_flows") and r.active_power_flows is not None
+        r.active_power_flows
+        for r in res_list
+        if hasattr(r, "active_power_flows") and r.active_power_flows is not None
     ]
     q_list = [
-        r.reactive_power_flows for r in res_list if hasattr(r, "reactive_power_flows") and r.reactive_power_flows is not None
+        r.reactive_power_flows
+        for r in res_list
+        if hasattr(r, "reactive_power_flows") and r.reactive_power_flows is not None
     ]
     p_all = pd.concat(p_list, ignore_index=True) if p_list else None
     q_all = pd.concat(q_list, ignore_index=True) if q_list else None
@@ -188,10 +192,16 @@ def combine_powerflow_results(
 
     # Generators
     pg_list = [
-        r.active_power_generation for r in res_list if hasattr(r, "active_power_generation") and r.active_power_generation is not None
+        r.active_power_generation
+        for r in res_list
+        if hasattr(r, "active_power_generation")
+        and r.active_power_generation is not None
     ]
     qg_list = [
-        r.reactive_power_generation for r in res_list if hasattr(r, "reactive_power_generation") and r.reactive_power_generation is not None
+        r.reactive_power_generation
+        for r in res_list
+        if hasattr(r, "reactive_power_generation")
+        and r.reactive_power_generation is not None
     ]
     p_gens = pd.concat(pg_list, ignore_index=True) if pg_list else None
     q_gens = pd.concat(qg_list, ignore_index=True) if qg_list else None

@@ -60,15 +60,9 @@ class TestDualExtractionHighLevel:
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
-        assert pd.api.types.is_numeric_dtype(
-            result.dual_power_balance_p["dual"]
-        )
-        assert pd.api.types.is_numeric_dtype(
-            result.dual_power_balance_q["dual"]
-        )
-        assert pd.api.types.is_numeric_dtype(
-            result.dual_voltage_drop["dual"]
-        )
+        assert pd.api.types.is_numeric_dtype(result.dual_power_balance_p["dual"])
+        assert pd.api.types.is_numeric_dtype(result.dual_power_balance_q["dual"])
+        assert pd.api.types.is_numeric_dtype(result.dual_voltage_drop["dual"])
 
     def test_dual_dataframe_no_null_values(self):
         """Test that dual DataFrames have no null values"""
@@ -112,16 +106,8 @@ class TestDualExtractionHighLevel:
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
-        assert (
-            result.dual_power_balance_p["dual"]
-            .apply(lambda x: abs(x) < 1e10)
-            .all()
-        )
-        assert (
-            result.dual_power_balance_q["dual"]
-            .apply(lambda x: abs(x) < 1e10)
-            .all()
-        )
+        assert result.dual_power_balance_p["dual"].apply(lambda x: abs(x) < 1e10).all()
+        assert result.dual_power_balance_q["dual"].apply(lambda x: abs(x) < 1e10).all()
 
     def test_get_dual_specific_constraint(self):
         """Test get_dual() for specific constraint"""

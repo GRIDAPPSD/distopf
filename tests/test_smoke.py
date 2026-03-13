@@ -135,7 +135,9 @@ class TestFBSWithOPFSetpoints:
 
         opf_res = case.run_opf("loss", wrapper="matrix")
         partial = opf.PowerFlowResult(
-            active_power_generation=None, reactive_power_generation=opf_res.reactive_power_generation, result_type="opf"
+            active_power_generation=None,
+            reactive_power_generation=opf_res.reactive_power_generation,
+            result_type="opf",
         )
         fbs_res = opf.run_fbs_with_opf_setpoints(case, partial)
 
