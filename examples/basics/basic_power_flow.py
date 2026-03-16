@@ -11,11 +11,11 @@ import distopf as opf
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 
 # Run power flow (no optimization, just solve the base case)
-voltages, power_flows = case.run_pf()
+result = case.run_pf()
 
 # Display results
 print("Voltage magnitudes (first 10 buses):")
-print(voltages.head(10))
+print(result.voltages.head(10))
 
 # Plot the network with voltage results
 case.plot_network().show(renderer="browser")
