@@ -65,6 +65,47 @@ result = case.run_opf(objective="curtail_min", control_variable="P", v_max=1.05,
 result.plot_network().show(renderer="browser")
 ```
 
+## Objective Functions
+
+Pass an objective string to `run_opf()` to select what to optimize. The most
+common built-in objectives are:
+
+| String | Description | Type |
+|--------|-------------|------|
+| `"loss_min"` | Minimize total line losses `Σ(P² + Q²)·R` | Quadratic |
+| `"curtail_min"` | Minimize DER curtailment `Σ(P_max − P)²` | Quadratic |
+| `"gen_max"` | Maximize total generator output | Linear |
+| `"load_min"` | Minimize substation active power import | Linear |
+| `"target_p_3ph"` | Track per-phase active power target | Quadratic |
+| `"voltage_deviation"` | Minimize voltage deviation from 1.0 p.u. (Pyomo only) | Quadratic |
+
+Many aliases are accepted (e.g., `"loss"` → `"loss_min"`, `"curtail"` → `"curtail_min"`).
+
+You can also pass a **custom callable** as the objective. For the matrix wrapper
+the function receives `(model, xk: cp.Variable, **kwargs)` and returns a
+`cp.Expression`. For the Pyomo wrapper it receives `(model)` and returns a
+Pyomo expression.
+
+```python
+import cvxpy as cp
+import distopf as opf
+
+def my_objective(model, xk, **kwargs):
+    """Custom objective: minimize squared active power flows."""
+    idx = []
+    for ph in "abc":
+        if model.phase_exists(ph):
+            idx.extend(model.x_maps[ph].pij.to_numpy().tolist())
+    return cp.sum(xk[idx] ** 2)
+
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
+result = case.run_opf(objective=my_objective, control_variable="PQ", wrapper="matrix")
+```
+
+For the full list of objectives, aliases, per-wrapper details, penalty functions,
+and more custom examples, see the
+**[Objective Functions Guide](docs/objective_functions.md)**.
+
 ## Optimization Wrappers
 
 DistOPF supports multiple optimization wrappers for solving OPF problems:
