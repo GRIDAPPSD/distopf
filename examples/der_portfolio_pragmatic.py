@@ -15,6 +15,8 @@ import numpy as np
 import networkx as nx
 
 from distopf.pyomo_models.lindist import create_lindist_model
+from distopf.pyomo_models.protocol import LindistModelProtocol
+from distopf.pyomo_models.objectives import substation_power_objective_rule
 from distopf.api import create_case
 from distopf.pyomo_models.constraints import (
     add_capacitor_constraints,
@@ -32,8 +34,8 @@ from distopf.pyomo_models.constraints import (
 )
 
 print("=" * 80)
-print("DER PORTFOLIO FORMULATION: PRAGMATIC BASELINE")
-print("(Using known-working ieee123_30der case)")
+print("DER PORTFOLIO FORMULATION WITH BATTERIES")
+print("(Using ieee123_30der_bat case with battery support)")
 print("=" * 80)
 
 # =============================================================================
@@ -43,7 +45,12 @@ print("=" * 80)
 print("\nPHASE 1: Load case and build baseline OPF model")
 print("-" * 80)
 
-case = create_case(data_path=opf.CASES_DIR / "csv" / "ieee123_30der")
+case = create_case(
+    data_path=opf.CASES_DIR / "csv" / "ieee123_30der_bat",
+    ignore_schedule=True,
+    n_steps=1,
+    start_step=0,
+)
 s_base = case.bus_data["s_base"].iloc[0]
 bus_data_by_id = case.bus_data.set_index("id", drop=False)
 
@@ -75,7 +82,20 @@ add_regulator_constraints(model_baseline)
 add_voltage_limits(model_baseline)
 add_generator_limits(model_baseline)
 
-print(f"Standard constraints added")
+# Add battery constraints
+from distopf.pyomo_models.constraints import (
+    add_battery_power_limits,
+    add_battery_soc_limits,
+    add_battery_net_p_bat_equal_phase_constraints,
+    add_battery_constant_q_constraints_p_control,
+    add_battery_energy_constraints,
+)
+
+add_battery_constant_q_constraints_p_control(model_baseline)
+add_battery_energy_constraints(model_baseline)
+add_battery_net_p_bat_equal_phase_constraints(model_baseline)
+add_battery_power_limits(model_baseline)
+add_battery_soc_limits(model_baseline)
 
 
 # Set loss minimization objective (simple, known to work)
@@ -117,14 +137,18 @@ print("=" * 80)
 
 # Compute capacity target from total load
 total_load_p = case.bus_data[["pl_a", "pl_b", "pl_c"]].sum().sum()
-T_DER = 10.0 * total_load_p  # 10% of load
+T_DER = 0.10 * total_load_p  # 10% of load (PV capacity budget)
+T_BATT = T_DER  # 10% of load (new battery energy budget, same scale)
 
 print(f"\nCapacity Planning Parameters:")
 print(
     f"  Total system load: {total_load_p:.6f} p.u. ({total_load_p * s_base / 1e6:.2f} MW)"
 )
 print(
-    f"  Target new DER capacity (10%): {T_DER:.6f} p.u. ({T_DER * s_base / 1e6:.2f} MW)"
+    f"  Target new PV capacity (10%):   {T_DER:.6f} p.u. ({T_DER * s_base / 1e6:.4f} MW)"
+)
+print(
+    f"  Target new BATT energy (10%):   {T_BATT:.6f} p.u. ({T_BATT * s_base / 1e6:.4f} MWh)"
 )
 
 # Define zones by partitioning the network across switch sw2.
@@ -175,28 +199,40 @@ print(f"  Partition switch: sw2 edge {sw2_edge[0]}-{sw2_edge[1]}")
 for z_name, z_buses in zones.items():
     print(f"  {z_name}: {len(z_buses)} buses, IDs {min(z_buses)}-{max(z_buses)}")
 
-# Resource set: single PV resource
+# Resource set: PV generation; existing batteries (not new capacity allocation)
 resources = ["PV"]
-c = {r: 1.0 for r in resources}  # 100% PV
+c = {"PV": 1.0}  # 100% PV
+
+# Get battery IDs from case (we'll optimize their dispatch but not add new capacity)
+batt_ids = (
+    case.bat_data["id"].tolist()
+    if case.bat_data is not None and len(case.bat_data) > 0
+    else []
+)
 
 print(f"\nResource Set:")
 print(f"  Resources: {resources}")
 print(f"  Resource mix: c[PV] = 1.0")
+print(f"  Existing batteries (dispatch optimization): {len(batt_ids)} units")
+if batt_ids:
+    for bid in batt_ids:
+        batt_row = case.bat_data[case.bat_data["id"] == bid].iloc[0]
+        print(
+            f"    - Bus {bid}: {batt_row['s_max']} MVA, {batt_row['energy_capacity']} MWh"
+        )
 
 
-# Allocation factors: load-proportional
+# Allocation factors: load-proportional for PV and new BATT
 def build_alpha(zones, resources, bus_data_by_id):
-    """Build allocation factors load-proportionally."""
+    """Build allocation factors load-proportionally for PV and BATT."""
     alpha = {}
     for z_name, z_buses in zones.items():
-        for r in resources:
-            z_load = bus_data_by_id.loc[z_buses, ["pl_a", "pl_b", "pl_c"]].sum().sum()
-            for n in z_buses:
-                n_load = bus_data_by_id.loc[n, ["pl_a", "pl_b", "pl_c"]].sum()
-                if z_load > 0:
-                    alpha[(z_name, n, r)] = n_load / z_load
-                else:
-                    alpha[(z_name, n, r)] = 1.0 / len(z_buses)
+        z_load = bus_data_by_id.loc[z_buses, ["pl_a", "pl_b", "pl_c"]].sum().sum()
+        for n in z_buses:
+            n_load = bus_data_by_id.loc[n, ["pl_a", "pl_b", "pl_c"]].sum()
+            frac = n_load / z_load if z_load > 0 else 1.0 / len(z_buses)
+            alpha[(z_name, n, "PV")] = frac
+            alpha[(z_name, n, "BATT")] = frac  # same load-proportional siting proxy
     return alpha
 
 
@@ -204,7 +240,7 @@ alpha = build_alpha(zones, resources, bus_data_by_id)
 
 print(f"\nAllocation Factors Check:")
 for z_name in zones.keys():
-    for r in resources:
+    for r in resources + ["BATT"]:
         total = sum(alpha.get((z_name, n, r), 0.0) for n in zones[z_name])
         print(f"  ∑_n α[{z_name},{r}] = {total:.10f}")
 
@@ -260,6 +296,12 @@ for z_name in zones.keys():
 cf = 0.8  # Global CF for PV
 c_max = 1.0  # Allow 20% curtailment
 
+# Battery operating parameters
+eta_c = 0.93  # Charge efficiency
+eta_d = 0.93  # Discharge efficiency
+delta_t = 1.0  # Time step (1 hour)
+c_rate = 1.0  # C-rate for power limits (1C = full discharge/charge in 1 hour)
+
 print(f"\nOperating Parameters:")
 print(f"  Capacity factor cf = {cf:.2f}")
 print(f"  Max curtailment c_max = {c_max:.2f}")
@@ -271,19 +313,34 @@ print(f"  Min generation = (1-c_max)*cf*p_max = {(1 - c_max) * cf:.2f} * p_max")
 
 model_portfolio = create_lindist_model(case)
 
-# Add standard constraints
-add_p_flow_constraints(model_portfolio)
-add_q_flow_constraints(model_portfolio)
-add_voltage_drop_constraints(model_portfolio)
-add_swing_bus_constraints(model_portfolio)
-add_cvr_load_constraints(model_portfolio)
-add_generator_constant_p_constraints_q_control(model_portfolio)
-add_generator_constant_q_constraints_p_control(model_portfolio)
-add_circular_generator_constraints_pq_control(model_portfolio)
-add_capacitor_constraints(model_portfolio)
-add_regulator_constraints(model_portfolio)
-add_voltage_limits(model_portfolio)
-add_generator_limits(model_portfolio)
+
+# CUSTOM POWER BALANCE WITH DER INJECTION
+# We need to replace add_p_flow_constraints with a version that includes p_der_inj
+def add_p_flow_constraints_with_der(m, p_der_inj_var):
+    """
+    Add LinDistFlow power balance constraints with DER injection.
+    Active power: P_ij = sum(P_jk) + p_L - p_D - p_der_inj
+    """
+
+    def p_balance_rule(m: LindistModelProtocol, _id, ph, t):
+        load = m.p_load[_id, ph, t]
+        generation = m.p_gen[_id, ph, t] if (_id, ph, t) in m.p_gen else 0
+        p_bat = m.p_bat[_id, ph, t] if (_id, ph, t) in m.p_bat else 0
+        der_inj = p_der_inj_var[_id, ph, t]  # DER injection (positive = generation)
+
+        incoming_flow = m.p_flow[_id, ph, t]
+        outgoing_flows = sum(
+            m.p_flow[to_bus, ph, t]
+            for to_bus in m.to_bus_map[_id]
+            if (to_bus, ph) in m.branch_phase_set
+        )
+        # DER injection acts as negative load (reduces swing bus power needed)
+        return incoming_flow == outgoing_flows + load - generation - p_bat - der_inj
+
+    m.power_balance_p = pyo.Constraint(
+        m.branch_phase_set, m.time_set, rule=p_balance_rule
+    )
+
 
 # Add portfolio index sets
 model_portfolio.zone_set = pyo.Set(initialize=list(zones.keys()))
@@ -307,35 +364,128 @@ model_portfolio.p_zr = pyo.Var(
     doc="Zonal DER dispatch by zone, resource, and time",
 )
 
+# Battery dispatch variables (optimizing existing batteries in the system)
+model_portfolio.p_batt_ch = pyo.Var(
+    model_portfolio.bat_set,
+    model_portfolio.time_set,
+    domain=pyo.NonNegativeReals,
+    initialize=0,
+    doc="Charging power for existing batteries",
+)
+
+model_portfolio.p_batt_disch = pyo.Var(
+    model_portfolio.bat_set,
+    model_portfolio.time_set,
+    domain=pyo.NonNegativeReals,
+    initialize=0,
+    doc="Discharging power for existing batteries",
+)
+
+model_portfolio.soc_batt = pyo.Var(
+    model_portfolio.bat_set,
+    model_portfolio.time_set,
+    domain=pyo.NonNegativeReals,
+    initialize=0,
+    doc="State of charge for existing batteries",
+)
+
+# New battery capacity expansion variables (zone-level investment decisions)
+model_portfolio.e_max_new = pyo.Var(
+    model_portfolio.zone_set,
+    domain=pyo.NonNegativeReals,
+    initialize=0,
+    doc="New battery energy capacity to build by zone (p.u. MWh)",
+)
+model_portfolio.p_batt_new_ch = pyo.Var(
+    model_portfolio.zone_set,
+    model_portfolio.time_set,
+    domain=pyo.NonNegativeReals,
+    initialize=0,
+    doc="Charging power of new battery capacity by zone and time",
+)
+model_portfolio.p_batt_new_disch = pyo.Var(
+    model_portfolio.zone_set,
+    model_portfolio.time_set,
+    domain=pyo.NonNegativeReals,
+    initialize=0,
+    doc="Discharging power of new battery capacity by zone and time",
+)
+model_portfolio.soc_new = pyo.Var(
+    model_portfolio.zone_set,
+    model_portfolio.time_set,
+    domain=pyo.NonNegativeReals,
+    initialize=0,
+    doc="State of charge of new battery capacity by zone and time",
+)
+
+# DER INJECTION VARIABLE (created before power flow constraints)
 model_portfolio.p_der_inj = pyo.Var(
     model_portfolio.bus_phase_set,
     model_portfolio.time_set,
     domain=pyo.Reals,
     initialize=0,
-    doc="DER injection at each bus-phase",
+    doc="DER injection at each bus-phase (positive = generation into grid)",
 )
 
+# NOW add power flow constraints with DER injection coupled in
+add_p_flow_constraints_with_der(model_portfolio, model_portfolio.p_der_inj)
+
 print(f"\nPortfolio variables added:")
-print(f"  p_max: {len(model_portfolio.p_max)} (zone × resource)")
-print(f"  p_zr: {len(model_portfolio.p_zr)} (zone × resource × time)")
-print(f"  p_der_inj: {len(model_portfolio.p_der_inj)} (bus-phase × time)")
+print(f"  p_max:          {len(model_portfolio.p_max)} (zone × resource) [PV capacity]")
+print(
+    f"  p_zr:           {len(model_portfolio.p_zr)} (zone × resource × time) [PV dispatch]"
+)
+print(
+    f"  e_max_new:      {len(model_portfolio.e_max_new)} (zone) [new BATT energy capacity]"
+)
+print(
+    f"  p_batt_new_ch:  {len(model_portfolio.p_batt_new_ch)} (zone × time) [new BATT charge]"
+)
+print(
+    f"  p_batt_new_disch:{len(model_portfolio.p_batt_new_disch)} (zone × time) [new BATT discharge]"
+)
+print(
+    f"  p_der_inj:      {len(model_portfolio.p_der_inj)} (bus-phase × time) [COUPLED TO POWER FLOW]"
+)
+
+# Add remaining standard constraints
+add_q_flow_constraints(model_portfolio)
+add_voltage_drop_constraints(model_portfolio)
+add_swing_bus_constraints(model_portfolio)
+add_cvr_load_constraints(model_portfolio)
+add_generator_constant_p_constraints_q_control(model_portfolio)
+add_generator_constant_q_constraints_p_control(model_portfolio)
+add_circular_generator_constraints_pq_control(model_portfolio)
+add_capacitor_constraints(model_portfolio)
+add_regulator_constraints(model_portfolio)
+add_voltage_limits(model_portfolio)
+add_generator_limits(model_portfolio)
+
+# Add battery constraints
+add_battery_constant_q_constraints_p_control(model_portfolio)
+add_battery_energy_constraints(model_portfolio)
+add_battery_net_p_bat_equal_phase_constraints(model_portfolio)
+add_battery_power_limits(model_portfolio)
+add_battery_soc_limits(model_portfolio)
+
+# Add portfolio index sets
 
 # =============================================================================
 # Portfolio constraints
 # =============================================================================
 
 
-# Eq. 3: Exact capacity allocation
-def capacity_allocation_rule(model, r):
-    return sum(model.p_max[z, r] for z in model.zone_set) == T_DER * c[r]
+# Eq. 3: Exact capacity allocation for PV
+def capacity_allocation_pv_rule(model):
+    return sum(model.p_max[z, "PV"] for z in model.zone_set) == T_DER * c["PV"]
 
 
-model_portfolio.capacity_allocation = pyo.Constraint(
-    model_portfolio.resource_set, rule=capacity_allocation_rule
+model_portfolio.capacity_allocation_pv = pyo.Constraint(
+    rule=capacity_allocation_pv_rule
 )
 
 
-# Eq. 6: Generation dispatch envelope
+# Eq. 6: Generation dispatch envelope for PV
 def gen_min_rule(model, z, r, t):
     return model.p_zr[z, r, t] >= (1 - c_max) * cf * model.p_max[z, r]
 
@@ -359,13 +509,143 @@ model_portfolio.gen_max = pyo.Constraint(
 )
 
 
-# Eq. 4: Nodal injection mapping
+# Battery energy balance for existing batteries (Eq. 7-8)
+def battery_energy_balance_rule(model, bid, t):
+    """Energy balance for existing batteries"""
+    if t == model.start_step:
+        soc_prev = pyo.value(model.start_soc[bid]) * pyo.value(
+            model.energy_capacity[bid]
+        )
+    else:
+        soc_prev = model.soc_batt[bid, t - 1]
+
+    return (
+        model.soc_batt[bid, t]
+        == soc_prev
+        + eta_c * delta_t * model.p_batt_ch[bid, t]
+        - (1.0 / eta_d) * delta_t * model.p_batt_disch[bid, t]
+    )
+
+
+model_portfolio.battery_energy = pyo.Constraint(
+    model_portfolio.bat_set,
+    model_portfolio.time_set,
+    rule=battery_energy_balance_rule,
+)
+
+
+# Battery charge/discharge limits use existing power limits
+def battery_charge_limit_rule(model, bid, ph, t):
+    return (0, model.p_charge[bid, t], model.s_bat_rated[bid, ph])
+
+
+def battery_discharge_limit_rule(model, bid, ph, t):
+    return (0, model.p_discharge[bid, t], model.s_bat_rated[bid, ph])
+
+
+model_portfolio.battery_charge_limit = pyo.Constraint(
+    model_portfolio.bat_phase_set,
+    model_portfolio.time_set,
+    rule=battery_charge_limit_rule,
+)
+
+model_portfolio.battery_discharge_limit = pyo.Constraint(
+    model_portfolio.bat_phase_set,
+    model_portfolio.time_set,
+    rule=battery_discharge_limit_rule,
+)
+
+# Battery SOC limits handled by add_battery_soc_limits() above
+
+# =============================================================================
+# New battery capacity expansion constraints
+# =============================================================================
+soc_init_frac = 0.5  # New batteries start at 50% SOC
+soc_min_frac = 0.2  # Lower SOC bound (20%)
+soc_max_frac = 0.9  # Upper SOC bound (90%)
+
+
+def batt_capacity_budget_rule(model):
+    return sum(model.e_max_new[z] for z in model.zone_set) == T_BATT
+
+
+model_portfolio.batt_capacity_budget = pyo.Constraint(rule=batt_capacity_budget_rule)
+
+
+def new_batt_energy_rule(model, z, t):
+    """SOC dynamics for new battery capacity (bilinear at t=start_step)."""
+    if t == model.start_step:
+        soc_prev = soc_init_frac * model.e_max_new[z]
+    else:
+        soc_prev = model.soc_new[z, t - 1]
+    return (
+        model.soc_new[z, t]
+        == soc_prev
+        + eta_c * delta_t * model.p_batt_new_ch[z, t]
+        - (1.0 / eta_d) * delta_t * model.p_batt_new_disch[z, t]
+    )
+
+
+model_portfolio.new_batt_energy = pyo.Constraint(
+    model_portfolio.zone_set, model_portfolio.time_set, rule=new_batt_energy_rule
+)
+
+
+def new_batt_ch_limit_rule(model, z, t):
+    return model.p_batt_new_ch[z, t] <= c_rate * model.e_max_new[z]
+
+
+def new_batt_disch_limit_rule(model, z, t):
+    return model.p_batt_new_disch[z, t] <= c_rate * model.e_max_new[z]
+
+
+model_portfolio.new_batt_ch_limit = pyo.Constraint(
+    model_portfolio.zone_set, model_portfolio.time_set, rule=new_batt_ch_limit_rule
+)
+model_portfolio.new_batt_disch_limit = pyo.Constraint(
+    model_portfolio.zone_set, model_portfolio.time_set, rule=new_batt_disch_limit_rule
+)
+
+
+def new_batt_soc_lower_rule(model, z, t):
+    return model.soc_new[z, t] >= soc_min_frac * model.e_max_new[z]
+
+
+def new_batt_soc_upper_rule(model, z, t):
+    return model.soc_new[z, t] <= soc_max_frac * model.e_max_new[z]
+
+
+model_portfolio.new_batt_soc_lower = pyo.Constraint(
+    model_portfolio.zone_set, model_portfolio.time_set, rule=new_batt_soc_lower_rule
+)
+model_portfolio.new_batt_soc_upper = pyo.Constraint(
+    model_portfolio.zone_set, model_portfolio.time_set, rule=new_batt_soc_upper_rule
+)
+
+
+# Eq. 4: Nodal injection mapping (PV + existing BATT + new BATT)
 def der_injection_rule(model, n, ph, t):
     injection = 0
+
+    # PV injection
     for z in model.zone_set:
         for r in model.resource_set:
             factor = alpha.get((z, n, r), 0.0)
             injection += factor * model.p_zr[z, r, t]
+
+    # Existing battery injection (net discharge - charge, spread equally across phases)
+    if n in batt_ids:
+        bid = n
+        n_phases = pyo.value(model.battery_n_phases[bid])
+        injection += (model.p_discharge[bid, t] - model.p_charge[bid, t]) / n_phases
+
+    # New battery capacity injection (load-proportional within zone)
+    for z in model.zone_set:
+        factor_batt = alpha.get((z, n, "BATT"), 0.0)
+        injection += factor_batt * (
+            model.p_batt_new_disch[z, t] - model.p_batt_new_ch[z, t]
+        )
+
     return model.p_der_inj[n, ph, t] == injection
 
 
@@ -374,46 +654,24 @@ model_portfolio.der_injection_mapping = pyo.Constraint(
 )
 
 print(f"\nPortfolio constraints added:")
-print(f"  Capacity allocation (Eq. 3)")
-print(f"  Generation envelope (Eq. 6) - min/max")
-print(f"  Nodal injection mapping (Eq. 4)")
+print(f"  PV capacity allocation (Eq. 3), T_DER={T_DER:.4f} p.u.")
+print(f"  PV generation envelope (Eq. 6)")
+print(f"  Existing battery energy balance + power limits")
+print(f"  New BATT capacity budget, T_BATT={T_BATT:.4f} p.u.")
+print(f"  New BATT energy balance + power/SOC limits")
+print(f"  Nodal injection mapping (Eq. 4) - PV + existing BATT + new BATT")
 
 # =============================================================================
-# Objective: Minimize loss WITH DER (reduced baseline loss)
+# Objective: Minimize substation active power withdrawal
 # =============================================================================
-
-
-def portfolio_loss_objective_rule(model):
-    """
-    Loss minimization accounting for DER injection reducing branch flows.
-    Strategy: Minimize (baseline loss - DER benefit)
-    where benefit ≈ saved losses from reduced swing bus power
-    """
-    total_loss = 0
-    for _id, ph in model.branch_phase_set:
-        for t in model.time_set:
-            total_loss += (model.p_flow[_id, ph, t] ** 2) * model.r[_id, ph + ph]
-            total_loss += (model.q_flow[_id, ph, t] ** 2) * model.r[_id, ph + ph]
-
-    # Bonus/reduction for DER generation (only for active power)
-    # Use zone-specific weights to represent higher marginal value in electrically
-    # distant areas and avoid artificial symmetry across zones.
-    der_benefit = 0
-    for z in model.zone_set:
-        for r in model.resource_set:
-            for t in model.time_set:
-                der_benefit += 0.01 * zone_weights[str(z)] * model.p_zr[z, r, t]
-
-    return total_loss - der_benefit
 
 
 model_portfolio.objective = pyo.Objective(
-    rule=portfolio_loss_objective_rule, sense=pyo.minimize
+    rule=substation_power_objective_rule, sense=pyo.minimize
 )
 
-print(f"\nObjective: Loss minimization with DER incentive")
-print(f"  Base: minimize I²R losses")
-print(f"  Bonus: reward DER generation (0.01 × zone_weight × dispatch)")
+print(f"\nObjective: Minimize substation active power withdrawal")
+print(f"  Minimize sum of p_flow on branches leaving swing bus {swing_bus_id}")
 
 # =============================================================================
 # Solve portfolio model
@@ -425,7 +683,7 @@ results_portfolio = opt.solve(model_portfolio, tee=False)
 if results_portfolio.solver.status == pyo.SolverStatus.ok:
     obj_portfolio = pyo.value(model_portfolio.objective)
     print(f"✓ Portfolio OPF successful")
-    print(f"  Loss+DER objective (p.u.): {obj_portfolio:.6f}")
+    print(f"  Substation power (p.u.): {obj_portfolio:.6f}")
 else:
     raise ValueError(f"Portfolio solve failed: {results_portfolio.solver.status}")
 
@@ -437,13 +695,25 @@ print("\n" + "=" * 80)
 print("RESULTS AND VALIDATION")
 print("=" * 80)
 
+# Compute actual substation power for baseline (for comparison)
+obj_baseline_substation = sum(
+    pyo.value(model_baseline.p_flow[to_bus, ph, 0])
+    for to_bus, ph in model_baseline.branch_phase_set
+    if model_baseline.from_bus_map[to_bus] == swing_bus_id
+)
+
 print(f"\nObjective Comparison:")
 print(
-    f"  Baseline loss: {obj_baseline:.6f} p.u. ({obj_baseline * s_base / 1e3:.2f} kW)"
+    f"  Baseline substation power: {obj_baseline_substation:.6f} p.u. ({obj_baseline_substation * s_base / 1e6:.4f} MW)"
 )
-print(f"  Portfolio obj: {obj_portfolio:.6f} p.u.")
+print(
+    f"  Portfolio substation power: {obj_portfolio:.6f} p.u. ({obj_portfolio * s_base / 1e6:.4f} MW)"
+)
+print(
+    f"  Reduction: {(obj_baseline_substation - obj_portfolio):.6f} p.u. ({100 * (obj_baseline_substation - obj_portfolio) / max(obj_baseline_substation, 1e-9):.1f}%)"
+)
 
-print(f"\nDER Capacity Allocation (p.u.):")
+print(f"\nPV Capacity Allocation (p.u.):")
 total_installed = 0
 for r in resources:
     for z in zones.keys():
@@ -460,29 +730,61 @@ print(
     f"  Match: {abs(total_installed - T_DER) < 1e-5} (error: {abs(total_installed - T_DER):.2e})"
 )
 
-print(f"\nDER Dispatch (p.u.) -  first time step:")
+print(f"\nPV Dispatch (p.u.) - first time step:")
+t = list(model_portfolio.time_set)[0]
 for z in zones.keys():
     for r in resources:
-        t = list(model_portfolio.time_set)[0]
         p_zr_val = pyo.value(model_portfolio.p_zr[z, r, t])
         p_max_val = pyo.value(model_portfolio.p_max[z, r])
         bounds = f"[{(1 - c_max) * cf * p_max_val:.6f}, {cf * p_max_val:.6f}]"
         print(f"  p_zr[{z},{r},{t}] = {p_zr_val:.6f} p.u. (bounds: {bounds})")
+
+print(f"\nBattery Operation (existing systems) - first time step:")
+t = list(model_portfolio.time_set)[0]
+for bid in model_portfolio.bat_set:
+    p_ch = pyo.value(model_portfolio.p_charge[bid, t])
+    p_disch = pyo.value(model_portfolio.p_discharge[bid, t])
+    soc = pyo.value(model_portfolio.soc[bid, t])
+    energy_cap = pyo.value(model_portfolio.energy_capacity[bid])
+    print(
+        f"  Battery {bid}: charge={p_ch:.4f}, discharge={p_disch:.4f} p.u., SOC={soc:.4f}/{energy_cap:.4f} p.u."
+    )
+
+print(f"\nNew Battery Capacity Expansion (p.u.):")
+total_e_max = 0
+for z in zones.keys():
+    e_max_val = pyo.value(model_portfolio.e_max_new[z])
+    total_e_max += e_max_val
+    disch_val = pyo.value(model_portfolio.p_batt_new_disch[z, t])
+    ch_val = pyo.value(model_portfolio.p_batt_new_ch[z, t])
+    soc_val = pyo.value(model_portfolio.soc_new[z, t])
+    print(
+        f"  e_max_new[{z}] = {e_max_val:.6f} p.u. | disch={disch_val:.4f}, ch={ch_val:.4f}, SOC={soc_val:.4f}"
+    )
+print(f"  Total new BATT energy: {total_e_max:.6f} p.u. (target: {T_BATT:.6f})")
 
 # Check constraints
 print(f"\nConstraint Verification (first time step):")
 t = list(model_portfolio.time_set)[0]
 checks_pass = True
 
-# Capacity allocation
+# PV capacity allocation
 for r in resources:
     total = sum(pyo.value(model_portfolio.p_max[z, r]) for z in zones.keys())
     expected = T_DER * c[r]
     match = abs(total - expected) < 1e-5
     print(
-        f"  Capacity allocation [{r}]: {match} (total={total:.6f}, expect={expected:.6f})"
+        f"  PV capacity allocation [{r}]: {match} (total={total:.6f}, expect={expected:.6f})"
     )
     checks_pass = checks_pass and match
+
+# Battery capacity budget
+total_e = sum(pyo.value(model_portfolio.e_max_new[z]) for z in zones.keys())
+batt_match = abs(total_e - T_BATT) < 1e-5
+print(
+    f"  BATT capacity budget: {batt_match} (total={total_e:.6f}, expect={T_BATT:.6f})"
+)
+checks_pass = checks_pass and batt_match
 
 # Generation bounds
 for z in zones.keys():
@@ -498,7 +800,7 @@ for z in zones.keys():
 # Allocation normalization
 print(f"\nAllocation Factor Normalization:")
 for z in zones.keys():
-    for r in resources:
+    for r in resources + ["BATT"]:
         total_alpha = sum(alpha.get((z, n, r), 0.0) for n in zones[z])
         print(
             f"  ∑_n α[{z},{r}] = {total_alpha:.10f} (normalized: {abs(total_alpha - 1.0) < 1e-9})"
