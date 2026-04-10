@@ -255,8 +255,13 @@ def _create_v_swing_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         for phase in row.phases:
             if (row.id, phase) not in m.bus_phase_set:
                 continue
-            v_swing = getattr(row, f"v_{phase}", 1.0)
             for t in m.time_set:
+                v_swing = getattr(row, f"v_{phase}", 1.0)
+                schedule_col = f"v_{phase}"
+                if schedule_col in case.schedules.columns and t in case.schedules.index:
+                    schedule_value = case.schedules.at[t, schedule_col]
+                    if pd.notna(schedule_value):
+                        v_swing = float(schedule_value)
                 v_swing_data[(row.id, phase, t)] = v_swing
 
     # NOTE: v_swing stores *voltage magnitude* (per-unit), not squared voltage.
@@ -473,6 +478,29 @@ def _create_branch_thermal_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         )
 
 
+def _create_schedule_parameters(m: pyo.ConcreteModel, case: Case) -> None:
+    """Create a Pyomo parameter for each column in schedules.csv except 'time', indexed by m.time_set."""
+    if not hasattr(case, "schedules") or case.schedules is None:
+        return
+    schedules = case.schedules
+    for col in schedules.columns:
+        if col == "time":
+            continue
+        param_data = {
+            t: float(schedules.at[t, col]) for t in m.time_set if t in schedules.index
+        }
+        setattr(
+            m,
+            f"schedule_{col}",
+            pyo.Param(
+                m.time_set,
+                initialize=param_data,
+                default=0.0,
+                doc=f"Schedule parameter for {col} from schedules.csv",
+            ),
+        )
+
+
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     """
     Create all parameters for the Pyomo model including impedances, loads,
@@ -487,6 +515,7 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_v_limit_parameters(m, case)
     _create_battery_parameters(m, case)
     _create_branch_thermal_parameters(m, case)
+    _create_schedule_parameters(m, case)
 
 
 def create_lindist_model(

@@ -273,8 +273,13 @@ def _create_v_swing_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         for phase in row.phases:
             if (row.id, phase) not in m.bus_phase_set:
                 continue
-            v_swing = getattr(row, f"v_{phase}", 1.0)
             for t in m.time_set:
+                v_swing = getattr(row, f"v_{phase}", 1.0)
+                schedule_col = f"v_{phase}"
+                if schedule_col in case.schedules.columns and t in case.schedules.index:
+                    schedule_value = case.schedules.at[t, schedule_col]
+                    if pd.notna(schedule_value):
+                        v_swing = float(schedule_value)
                 v_swing_data[(row.id, phase, t)] = v_swing
 
     m.v_swing = pyo.Param(

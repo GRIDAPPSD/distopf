@@ -3,7 +3,7 @@ from copy import deepcopy
 import numpy as np
 import pandas as pd
 import warnings
-from distopf.spatial_decomposition.decompose import decompose
+from distopf.distributed.spatial.decompose import decompose
 from distopf.api import Case
 from distopf.results import PowerFlowResult
 from dataclasses import dataclass
@@ -376,8 +376,11 @@ def add_v_swing_to_schedules(schedules, v, receiving_area):
     v = v.loc[v.name == receiving_area, ["t", "a", "b", "c"]]
     v.index = v.t
     v = v.loc[:, ["a", "b", "c"]]
-    for t in v.index:
-        schedules.loc[schedules.time == t, ["v_a", "v_b", "v_c"]] = v.loc[t].to_numpy()
+    for t in v.index.unique():
+        v_t = v.loc[t]
+        if isinstance(v_t, pd.DataFrame):
+            v_t = v_t.iloc[0]
+        schedules.loc[schedules.time == t, ["v_a", "v_b", "v_c"]] = v_t.to_numpy()
     return schedules
 
 
@@ -385,11 +388,15 @@ def add_v_down_to_schedules(schedules, v, sending_area):
     v = deepcopy(v)
     v.index = v.t
     v = v.loc[:, ["a", "b", "c"]]
-    schedules.loc[:, [f"{sending_area}.{ph}.v" for ph in "abc"]] = v
-    for t in v.index:
+    for t in v.index.unique():
+        # Get the row(s) for this time step
+        v_t = v.loc[t]
+        # If multiple rows per time (shouldn't happen for boundary), take first
+        if isinstance(v_t, pd.DataFrame):
+            v_t = v_t.iloc[0]
         schedules.loc[
             schedules.time == t, [f"{sending_area}.{ph}.v" for ph in "abc"]
-        ] = v.loc[t].to_numpy()
+        ] = v_t.to_numpy()
     return schedules
 
 
@@ -399,15 +406,24 @@ def add_s_to_schedules(schedules, s, sending_area):
     s = s.loc[:, ["a", "b", "c"]]
     p_down = s.apply(np.real)
     q_down = s.apply(np.imag)
-    schedules.loc[:, [f"{sending_area}.{ph}.p" for ph in "abc"]] = p_down
-    schedules.loc[:, [f"{sending_area}.{ph}.q" for ph in "abc"]] = q_down
-    for t in s.index:
+    for t in s.index.unique():
+        # Get row(s) for this time step
+        s_t = s.loc[t]
+        p_t = p_down.loc[t]
+        q_t = q_down.loc[t]
+        # If DataFrames (multiple rows), take first
+        if isinstance(s_t, pd.DataFrame):
+            s_t = s_t.iloc[0]
+        if isinstance(p_t, pd.DataFrame):
+            p_t = p_t.iloc[0]
+        if isinstance(q_t, pd.DataFrame):
+            q_t = q_t.iloc[0]
         schedules.loc[
             schedules.time == t, [f"{sending_area}.{ph}.p" for ph in "abc"]
-        ] = np.array(p_down.loc[t])
+        ] = p_t.to_numpy()
         schedules.loc[
             schedules.time == t, [f"{sending_area}.{ph}.q" for ph in "abc"]
-        ] = np.array(q_down.loc[t])
+        ] = q_t.to_numpy()
     return schedules
 
 
@@ -438,7 +454,16 @@ def _solve(_models, _model_name, objective, kwargs, conn):
 
 def _solve_pool(_cases, _area_name, objective, kwargs):
     try:
-        return _cases[_area_name].run_opf(objective=objective, **kwargs)
+        result = _cases[_area_name].run_opf(objective=objective, **kwargs)
+        # Multiprocessing workers must return pickle-safe objects. Some
+        # backends (notably Pyomo) attach non-picklable solver/model objects
+        # to PowerFlowResult for diagnostics. They are not used by ENAPP
+        # boundary exchange, so strip them here before returning to parent.
+        if hasattr(result, "raw_result"):
+            result.raw_result = None
+        if hasattr(result, "model"):
+            result.model = None
+        return result
     except Exception as exc:
         return None
         # raise RuntimeError(f"ENAPP area solve failed for {_area_name}") from exc

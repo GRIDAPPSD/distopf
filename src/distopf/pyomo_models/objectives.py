@@ -108,6 +108,57 @@ def generation_curtailment_objective_rule(model: LindistModelProtocol):
     return total_curtailment
 
 
+def substation_cost_objective_rule(model: LindistModelProtocol):
+    """
+    Minimize total cost of buying energy from the transmission system by
+    using the schedule_price and substation load.
+    """
+    total_cost = 0
+    for _id, ph in model.branch_phase_set:
+        for t in model.time_set:
+            if model.from_bus_map[_id] in model.swing_bus_set:
+                total_cost += model.p_flow[_id, ph, t] * model.schedule_price[t]
+    return total_cost
+
+
+def demand_charge_objective_rule(model: LindistModelProtocol):
+    """
+    Minimize demand charge based on peak substation power.
+
+    Penalizes the maximum active power flow from the substation across all time steps.
+    This is a nonlinear objective due to the max() operation.
+
+    Parameters
+    ----------
+    model : LindistModelProtocol
+        Pyomo model
+
+    Returns
+    -------
+    Pyomo expression for demand charge based on peak substation power
+    """
+    if not hasattr(model, "demand_charge"):
+        return 0
+    peak_power = 0
+    for _id, ph in model.branch_phase_set:
+        for t in model.time_set:
+            if model.from_bus_map[_id] in model.swing_bus_set:
+                peak_power = pyo.maximize(peak_power, model.p_flow[_id, ph, t])
+    return peak_power * model.demand_charge
+
+
+# Combined energy and demand charge minimization objective
+def combined_energy_and_demand_charge_objective_rule(model: LindistModelProtocol):
+    """
+    Minimize total energy cost plus demand charge.
+
+    Returns
+    -------
+    Pyomo expression for total cost (energy + demand charge)
+    """
+    return substation_cost_objective_rule(model) + demand_charge_objective_rule(model)
+
+
 # ============ Penalty Functions for Soft Constraints ==================================
 # ======================================================================================
 #

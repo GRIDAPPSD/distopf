@@ -3,7 +3,7 @@ from copy import deepcopy
 import numpy as np
 import pandas as pd
 import warnings
-from distopf.spatial_decomposition.decompose import decompose
+from distopf.distributed.spatial.decompose import decompose
 from distopf.api import Case
 from distopf.results import PowerFlowResult
 from dataclasses import dataclass
@@ -438,7 +438,16 @@ def _solve(_models, _model_name, objective, kwargs, conn):
 
 def _solve_pool(_cases, _area_name, objective, kwargs):
     try:
-        return _cases[_area_name].run_opf(objective=objective, **kwargs)
+        result = _cases[_area_name].run_opf(objective=objective, **kwargs)
+        # Multiprocessing workers must return pickle-safe objects. Some
+        # backends (notably Pyomo) attach non-picklable solver/model objects
+        # to PowerFlowResult for diagnostics. They are not used by ENAPP
+        # boundary exchange, so strip them here before returning to parent.
+        if hasattr(result, "raw_result"):
+            result.raw_result = None
+        if hasattr(result, "model"):
+            result.model = None
+        return result
     except Exception as exc:
         return None
         # raise RuntimeError(f"ENAPP area solve failed for {_area_name}") from exc
@@ -763,102 +772,3 @@ def solve_enapp(
     }
 
     return aggregated_result
-
-
-# def main():
-#     base_path = Path("33bus")
-#     branch_data = pd.read_csv(base_path / "branch_data.csv")
-#     branch_data.drop(
-#         index=branch_data.loc[branch_data.status == "open"].index, inplace=True
-#     )
-#     bus_data = pd.read_csv(base_path / "bus_data2.csv")
-#     gen_data = pd.read_csv(base_path / "gen_data.csv")
-#     battery_data = pd.read_csv(base_path / "battery_data.csv")
-#     schedules = pd.read_csv(base_path / "schedules.csv")
-#     tou_rates = pd.read_csv(base_path / "tou_rates.csv")
-#     demand_charge = 12.96  # $/kW per month
-#     # start_time = 9
-#     # n_steps = 15
-#     start_time = 12
-#     n_steps = 1
-#     bus_data.v_max = 1.05
-#     bus_data.v_min = 0.95
-
-#     m = LinDistModelMP(
-#         branch_data=branch_data,
-#         bus_data=bus_data,
-#         gen_data=gen_data,
-#         bat_data=battery_data,
-#         schedules=schedules,
-#         start_step=start_time,
-#         n_steps=n_steps,
-#     )
-
-#     # plot_network(m).show()
-#     area_info_ = {
-#         "area1": {
-#             "up_areas": [],
-#             "down_areas": ["area2", "area3"],
-#             "up_buses": [1],
-#             "down_buses": [5, 19],
-#         },
-#         "area2": {
-#             "up_areas": ["area1"],
-#             "down_areas": [],
-#             "up_buses": [5],
-#             "down_buses": [],
-#         },
-#         "area3": {
-#             "up_areas": ["area1"],
-#             "down_areas": [],
-#             "up_buses": [19],
-#             "down_buses": [],
-#         },
-#     }
-
-#     sources = {
-#         "area1": 1,
-#         "area2": 5,
-#         "area3": 19,
-#     }
-
-#     # area_models = decompose(m, sources)
-#     result_c = cvxpy_solve(
-#         m,
-#         cost_min,
-#         solver=cp.CLARABEL,
-#         objective=cost_min,
-#         demand_charge=demand_charge,
-#         cost_curve=tou_rates.C.to_numpy(),
-#     )
-#     print(result_c.fun, " in ", result_c.runtime)
-#     result_enapp = solve_enapp(
-#         m,
-#         area_info_,
-#         tol=1e-6,
-#         solver=cp.CLARABEL,
-#         objective=cost_min,
-#         demand_charge=demand_charge,
-#         cost_curve=tou_rates.C.to_numpy(),
-#     )
-#     print(result_enapp.fun)
-
-#     def at_time(df: pd.DataFrame, t):
-#         names = [name for name in df.columns if name != "t"]
-#         _df = deepcopy(df.loc[df.t == t, names])
-#         return _df
-
-#     # v_d = at_time(m.get_voltages(result_enapp.x), 12)
-#     # v_c = at_time(m.get_voltages(result_c.x), 12)
-#     # compare_voltages(v_c, v_d).show()
-#     # v_d = at_time(m.get_voltages(result_enapp.x), 13)
-#     # v_c = at_time(m.get_voltages(result_c.x), 13)
-#     # compare_voltages(v_c, v_d).show()
-#     np.savetxt("copf33x.csv", result_c.x)
-#     np.savetxt("dopf33x.csv", result_enapp.x)
-#     px.scatter(result_c.x - result_enapp.x).show()
-#     print()
-
-
-# if __name__ == "__main__":
-#     main()

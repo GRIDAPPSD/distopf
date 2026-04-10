@@ -79,6 +79,40 @@ def nodes_to_df(graph, key):
     return df
 
 
+def _ensure_schedule_horizon(schedules: pd.DataFrame, case_ref: Case) -> pd.DataFrame:
+    """Ensure decomposed cases always have rows for the active time horizon."""
+    active_times = list(
+        range(case_ref.start_step, case_ref.start_step + case_ref.n_steps)
+    )
+    if len(active_times) == 0:
+        return schedules
+
+    if schedules is None or schedules.empty:
+        schedules = pd.DataFrame({"time": active_times})
+    else:
+        schedules = schedules.copy()
+        if "time" not in schedules.columns:
+            schedules["time"] = schedules.index
+
+    schedules = schedules.drop_duplicates(subset="time", keep="last")
+    schedules = schedules.sort_values(by="time", ignore_index=True)
+    schedules.index = schedules.time.to_numpy()
+
+    missing_times = [t for t in active_times if t not in schedules.index]
+    if missing_times:
+        missing_df = pd.DataFrame({"time": missing_times})
+        missing_df.index = missing_df.time.to_numpy()
+        schedules = pd.concat([schedules, missing_df], ignore_index=False, sort=False)
+        schedules = schedules.sort_index()
+        schedules = schedules.sort_values(by="time", ignore_index=True)
+        schedules.index = schedules.time.to_numpy()
+
+    # Filter to ONLY active time steps (not just ensure they exist)
+    schedules = schedules.loc[schedules["time"].isin(active_times)]
+    schedules.index = schedules.time.to_numpy()
+    return schedules
+
+
 def graph_to_case(graph, case_ref, remap_ids=False):
     branch_data = edges_to_df(graph, "branch_data")
     bus_data = nodes_to_df(graph, "bus_data")
@@ -86,7 +120,8 @@ def graph_to_case(graph, case_ref, remap_ids=False):
     bat_data = nodes_to_df(graph, "bat_data")
     cap_data = nodes_to_df(graph, "cap_data")
     reg_data = edges_to_df(graph, "reg_data")
-    schedules = deepcopy(case_ref.schedules)
+    schedules = _ensure_schedule_horizon(deepcopy(case_ref.schedules), case_ref)
+    original_load_shapes = set(case_ref.bus_data.load_shape.astype(str).to_list())
     if remap_ids:
         sources = bus_data.loc[bus_data.bus_type == "SWING", "name"].to_list()
         assert len(sources) == 1
@@ -100,8 +135,10 @@ def graph_to_case(graph, case_ref, remap_ids=False):
         branch_data["tb"] = branch_data.to_name.map(id_map)
         reg_data["fb"] = reg_data.from_name.map(id_map)
         reg_data["tb"] = reg_data.to_name.map(id_map)
-    for load_shape in bus_data.load_shape.to_list():
-        if load_shape not in schedules.columns and load_shape != "":
+    for load_shape in bus_data.load_shape.astype(str).to_list():
+        if load_shape == "" or load_shape in original_load_shapes:
+            continue
+        if load_shape not in schedules.columns:
             schedules[f"{load_shape}.a.p"] = 0.0
             schedules[f"{load_shape}.b.p"] = 0.0
             schedules[f"{load_shape}.c.p"] = 0.0

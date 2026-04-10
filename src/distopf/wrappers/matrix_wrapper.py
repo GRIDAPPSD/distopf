@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 import numpy as np
 from typing import TYPE_CHECKING, Any, Optional, Union, Callable
 from distopf.wrappers.base import Wrapper
@@ -253,10 +254,11 @@ class MatrixWrapper(Wrapper):
                 control_capacitors=control_capacitors,
                 **case_kwargs,
             )
-
+        tic = perf_counter()
         # Solve
         self.result = auto_solve(self.model, objective, **kwargs)
-
+        toc = perf_counter()
+        solve_time = toc - tic
         if raw_result:
             return self.result
 
@@ -311,6 +313,7 @@ class MatrixWrapper(Wrapper):
             raw_result=self.result,
             model=self.model,
             case=self.case,
+            solve_time=solve_time,
         )
 
     def _infer_control_variable(self) -> str:
