@@ -37,7 +37,16 @@ class PyoResult:
             if isinstance(getattr(model, att), pyo.Var)
         ]
         for var in vars:
-            setattr(self, var, get_values(getattr(model, var)))
+            try:
+                setattr(self, var, get_values(getattr(model, var)))
+            except KeyError:
+                setattr(
+                    self,
+                    var,
+                    pd.DataFrame(
+                        data=[[*k, v] for k, v in getattr(model, var).extract_values().items()]
+                    ),
+                )
 
         # Enrich flow variables with branch columns (fb, from_name)
         # and rename id→tb, name→to_name to match the standard branch format

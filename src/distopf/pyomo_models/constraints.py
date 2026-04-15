@@ -22,15 +22,14 @@ def add_p_flow_constraints(m: LindistModelProtocol) -> None:
 
     def p_balance_rule(m: LindistModelProtocol, _id, ph, t):
         load = m.p_load[_id, ph, t]
-        generation = m.p_gen[_id, ph, t] if (_id, ph, t) in m.p_gen else 0
-        p_bat = m.p_bat[_id, ph, t] if (_id, ph, t) in m.p_bat else 0
-        incoming_flow = m.p_flow[_id, ph, t]
+        gen = m.p_gen[_id, ph, t] if (_id, ph, t) in m.p_gen else 0
+        bat = m.p_bat[_id, ph, t] if (_id, ph, t) in m.p_bat else 0
         outgoing_flows = sum(
             m.p_flow[to_bus, ph, t]
             for to_bus in m.to_bus_map[_id]
             if (to_bus, ph) in m.branch_phase_set
         )
-        return incoming_flow == outgoing_flows + load - generation - p_bat
+        return m.p_flow[_id, ph, t] == outgoing_flows + load - gen - bat
 
     m.power_balance_p = pyo.Constraint(
         m.branch_phase_set, m.time_set, rule=p_balance_rule

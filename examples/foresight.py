@@ -166,7 +166,6 @@ def obj_rule(m):
 # Create and set the objective
 model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
 
-# Solve with IPOPT
 solver = pyo.SolverFactory("highs")
 result = solver.solve(model, tee=False)
 

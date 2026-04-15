@@ -73,6 +73,13 @@ def _create_rx_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     m.x = pyo.Param(m.branch_set, m.phase_pair_set, initialize=x_data, default=0.0)
 
 
+
+def _create_bus_parameters(m: pyo.ConcreteModel, case: Case):
+    phases = {}
+    for _, row in case.bus_data.iterrows():
+        phases[row.id] = row.phases
+    m.bus_phases = pyo.Param(m.bus_set, initialize=phases)
+
 def _create_load_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     load_p_data, load_q_data = {}, {}
     cvr_p_data, cvr_q_data = {}, {}
@@ -292,7 +299,6 @@ def _create_v_limit_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         doc="Maximum voltage magnitude squared",
     )
 
-
 def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     p_bat_data, q_bat_data = {}, {}
     s_rated_data, q_bat_min_data, q_bat_max_data = {}, {}, {}
@@ -461,7 +467,7 @@ def _create_branch_thermal_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             col = f"s{phase}_max"
             if col in case.branch_data.columns:
                 val = getattr(row, col, None)
-                if val is not None and not pd.isna(val):
+                if val is not None and not pd.isna(val) and (row.tb, phase) in m.branch_phase_set:
                     s_max_data[(row.tb, phase)] = val
 
     if s_max_data:
@@ -479,6 +485,7 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     generators, capacitors, regulator ratios, and swing bus voltages.
     """
     _create_rx_parameters(m, case)
+    _create_bus_parameters(m, case)
     _create_load_parameters(m, case)
     _create_generator_parameters(m, case)
     _create_capacitor_parameters(m, case)
