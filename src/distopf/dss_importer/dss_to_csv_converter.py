@@ -42,6 +42,7 @@ class DSSToCSVConverter:
         self.cvr_p = cvr_p
         self.cvr_q = cvr_q
         self.bus_names = self.get_bus_names()
+        self.secondary_buses = self._build_secondary_buses()
         # get dataframes and results
         self.branch_data = self.get_branch_data()
         self.bus_data = self.get_bus_data()
@@ -54,6 +55,7 @@ class DSSToCSVConverter:
     def update(self) -> None:
         self.dss.Solution.Solve()
         self.bus_names = self.get_bus_names()
+        self.secondary_buses = self._build_secondary_buses()
         # get dataframes and results
         self.branch_data = self.get_branch_data()
         self.bus_data = self.get_bus_data()
@@ -180,6 +182,130 @@ class DSSToCSVConverter:
             "[1, 2, 3, 4]": "abc",  # excluding 4th node
         }
         return num_phase_mapper
+
+    # -------------------- triplex / center-tap detection --------------------
+
+    @staticmethod
+    def _split_bus_spec(spec: str) -> tuple[str, list[int]]:
+        """Parse an OpenDSS bus specification into name and node list.
+
+        Examples:
+            'secbus.1.0' -> ('secbus', [1, 0])
+            'pribus.1'   -> ('pribus', [1])
+            'sourcebus'  -> ('sourcebus', [])
+        """
+        parts = spec.split(".")
+        name = parts[0]
+        nodes = [int(p) for p in parts[1:]] if len(parts) > 1 else []
+        return name, nodes
+
+    @staticmethod
+    def _is_split_phase_pattern(nodes_a: list[int], nodes_b: list[int]) -> bool:
+        """Return True if two node lists represent a center-tap split-phase pattern.
+
+        The canonical center-tap pattern is one winding on nodes [1, 0] (s1 to
+        neutral) paired with another on [0, 2] (neutral to s2), in either order.
+        """
+        a, b = sorted(nodes_a), sorted(nodes_b)
+        return (a == [0, 1] and b == [0, 2]) or (a == [0, 2] and b == [0, 1])
+
+    def _identify_center_tap_transformers(self) -> dict[str, dict]:
+        """Find all center-tap (split-phase) transformers in the circuit.
+
+        A center-tap transformer is identified as a 3-winding transformer where
+        windings 2 and 3 share the same bus name but have complementary
+        split-phase node patterns (.1.0 paired with .0.2).
+
+        Returns:
+            dict keyed by transformer name, each value a dict with:
+                'primary_bus':   str  — bus name on winding 1
+                'secondary_bus': str  — shared bus name on windings 2 & 3
+                'primary_phase': str  — 'a', 'b', or 'c'
+        """
+        center_taps = {}
+        flag = self.dss.Transformers.First()
+        while flag:
+            if self.dss.Transformers.NumWindings() == 3:
+                bus_specs = self.dss.CktElement.BusNames()
+                bus1_name, bus1_nodes = self._split_bus_spec(bus_specs[0])
+                bus2_name, bus2_nodes = self._split_bus_spec(bus_specs[1])
+                bus3_name, bus3_nodes = self._split_bus_spec(bus_specs[2])
+
+                if bus2_name == bus3_name and self._is_split_phase_pattern(
+                    bus2_nodes, bus3_nodes
+                ):
+                    # Determine primary phase from winding-1 non-zero node
+                    primary_nodes = [n for n in bus1_nodes if n != 0]
+                    if primary_nodes:
+                        primary_phase = "abc"[primary_nodes[0] - 1]
+                    else:
+                        # Fallback: single-phase with no explicit node → assume 'a'
+                        primary_phase = "a"
+
+                    center_taps[self.dss.Transformers.Name()] = {
+                        "primary_bus": bus1_name,
+                        "secondary_bus": bus2_name,
+                        "primary_phase": primary_phase,
+                    }
+            flag = self.dss.Transformers.Next()
+        return center_taps
+
+    def _build_secondary_buses(self) -> dict[str, dict]:
+        """Walk the network downstream of every center-tap transformer and mark
+        all reachable buses as secondary.
+
+        Returns:
+            dict mapping bus_name -> {'primary_phase': str} for every bus on
+            the secondary (triplex) side of a center-tap transformer.
+            Primary-side buses are never included.
+        """
+        center_taps = self._identify_center_tap_transformers()
+        if not center_taps:
+            return {}
+
+        # Build full network graph (mirrors get_bus_names logic)
+        flag = self.dss.PDElements.First()
+        edges = []
+        while flag:
+            element_type = self.dss.CktElement.Name().lower().split(".")[0]
+            if element_type in ("line", "transformer", "reactor"):
+                if element_type == "line" and self.dss.Lines.IsSwitch():
+                    if self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(
+                        2, 1
+                    ):
+                        flag = self.dss.PDElements.Next()
+                        continue
+                b1 = self.dss.CktElement.BusNames()[0].split(".")[0]
+                b2 = self.dss.CktElement.BusNames()[1].split(".")[0]
+                edges.append((b1, b2))
+            flag = self.dss.PDElements.Next()
+
+        g = nx.Graph()
+        g.add_edges_from(edges)
+
+        # Remove every center-tap transformer edge so that the secondary
+        # side becomes a disconnected component.
+        for info in center_taps.values():
+            pri = info["primary_bus"]
+            sec = info["secondary_bus"]
+            if g.has_edge(pri, sec):
+                g.remove_edge(pri, sec)
+
+        # Every bus reachable from a center-tap's secondary bus (in the
+        # pruned graph) is a secondary bus with the same primary_phase.
+        secondary_buses: dict[str, dict] = {}
+        for info in center_taps.values():
+            sec_bus = info["secondary_bus"]
+            primary_phase = info["primary_phase"]
+            if sec_bus not in g:
+                continue
+            reachable = nx.node_connected_component(g, sec_bus)
+            for bus in reachable:
+                # Only include buses that are in the known bus list
+                if bus in self.bus_names_to_index_map:
+                    secondary_buses[bus] = {"primary_phase": primary_phase}
+
+        return secondary_buses
 
     def get_v_solved(self) -> pd.DataFrame:
         va = pd.DataFrame(
