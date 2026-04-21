@@ -795,6 +795,13 @@ class DSSToCSVConverter:
             xbb=x_matrix[1, 1] / z_base,
             xbc=x_matrix[1, 2] / z_base,
             xcc=x_matrix[2, 2] / z_base,
+            r_s1s1=np.nan,
+            r_s1s2=np.nan,
+            r_s2s2=np.nan,
+            x_s1s1=np.nan,
+            x_s1s2=np.nan,
+            x_s2s2=np.nan,
+            primary_phase="",
             type=element_type,
             name=element_name,
             status=switch_status,
@@ -810,6 +817,13 @@ class DSSToCSVConverter:
             element_type = self.dss.CktElement.Name().lower().split(".")[0]
             element_name = self.dss.CktElement.Name().lower().split(".")[1]
             element_name = self.dss.Lines.Name()
+
+            # Skip triplex lines — handled by append_triplex_lines
+            bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
+            bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
+            if bus1 in self.secondary_buses or bus2 in self.secondary_buses:
+                continue
+
             r_matrix, x_matrix = self._get_line_zmatrix()
 
             if self.dss.Lines.IsSwitch():
@@ -833,11 +847,100 @@ class DSSToCSVConverter:
                 )
             )
 
+    def append_triplex_lines(self, line_data):
+        """Build branch rows for triplex (secondary) service drop lines.
+
+        A triplex line is any line where at least one endpoint is a secondary
+        bus. The 2x2 impedance matrix is stored in r_s1s1/r_s1s2/r_s2s2 and
+        x_s1s1/x_s1s2/x_s2s2 columns; the 3x3 ABC columns are set to NaN.
+        """
+        for line in self.dss.Lines:
+            bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
+            bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
+            if bus1 not in self.secondary_buses and bus2 not in self.secondary_buses:
+                continue
+
+            element_name = self.dss.Lines.Name()
+
+            switch_status = None
+            if self.dss.Lines.IsSwitch():
+                switch_status = (
+                    "OPEN"
+                    if (
+                        self.dss.CktElement.IsOpen(1, 1)
+                        or self.dss.CktElement.IsOpen(2, 1)
+                    )
+                    else "CLOSED"
+                )
+
+            # Determine bus ordering (fb < tb)
+            fb = self.bus_names_to_index_map[bus1]
+            tb = self.bus_names_to_index_map[bus2]
+            from_name, to_name = bus1, bus2
+            if fb > tb:
+                fb, tb = tb, fb
+                from_name, to_name = to_name, from_name
+
+            # Secondary-side base quantities
+            self.dss.Circuit.SetActiveBus(to_name)
+            base_kv_ln = self.dss.Bus.kVBase()
+            z_base = (base_kv_ln * 1000) ** 2 / self.s_base
+
+            # Extract raw 2x2 R and X matrices from OpenDSS, scaled by length
+            length = self.dss.Lines.Length()
+            r_raw = np.array(self.dss.Lines.RMatrix()) * length
+            x_raw = np.array(self.dss.Lines.XMatrix()) * length
+
+            # For nphases=2, RMatrix/XMatrix return 4 elements (2x2 row-major)
+            r2 = r_raw.reshape(2, 2)
+            x2 = x_raw.reshape(2, 2)
+
+            # Look up primary_phase from either endpoint
+            sec_bus = bus1 if bus1 in self.secondary_buses else bus2
+            primary_phase = self.secondary_buses[sec_bus]["primary_phase"]
+
+            row = dict(
+                fb=fb,
+                tb=tb,
+                from_name=from_name,
+                to_name=to_name,
+                raa=np.nan,
+                rab=np.nan,
+                rac=np.nan,
+                rbb=np.nan,
+                rbc=np.nan,
+                rcc=np.nan,
+                xaa=np.nan,
+                xab=np.nan,
+                xac=np.nan,
+                xbb=np.nan,
+                xbc=np.nan,
+                xcc=np.nan,
+                r_s1s1=r2[0, 0] / z_base,
+                r_s1s2=r2[0, 1] / z_base,
+                r_s2s2=r2[1, 1] / z_base,
+                x_s1s1=x2[0, 0] / z_base,
+                x_s1s2=x2[0, 1] / z_base,
+                x_s2s2=x2[1, 1] / z_base,
+                primary_phase=primary_phase,
+                type="triplex_line",
+                name=element_name,
+                status=switch_status,
+                s_base=self.s_base,
+                v_ln_base=base_kv_ln * 1000,
+                z_base=z_base,
+                phases="s1s2",
+            )
+            line_data.append(row)
+
     def append_transformers(self, line_data):
+        center_tap_names = set(self._identify_center_tap_transformers().keys())
         for transformer in self.dss.Transformers:
+            element_name = self.dss.CktElement.Name().lower().split(".")[1]
+            if element_name in center_tap_names:
+                continue
             switch_status = None
             element_type = self.dss.CktElement.Name().lower().split(".")[0]
-            element_name = self.dss.CktElement.Name().lower().split(".")[1]
             r_matrix, x_matrix = self._get_transformer_zmatrix()
             switch_status = (
                 "OPEN"
@@ -855,6 +958,114 @@ class DSSToCSVConverter:
                     switch_status=switch_status,
                 )
             )
+
+    def append_center_tap_transformers(self, line_data):
+        """Build branch rows for center-tap (split-phase) service transformers.
+
+        Each center-tap transformer becomes one row with type='center_tap_xfmr',
+        the secondary-side 2x2 impedance in r_s1s1/r_s1s2/r_s2s2/x_s1s1/x_s1s2/x_s2s2,
+        and primary_phase set from the detection logic.
+        """
+        center_taps = self._identify_center_tap_transformers()
+        if not center_taps:
+            return
+
+        for xfmr_name, info in center_taps.items():
+            # Activate the transformer
+            self.dss.Transformers.Name(xfmr_name)
+
+            primary_bus = info["primary_bus"]
+            secondary_bus = info["secondary_bus"]
+            primary_phase = info["primary_phase"]
+
+            fb = self.bus_names_to_index_map[primary_bus]
+            tb = self.bus_names_to_index_map[secondary_bus]
+            from_name, to_name = primary_bus, secondary_bus
+            if fb > tb:
+                fb, tb = tb, fb
+                from_name, to_name = to_name, from_name
+
+            # Secondary-side base quantities
+            self.dss.Circuit.SetActiveBus(secondary_bus)
+            base_kv_ln = self.dss.Bus.kVBase()  # 0.12 kV for 120 V leg
+            z_base = (base_kv_ln * 1000) ** 2 / self.s_base
+
+            # Extract per-winding impedances referred to secondary
+            # xhl = leakage reactance winding 1-2, xht = 1-3, xlt = 2-3 (all in %)
+            xhl = self.dss.Transformers.Xhl() / 100
+            xht = self.dss.Transformers.Xht() / 100
+            xlt = self.dss.Transformers.Xlt() / 100
+
+            # Per-winding resistances (% on winding kVA base)
+            self.dss.Transformers.Wdg(2)
+            kva_sec = self.dss.Transformers.kVA()
+            kv_sec = self.dss.Transformers.kV()
+            r2_pct = self.dss.Transformers.R()
+
+            self.dss.Transformers.Wdg(3)
+            r3_pct = self.dss.Transformers.R()
+
+            # Convert to ohms on secondary base
+            z_base_xfmr = (kv_sec * 1000) ** 2 / (kva_sec * 1000)
+
+            # Star-circuit reactances from pair-wise leakage values:
+            #   x1 = 0.5*(xhl + xht - xlt)  (primary winding)
+            #   x2 = 0.5*(xhl + xlt - xht)  (secondary winding 2)
+            #   x3 = 0.5*(xht + xlt - xhl)  (secondary winding 3)
+            x2 = 0.5 * (xhl + xlt - xht) * z_base_xfmr
+            x3 = 0.5 * (xht + xlt - xhl) * z_base_xfmr
+            r2 = r2_pct / 100 * z_base_xfmr
+            r3 = r3_pct / 100 * z_base_xfmr
+
+            # Build 2x2 secondary impedance matrix (diagonal, no mutual coupling)
+            r_s1s1 = r2 / z_base
+            r_s2s2 = r3 / z_base
+            r_s1s2 = 0
+            x_s1s1 = x2 / z_base
+            x_s2s2 = x3 / z_base
+            x_s1s2 = 0
+
+            switch_status = (
+                "OPEN"
+                if (
+                    self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(2, 1)
+                )
+                else "CLOSED"
+            )
+
+            row = dict(
+                fb=fb,
+                tb=tb,
+                from_name=from_name,
+                to_name=to_name,
+                raa=np.nan,
+                rab=np.nan,
+                rac=np.nan,
+                rbb=np.nan,
+                rbc=np.nan,
+                rcc=np.nan,
+                xaa=np.nan,
+                xab=np.nan,
+                xac=np.nan,
+                xbb=np.nan,
+                xbc=np.nan,
+                xcc=np.nan,
+                r_s1s1=r_s1s1,
+                r_s1s2=r_s1s2,
+                r_s2s2=r_s2s2,
+                x_s1s1=x_s1s1,
+                x_s1s2=x_s1s2,
+                x_s2s2=x_s2s2,
+                primary_phase=primary_phase,
+                type="center_tap_xfmr",
+                name=xfmr_name,
+                status=switch_status,
+                s_base=self.s_base,
+                v_ln_base=base_kv_ln * 1000,
+                z_base=z_base,
+                phases="s1s2",
+            )
+            line_data.append(row)
 
     def append_reactors(self, line_data):
         for reactor in self.dss.Reactors:
@@ -882,7 +1093,9 @@ class DSSToCSVConverter:
     def get_branch_data(self) -> pd.DataFrame:
         line_data = []
         self.append_lines(line_data)
+        self.append_triplex_lines(line_data)
         self.append_transformers(line_data)
+        self.append_center_tap_transformers(line_data)
         self.append_reactors(line_data)
 
         # combine lines between identical buses.
@@ -907,6 +1120,13 @@ class DSSToCSVConverter:
                     "xbb": "sum",
                     "xbc": "sum",
                     "xcc": "sum",
+                    "r_s1s1": "sum",  # <-- NEW
+                    "r_s1s2": "sum",
+                    "r_s2s2": "sum",
+                    "x_s1s1": "sum",
+                    "x_s1s2": "sum",
+                    "x_s2s2": "sum",
+                    "primary_phase": "first",
                     "type": "first",
                     "name": "sum",
                     "status": "first",
@@ -1417,9 +1637,11 @@ class DSSToCSVConverter:
                 nodes = [int(n) for n in connected_phase_secondary if n != "0"]
                 node_to_leg = {1: "s1", 2: "s2"}
                 if sorted(nodes) == [1, 2]:
-                    # 240 V line-to-line load across both legs
-                    each_load["pl_s1s2"] = p_values[0] * 1000 / s_base
-                    each_load["ql_s1s2"] = q_values[0] * 1000 / s_base
+                    # 240 V line-to-line load across both legs.
+                    # OpenDSS reports one power entry per conductor (node),
+                    # so sum both to get the total load on the s1-s2 leg.
+                    each_load["pl_s1s2"] = p_values[:2].sum() * 1000 / s_base
+                    each_load["ql_s1s2"] = q_values[:2].sum() * 1000 / s_base
                 elif len(nodes) == 1 and nodes[0] in node_to_leg:
                     # 120 V line-to-neutral load on one leg
                     leg = node_to_leg[nodes[0]]
