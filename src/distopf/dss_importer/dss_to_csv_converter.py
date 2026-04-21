@@ -307,6 +307,20 @@ class DSSToCSVConverter:
 
         return secondary_buses
 
+    def _phases_for_bus(self, bus_name: str) -> str:
+        """Return the phase string for a bus, mapping secondary buses to s1/s2.
+
+        Assumes self.dss.Circuit.SetActiveBus(bus_name) has been called or
+        will be called internally.
+        """
+        if bus_name in self.secondary_buses:
+            self.dss.Circuit.SetActiveBus(bus_name)
+            nodes = [n for n in self.dss.Bus.Nodes() if n != 0]
+            node_to_leg = {1: "s1", 2: "s2"}
+            legs = [node_to_leg[n] for n in sorted(nodes) if n in node_to_leg]
+            return "".join(legs) if legs else "s1s2"
+        return self.num_phase_map[str(self.dss.Bus.Nodes())]
+
     def get_v_solved(self) -> pd.DataFrame:
         va = pd.DataFrame(
             {
@@ -957,9 +971,10 @@ class DSSToCSVConverter:
                 v_max=v_max,  # maximum p.u. voltage for the bus
                 # cvr_p=cvr_p,  # conservative voltage reduction parameter for active power
                 # cvr_q=cvr_q,  # conservative voltage reduction parameter for reactive power
-                phases=self.num_phase_map[
-                    str(self.dss.Bus.Nodes())
-                ],  # bus phases a,b,c
+                phases=self._phases_for_bus(active_bus_name),
+                primary_phase=self.secondary_buses.get(active_bus_name, {}).get(
+                    "primary_phase", ""
+                ),
                 has_gen=(
                     True if active_bus_name in self.gen_buses else False
                 ),  # if the bus has a generator or not
@@ -976,11 +991,11 @@ class DSSToCSVConverter:
             )  # longitude of the bus location (X)
             bus_data.append(each_bus)
         bus_df = pd.DataFrame(bus_data)
-        bus_df = (
-            pd.merge(load_df, bus_df, on=["id"], how="outer")
-            .sort_values(by="id", ignore_index=True)
-            .fillna(0)
+        bus_df = pd.merge(load_df, bus_df, on=["id"], how="outer").sort_values(
+            by="id", ignore_index=True
         )
+        bus_df["primary_phase"] = bus_df["primary_phase"].fillna("")
+        bus_df = bus_df.fillna(0)
         return bus_df
 
     def get_gen_data(self) -> pd.DataFrame:
@@ -1327,7 +1342,23 @@ class DSSToCSVConverter:
         """
         s_base = self.s_base
         load_df = pd.DataFrame(
-            [], columns=["id", "name", "pl_a", "ql_a", "pl_b", "ql_b", "pl_c", "ql_c"]
+            [],
+            columns=[
+                "id",
+                "name",
+                "pl_a",
+                "ql_a",
+                "pl_b",
+                "ql_b",
+                "pl_c",
+                "ql_c",
+                "pl_s1",
+                "ql_s1",
+                "pl_s2",
+                "ql_s2",
+                "pl_s1s2",
+                "ql_s1s2",
+            ],
         )
         loads_flag = self.dss.Loads.First()
         load_data = []
@@ -1344,7 +1375,7 @@ class DSSToCSVConverter:
             if len(connected_buses) > 1:
                 raise Exception("Multiple connected buses")
             model = self.dss.Loads.Model()
-            cvr_p, cvr_q = model_to_cvr_map.get(model, 0)
+            cvr_p, cvr_q = model_to_cvr_map.get(model, (0, 0))
             if model == 4:  # exponential model
                 cvr_p = self.dss.Loads.CVRwatts()
                 cvr_q = self.dss.Loads.CVRvars()
@@ -1362,6 +1393,12 @@ class DSSToCSVConverter:
                 "ql_b": 0,
                 "pl_c": 0,
                 "ql_c": 0,
+                "pl_s1": 0,
+                "ql_s1": 0,
+                "pl_s2": 0,
+                "ql_s2": 0,
+                "pl_s1s2": 0,
+                "ql_s1s2": 0,
                 "cvr_p": cvr_p,
                 "cvr_q": cvr_q,
             }
@@ -1371,27 +1408,34 @@ class DSSToCSVConverter:
 
             # conductor power contains info on active and reactive power
             conductor_power = np.array(self.dss.CktElement.Powers())
-            # nonzero_power_indices = np.where(conductor_power != 0)[0]
-            # nonzero_power = conductor_power[nonzero_power_indices]
-            # Extract P and Q values (every alternate elements)
-            # a1 = np.exp(-1 / 6 * 1j * np.pi)
-            # a2 = np.exp(-5 / 6 * 1j * np.pi)
             p_values = conductor_power[::2]
             q_values = conductor_power[1::2]
-            phases = "abc"
-            # n_phases = self.dss.Loads.Phases()
-            # pf = self.dss.Loads.PF()
-            # kw = self.dss.Loads.kW()
-            # kv = self.dss.Loads.kV()
-            # kvar = self.dss.Loads.kvar()
-            # is_delta = self.dss.Loads.IsDelta()
-            if len(connected_phase_secondary) > 0:
-                phases = "".join("abc"[int(n) - 1] for n in connected_phase_secondary)
-            # if len(phases) != n_phases:
-            #     raise Exception("Number of load phases does not match with bus phases")
-            for phase_index, ph in enumerate(phases):
-                each_load[f"pl_{ph}"] = p_values[phase_index] * 1000 / s_base
-                each_load[f"ql_{ph}"] = q_values[phase_index] * 1000 / s_base
+
+            if bus_name in self.secondary_buses:
+                # ---- Secondary (triplex) load ----
+                # Filter out neutral node 0, map remaining to s1/s2
+                nodes = [int(n) for n in connected_phase_secondary if n != "0"]
+                node_to_leg = {1: "s1", 2: "s2"}
+                if sorted(nodes) == [1, 2]:
+                    # 240 V line-to-line load across both legs
+                    each_load["pl_s1s2"] = p_values[0] * 1000 / s_base
+                    each_load["ql_s1s2"] = q_values[0] * 1000 / s_base
+                elif len(nodes) == 1 and nodes[0] in node_to_leg:
+                    # 120 V line-to-neutral load on one leg
+                    leg = node_to_leg[nodes[0]]
+                    each_load[f"pl_{leg}"] = p_values[0] * 1000 / s_base
+                    each_load[f"ql_{leg}"] = q_values[0] * 1000 / s_base
+            else:
+                # ---- Primary load (existing logic) ----
+                phases = "abc"
+                if len(connected_phase_secondary) > 0:
+                    phases = "".join(
+                        "abc"[int(n) - 1] for n in connected_phase_secondary
+                    )
+                for phase_index, ph in enumerate(phases):
+                    each_load[f"pl_{ph}"] = p_values[phase_index] * 1000 / s_base
+                    each_load[f"ql_{ph}"] = q_values[phase_index] * 1000 / s_base
+
             load_data.append(each_load)
             loads_flag = self.dss.Loads.Next()
         load_df = pd.DataFrame(load_data)
@@ -1404,6 +1448,12 @@ class DSSToCSVConverter:
                 "ql_b": "sum",
                 "pl_c": "sum",
                 "ql_c": "sum",
+                "pl_s1": "sum",
+                "ql_s1": "sum",
+                "pl_s2": "sum",
+                "ql_s2": "sum",
+                "pl_s1s2": "sum",
+                "ql_s1s2": "sum",
                 "cvr_p": "sum",
                 "cvr_q": "sum",
             }
