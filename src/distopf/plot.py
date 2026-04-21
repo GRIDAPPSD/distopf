@@ -941,6 +941,7 @@ def plot_network(
     -------
     fig: plotly.graph_objects.Figure
     """
+    _t = t
     _v = None
     _s = None
     if s is not None:
@@ -981,6 +982,8 @@ def plot_network(
     gen_data = case.gen_data.copy()
     cap_data = case.cap_data.copy()
     schedules = case.schedules.copy()
+    if _t is None and hasattr(schedules, "index") and len(schedules.index) > 0:
+        _t = schedules.index.min()
 
     node_size = 10
     edge_scale = 10
@@ -1039,9 +1042,11 @@ def plot_network(
 def _displace_overlapping_nodes(bus_data, branch_data, displacement_scale=0.03):
     """Displace downstream nodes that overlap their upstream parent."""
     active = branch_data.loc[branch_data.status != "OPEN"]
-    children_map = active.groupby(active.fb.astype(int))["tb"].apply(
-        lambda s: s.astype(int).tolist()
-    ).to_dict()
+    children_map = (
+        active.groupby(active.fb.astype(int))["tb"]
+        .apply(lambda s: s.astype(int).tolist())
+        .to_dict()
+    )
     parent_map = active[["fb", "tb"]].astype(int).set_index("tb")["fb"].to_dict()
 
     xy = bus_data[["x", "y"]].to_numpy()
@@ -1094,17 +1099,19 @@ def _process_bus_data(bus_data, _v, phase_list):
     if bus_data.y.abs().max() > 0:
         bus_data.y = bus_data.y / bus_data.y.abs().max()
     if _v is not None:
-        _v.index = _v.id - 1
-        bus_data.v_a = _v.a
-        bus_data.v_b = _v.b
-        bus_data.v_c = _v.c
-        bus_data.color = _v[phase_list].mean(axis=1)
+        # Merge voltage data by bus id
+        v_merged = bus_data[["id"]].merge(
+            _v[["id", "a", "b", "c"]], on="id", how="left"
+        )
+        bus_data["v_a"] = v_merged["a"]
+        bus_data["v_b"] = v_merged["b"]
+        bus_data["v_c"] = v_merged["c"]
+        bus_data["color"] = v_merged[phase_list].mean(axis=1)
     return bus_data
 
 
 def _process_branch_data(branch_data, bus_data, _s, phase_list, edge_scale, edge_min):
     branch_data = branch_data.loc[branch_data.status != "OPEN", :]
-    branch_data.index = branch_data.tb.to_numpy() - 1
     branch_data["s_a"] = complex(np.nan, np.nan)
     branch_data["s_b"] = complex(np.nan, np.nan)
     branch_data["s_c"] = complex(np.nan, np.nan)
@@ -1121,25 +1128,36 @@ def _process_branch_data(branch_data, bus_data, _s, phase_list, edge_scale, edge
     branch_data["x_mid"] = 1 / 2 * (branch_data.x0 + branch_data.x1)
     branch_data["y_mid"] = 1 / 2 * (branch_data.y0 + branch_data.y1)
     if _s is not None:
-        _s.index = _s.tb.to_numpy() - 1
-        branch_data["s_a"] = _s.a
-        branch_data["s_b"] = _s.b
-        branch_data["s_c"] = _s.c
-        branch_data["p_abs"] = np.abs(np.real(_s.loc[:, phase_list].sum(axis=1)))
-        branch_data["q_abs"] = np.abs(np.imag(_s.loc[:, phase_list].sum(axis=1)))
-        branch_data["p_norm"] = (
-            branch_data["p_abs"].to_numpy() / branch_data["p_abs"].max() * edge_scale
-            + edge_min
+        # Merge power flow data by to-bus
+        s_merged = branch_data[["tb"]].merge(
+            _s[["tb", "a", "b", "c"]], on="tb", how="left"
         )
-        branch_data["q_norm"] = (
-            branch_data["q_abs"].to_numpy() / branch_data["q_abs"].max() * edge_scale
-            + edge_min
-        )
+        branch_data["s_a"] = s_merged["a"]
+        branch_data["s_b"] = s_merged["b"]
+        branch_data["s_c"] = s_merged["c"]
+        branch_data["p_abs"] = np.abs(np.real(s_merged[phase_list].sum(axis=1)))
+        branch_data["q_abs"] = np.abs(np.imag(s_merged[phase_list].sum(axis=1)))
+        p_max = branch_data["p_abs"].max()
+        q_max = branch_data["q_abs"].max()
+        if pd.notna(p_max) and p_max > 0:
+            branch_data["p_norm"] = (
+                branch_data["p_abs"].to_numpy() / p_max * edge_scale + edge_min
+            )
+        else:
+            branch_data["p_norm"] = edge_min
+        if pd.notna(q_max) and q_max > 0:
+            branch_data["q_norm"] = (
+                branch_data["q_abs"].to_numpy() / q_max * edge_scale + edge_min
+            )
+        else:
+            branch_data["q_norm"] = edge_min
+        branch_data["p_norm"] = branch_data["p_norm"].fillna(edge_min)
+        branch_data["q_norm"] = branch_data["q_norm"].fillna(edge_min)
         branch_data["p_direction"] = np.sign(
-            np.real(_s.loc[:, phase_list].sum(axis=1)) + 1e-6
+            np.real(s_merged[phase_list].sum(axis=1)) + 1e-6
         )
         branch_data["q_direction"] = np.sign(
-            np.imag(_s.loc[:, phase_list].sum(axis=1)) + 1e-6
+            np.imag(s_merged[phase_list].sum(axis=1)) + 1e-6
         )
     return branch_data
 
@@ -1151,29 +1169,34 @@ def _process_gen_data(gen_data, p_gen, q_gen):
     format that includes a time column ``t``.
     """
 
-    gen_data.index = gen_data.id.to_numpy() - 1
-
     def _latest_abc(df):
         if df is None:
             return None
         # If time-series, take the last time step for plotting
         if "t" in df.columns:
             df = df.sort_values(["id", "t"]).groupby("id", as_index=False).tail(1)
-        df.index = df.id.to_numpy() - 1
         return df
 
     p_gen = _latest_abc(p_gen)
     q_gen = _latest_abc(q_gen)
 
     if p_gen is not None:
-        gen_data["pa"] = p_gen["a"].to_numpy()
-        gen_data["pb"] = p_gen["b"].to_numpy()
-        gen_data["pc"] = p_gen["c"].to_numpy()
+        # Merge active power by generator id
+        p_merged = gen_data[["id"]].merge(
+            p_gen[["id", "a", "b", "c"]], on="id", how="left"
+        )
+        gen_data["pa"] = p_merged["a"]
+        gen_data["pb"] = p_merged["b"]
+        gen_data["pc"] = p_merged["c"]
 
     if q_gen is not None:
-        gen_data["qa"] = q_gen["a"].to_numpy()
-        gen_data["qb"] = q_gen["b"].to_numpy()
-        gen_data["qc"] = q_gen["c"].to_numpy()
+        # Merge reactive power by generator id
+        q_merged = gen_data[["id"]].merge(
+            q_gen[["id", "a", "b", "c"]], on="id", how="left"
+        )
+        gen_data["qa"] = q_merged["a"]
+        gen_data["qb"] = q_merged["b"]
+        gen_data["qc"] = q_merged["c"]
 
     return gen_data
 
