@@ -74,6 +74,7 @@ def simple_case_data():
             "qc_min": [-0.8],
             "control_variable": ["PQ"],
             "phases": ["abc"],
+            "gen_shape": ["PV"],
         }
     )
 
