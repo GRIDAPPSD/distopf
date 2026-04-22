@@ -30,6 +30,13 @@ def add_p_flow_constraints(m: LindistModelProtocol) -> None:
             for to_bus in m.to_bus_map[_id]
             if (to_bus, ph) in m.branch_phase_set
         )
+        # Center-tap transformer: primary phase feeds secondary s1+s2 flows
+        if ph not in ("s1", "s2"):
+            for to_bus in m.to_bus_map[_id]:
+                if getattr(m, "primary_phase_map", {}).get(to_bus) == ph:
+                    for sec_ph in ("s1", "s2"):
+                        if (to_bus, sec_ph) in m.branch_phase_set:
+                            outgoing_flows += m.p_flow[to_bus, sec_ph, t]
         return incoming_flow == outgoing_flows + load - generation - p_bat
 
     m.power_balance_p = pyo.Constraint(
@@ -54,6 +61,13 @@ def add_q_flow_constraints(m: LindistModelProtocol) -> None:
             for to_bus in m.to_bus_map[_id]
             if (to_bus, ph) in m.branch_phase_set
         )
+        # Center-tap transformer: primary phase feeds secondary s1+s2 flows
+        if ph not in ("s1", "s2"):
+            for to_bus in m.to_bus_map[_id]:
+                if getattr(m, "primary_phase_map", {}).get(to_bus) == ph:
+                    for sec_ph in ("s1", "s2"):
+                        if (to_bus, sec_ph) in m.branch_phase_set:
+                            outgoing_flows += m.q_flow[to_bus, sec_ph, t]
         return incoming_flow == outgoing_flows + load - generation - capacitor - q_bat
 
     m.power_balance_q = pyo.Constraint(
@@ -73,6 +87,35 @@ def add_voltage_drop_constraints(m: LindistModelProtocol) -> None:
     def voltage_drop_rule(m: LindistModelProtocol, _id, ph, t):
         if (_id, ph) in m.reg_phase_set:
             return pyo.Constraint.Skip
+
+        # Triplex (secondary) phases: 2-wire voltage drop, no sqrt(3) cross-terms
+        if ph in ("s1", "s2"):
+            other = "s2" if ph == "s1" else "s1"
+            self_pair = ph + ph  # "s1s1" or "s2s2"
+            cross_pair = "s1s2"
+
+            voltage_drop = (
+                2 * m.r[_id, self_pair] * m.p_flow[_id, ph, t]
+                + 2 * m.x[_id, self_pair] * m.q_flow[_id, ph, t]
+            )
+            if (_id, other) in m.branch_phase_set:
+                voltage_drop += (
+                    2 * m.r[_id, cross_pair] * m.p_flow[_id, other, t]
+                    + 2 * m.x[_id, cross_pair] * m.q_flow[_id, other, t]
+                )
+
+            # For center-tap transformer branches, the from bus has the primary
+            # phase (e.g. "a") not the secondary phase.
+            from_bus = m.from_bus_map[_id]
+            primary_ph = m.primary_phase_map.get(_id, None)
+            if primary_ph is not None:
+                # Center-tap xfmr: reference primary phase voltage at from bus
+                return m.v2[_id, ph, t] == m.v2[from_bus, primary_ph, t] - voltage_drop
+            else:
+                # Triplex line: same phase on both sides
+                return m.v2[_id, ph, t] == m.v2[from_bus, ph, t] - voltage_drop
+
+        # Standard 3-phase voltage drop
         # here, "a" represents the current phase,
         # b an c represent next and previous phase
         a = ph
@@ -168,7 +211,8 @@ def add_generator_constant_q_constraints(m: LindistModelProtocol) -> None:
 
 def add_generator_constant_p_constraints_q_control(m: LindistModelProtocol) -> None:
     def _rule(m: LindistModelProtocol, _id, ph, t):
-        if m.gen_control_type[_id, ph] != ControlVariable.Q:
+        ct = m.gen_control_type[_id, ph]
+        if ct not in (ControlVariable.NONE, ControlVariable.Q):
             return pyo.Constraint.Skip
         return m.p_gen[_id, ph, t] == m.p_gen_nom[_id, ph, t]
 
@@ -177,7 +221,8 @@ def add_generator_constant_p_constraints_q_control(m: LindistModelProtocol) -> N
 
 def add_generator_constant_q_constraints_p_control(m: LindistModelProtocol) -> None:
     def _rule(m: LindistModelProtocol, _id, ph, t):
-        if m.gen_control_type[_id, ph] != ControlVariable.P:
+        ct = m.gen_control_type[_id, ph]
+        if ct not in (ControlVariable.NONE, ControlVariable.P):
             return pyo.Constraint.Skip
         return m.q_gen[_id, ph, t] == m.q_gen_nom[_id, ph, t]
 

@@ -16,12 +16,42 @@ class ControlVariable(IntEnum):
 
 CONTROL_VARIABLE_MAP = {"": 0, "Q": 1, "P": 2, "PQ": 3}
 
+# Triplex phase names (multi-character)
+TRIPLEX_PHASES = ("s1", "s2")
+
+
+def _parse_phases(phases_str: str) -> list[str]:
+    """Parse a phases string into a list of phase names.
+
+    Handles both standard phases ('a', 'b', 'c', 'ab', 'abc') and
+    triplex phases ('s1', 's2', 's1s2').
+
+    Examples
+    --------
+    >>> _parse_phases("abc")
+    ['a', 'b', 'c']
+    >>> _parse_phases("s1s2")
+    ['s1', 's2']
+    >>> _parse_phases("s1")
+    ['s1']
+    """
+    if "s1" in phases_str or "s2" in phases_str:
+        result = []
+        if "s1" in phases_str:
+            result.append("s1")
+        if "s2" in phases_str:
+            result.append("s2")
+        return result
+    return list(phases_str)
+
 
 def _create_phase_tuples(df: pd.DataFrame, id_col: str = "id") -> List[Tuple[int, str]]:
     """Create (id, phase) tuples from dataframe with phases column"""
     result = []
     for _, row in df.iterrows():
-        result.extend([(int(row[id_col]), str(phase)) for phase in row.phases])
+        result.extend(
+            [(int(row[id_col]), phase) for phase in _parse_phases(str(row.phases))]
+        )
     return result
 
 
@@ -41,7 +71,9 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
     m.branch_set = pyo.Set(
         initialize=case.bus_data[case.bus_data.bus_type != "SWING"].id.tolist()
     )
-    m.phase_pair_set = pyo.Set(initialize=["aa", "ab", "ac", "bb", "bc", "cc"])
+    m.phase_pair_set = pyo.Set(
+        initialize=["aa", "ab", "ac", "bb", "bc", "cc", "s1s1", "s1s2", "s2s2"]
+    )
     m.bus_phase_set = pyo.Set(initialize=_create_phase_tuples(case.bus_data), dimen=2)
     m.branch_phase_set = pyo.Set(
         initialize=_create_phase_tuples(case.branch_data, "tb"), dimen=2
@@ -63,7 +95,12 @@ def _create_rx_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 
     for _, row in case.branch_data.iterrows():
         for phase_pair in m.phase_pair_set:
-            r_col, x_col = f"r{phase_pair}", f"x{phase_pair}"
+            # Triplex columns use underscore: r_s1s1, x_s1s2, etc.
+            # Primary columns have no underscore: raa, xab, etc.
+            if phase_pair.startswith("s"):
+                r_col, x_col = f"r_{phase_pair}", f"x_{phase_pair}"
+            else:
+                r_col, x_col = f"r{phase_pair}", f"x{phase_pair}"
 
             if r_col in case.branch_data.columns and x_col in case.branch_data.columns:
                 r_data[(row.tb, phase_pair)] = row[r_col]
@@ -78,7 +115,8 @@ def _create_load_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     cvr_p_data, cvr_q_data = {}, {}
 
     for _, row in case.bus_data.iterrows():
-        for phase in row.phases:
+        phases = _parse_phases(str(row.phases))
+        for phase in phases:
             if (row.id, phase) not in m.bus_phase_set:
                 continue
 
@@ -90,6 +128,12 @@ def _create_load_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             # Active and reactive loads
             p_load = getattr(row, f"pl_{phase}", 0.0)
             q_load = getattr(row, f"ql_{phase}", 0.0)
+            # For triplex buses, split s1s2 (240V) loads equally across legs
+            if phase in TRIPLEX_PHASES:
+                p_s1s2 = getattr(row, "pl_s1s2", 0.0)
+                q_s1s2 = getattr(row, "ql_s1s2", 0.0)
+                p_load += p_s1s2 / 2
+                q_load += q_s1s2 / 2
             load_mult_p = load_mult_q = 1.0
             load_shape = getattr(row, "load_shape", "default")
             for t in m.time_set:
@@ -151,14 +195,34 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     gen_control_data = {}
 
     for _, row in case.gen_data.iterrows():
-        for phase in row.phases:
+        phases = _parse_phases(str(row.phases))
+        for phase in phases:
             if (row.id, phase) not in m.gen_phase_set:
                 continue
 
-            # Generation limits
+            # Generation limits and nominal values
+            # if phase in TRIPLEX_PHASES:
+            #     # Triplex generator columns use underscore: p_s1, s_s1_max, etc.
+            #     s_rated = getattr(row, f"s_{phase}_max", 0.0)
+            #     q_max = (
+            #         getattr(row, f"q_{phase}_max", s_rated)
+            #         if hasattr(row, f"q_{phase}_max")
+            #         else s_rated
+            #     )
+            #     q_min = (
+            #         getattr(row, f"q_{phase}_min", -s_rated)
+            #         if hasattr(row, f"q_{phase}_min")
+            #         else -s_rated
+            #     )
+            #     p_gen = getattr(row, f"p_{phase}", 0.0)
+            #     q_gen = getattr(row, f"q_{phase}", 0.0)
+            # else:
             s_rated = getattr(row, f"s{phase}_max", 1000.0)
             q_max = getattr(row, f"q{phase}_max", s_rated)
             q_min = getattr(row, f"q{phase}_min", -s_rated)
+            p_gen = getattr(row, f"p{phase}", 0.0)
+            q_gen = getattr(row, f"q{phase}", 0.0)
+
             s_rated_data[(row.id, phase)] = s_rated
             q_gen_min_data[(row.id, phase)] = q_min
             q_gen_max_data[(row.id, phase)] = q_max
@@ -169,8 +233,6 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 
             # Nominal generation values, scaled by schedule
             gen_shape = getattr(row, "gen_shape", "PV")
-            p_gen = getattr(row, f"p{phase}", 0.0)
-            q_gen = getattr(row, f"q{phase}", 0.0)
             for t in m.time_set:
                 gen_mult = _get_gen_schedule_mult(gen_shape, t, case.schedules)
                 p_gen_data[(row.id, phase, t)] = p_gen * gen_mult
@@ -252,7 +314,7 @@ def _create_v_swing_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
 
     for _, row in swing_buses.iterrows():
-        for phase in row.phases:
+        for phase in _parse_phases(str(row.phases)):
             if (row.id, phase) not in m.bus_phase_set:
                 continue
             v_swing = getattr(row, f"v_{phase}", 1.0)
@@ -274,7 +336,7 @@ def _create_v_limit_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     v_min_data, v_max_data = {}, {}
 
     for _, row in case.bus_data.iterrows():
-        for phase in row.phases:
+        for phase in _parse_phases(str(row.phases)):
             if (row.id, phase) in m.bus_phase_set:
                 v_min_data[(row.id, phase)] = getattr(row, "v_min", 0.95)
                 v_max_data[(row.id, phase)] = getattr(row, "v_max", 1.05)
@@ -521,6 +583,19 @@ def create_lindist_model(
     m.from_bus_map = {
         int(tb): int(fb) for fb, tb in case.branch_data.loc[:, ["fb", "tb"]].to_numpy()
     }
+    # Map secondary branch (by to-bus id) to the primary phase of its center-tap xfmr.
+    # Only applies at the primary→secondary boundary (center-tap transformer),
+    # NOT for secondary→secondary (triplex line) branches.
+    m.primary_phase_map = {}
+    if "primary_phase" in case.branch_data.columns:
+        bus_phases = dict(zip(case.bus_data.id, case.bus_data.phases))
+        for _, row in case.branch_data.iterrows():
+            pp = getattr(row, "primary_phase", "")
+            if pp and not pd.isna(pp):
+                from_phases = str(bus_phases.get(int(row.fb), ""))
+                # Only mark as center-tap xfmr if from_bus has primary phases
+                if "s1" not in from_phases and "s2" not in from_phases:
+                    m.primary_phase_map[int(row.tb)] = str(pp)
     m.to_bus_map = {
         int(bus_id): case.branch_data.loc[
             case.branch_data.fb == int(bus_id), "tb"

@@ -149,6 +149,10 @@ class DSSToCSVConverter:
         while flag:
             gen_buses.add(self.dss.Generators.Bus1().split(".")[0])
             flag = self.dss.Generators.Next()
+        flag = self.dss.PVsystems.First()
+        while flag:
+            gen_buses.add(self.dss.CktElement.BusNames()[0].split(".")[0])
+            flag = self.dss.PVsystems.Next()
         return gen_buses
 
     @property
@@ -352,8 +356,31 @@ class DSSToCSVConverter:
         v_df = pd.merge(va, vb, on="name", how="outer")
         v_df = pd.merge(v_df, vc, on="name", how="outer")
         v_df.index = v_df.name.apply(self.bus_names_to_index_map_fun)
-        # v_df.set_index(v_df.name.apply(self.bus_names_to_index_map_fun))
         v_df = v_df.sort_index()
+
+        # OpenDSS treats center-tap secondary nodes (s1, s2) as 120° apart
+        # instead of 180°, giving kVBase = V_LL/sqrt(3) instead of V_LL/2.
+        # Correct: V_pu_actual = V_pu_dss * (kVBase_dss / kVBase_actual)
+        #                      = V_pu_dss * (V_LL/sqrt(3)) / (V_LL/2)
+        #                      = V_pu_dss * 2/sqrt(3)
+        correction = 2 / np.sqrt(3)  # ≈ 1.1547
+        for bus_name in self.secondary_buses:
+            if bus_name in v_df.name.values:
+                mask = v_df.name == bus_name
+                for col in ("a", "b", "c"):
+                    if col in v_df.columns:
+                        v_df.loc[mask, col] *= correction
+
+        # Add s1/s2 columns for secondary buses (node 1 → s1, node 2 → s2).
+        v_df["s1"] = np.nan
+        v_df["s2"] = np.nan
+        for bus_name in self.secondary_buses:
+            if bus_name in v_df.name.values:
+                mask = v_df.name == bus_name
+                v_df.loc[mask, "s1"] = v_df.loc[mask, "a"]
+                v_df.loc[mask, "s2"] = v_df.loc[mask, "b"]
+                v_df.loc[mask, ["a", "b", "c"]] = np.nan
+
         return v_df
 
     def get_currents(self, from_side=False):
@@ -623,12 +650,28 @@ class DSSToCSVConverter:
                 power_df.loc[i, "b"] = pd.NA
             if 3 not in row.nodes:
                 power_df.loc[i, "c"] = pd.NA
-        return power_df.loc[:, ["fb", "tb", "from_name", "to_name", "a", "b", "c"]]
+
+        # For secondary branches, remap OpenDSS node-1/node-2 (stored in a/b)
+        # to split-phase leg columns s1/s2.
+        nan_cx = np.nan + 1j * np.nan
+        power_df["s1"] = nan_cx
+        power_df["s2"] = nan_cx
+        sec_mask = power_df["to_name"].isin(self.secondary_buses) | power_df[
+            "from_name"
+        ].isin(self.secondary_buses)
+        power_df.loc[sec_mask, "s1"] = power_df.loc[sec_mask, "a"]
+        power_df.loc[sec_mask, "s2"] = power_df.loc[sec_mask, "b"]
+        power_df.loc[sec_mask, ["a", "b", "c"]] = nan_cx
+
+        return power_df.loc[
+            :, ["fb", "tb", "from_name", "to_name", "a", "b", "c", "s1", "s2"]
+        ]
 
     def get_p_flows(self):
         s_flows = self.get_apparent_power_flows()
         p_flows = s_flows.loc[:, ["fb", "tb", "from_name", "to_name"]].copy()
         p_flows.loc[:, ["a", "b", "c"]] = np.real(s_flows.loc[:, ["a", "b", "c"]])
+        p_flows.loc[:, ["s1", "s2"]] = np.real(s_flows.loc[:, ["s1", "s2"]])
         return p_flows
 
     def get_q_flows(self):
@@ -638,6 +681,7 @@ class DSSToCSVConverter:
         q_flows.loc[s_flows.isna().a, "a"] = np.nan
         q_flows.loc[s_flows.isna().b, "b"] = np.nan
         q_flows.loc[s_flows.isna().c, "c"] = np.nan
+        q_flows.loc[:, ["s1", "s2"]] = np.imag(s_flows.loc[:, ["s1", "s2"]])
         return q_flows
 
     def _get_line_zmatrix(self) -> tuple[np.ndarray, np.ndarray]:
@@ -881,9 +925,15 @@ class DSSToCSVConverter:
                 fb, tb = tb, fb
                 from_name, to_name = to_name, from_name
 
-            # Secondary-side base quantities
+            # Secondary-side base quantities.
+            # OpenDSS reports kVBase = V_LL/sqrt(3) for center-tap secondaries
+            # (treating s1-s2 as 120° apart).  The correct line-to-neutral
+            # base for 180° split-phase is V_LL/2.
             self.dss.Circuit.SetActiveBus(to_name)
-            base_kv_ln = self.dss.Bus.kVBase()
+            base_kv_ln_dss = self.dss.Bus.kVBase()
+            # Correct for OpenDSS treating secondary as 3-phase (120° apart)
+            # instead of split-phase (180° apart). The correction factor is √(3/4).
+            base_kv_ln = base_kv_ln_dss * np.sqrt(3 / 4)
             z_base = (base_kv_ln * 1000) ** 2 / self.s_base
 
             # Extract raw 2x2 R and X matrices from OpenDSS, scaled by length
@@ -985,9 +1035,12 @@ class DSSToCSVConverter:
                 fb, tb = tb, fb
                 from_name, to_name = to_name, from_name
 
-            # Secondary-side base quantities
+            # Secondary-side base quantities.
+            # OpenDSS reports kVBase = V_LL/sqrt(3); correct to V_LL/2 for
+            # 180° split-phase.
             self.dss.Circuit.SetActiveBus(secondary_bus)
-            base_kv_ln = self.dss.Bus.kVBase()  # 0.12 kV for 120 V leg
+            base_kv_ln_dss = self.dss.Bus.kVBase()
+            base_kv_ln = base_kv_ln_dss * 2 / np.sqrt(3)
             z_base = (base_kv_ln * 1000) ** 2 / self.s_base
 
             # Extract per-winding impedances referred to secondary
@@ -1178,6 +1231,15 @@ class DSSToCSVConverter:
                 bus_type = "SWING"
             active_bus_name = self.dss.Bus.Name()
             v_ln_base = self.dss.Bus.kVBase() * 1000
+
+            # Correct base voltage for secondary (triplex) buses.
+            # OpenDSS calculates secondary voltage using 3-phase assumptions,
+            # multiplying by sqrt(4/3). For split-phase secondaries, we need
+            # the actual leg-to-neutral voltage, so divide by sqrt(4/3) or
+            # equivalently multiply by sqrt(3/4).
+            if active_bus_name in self.secondary_buses:
+                v_ln_base = v_ln_base * np.sqrt(3 / 4)
+
             each_bus = dict(
                 id=self.bus_names_to_index_map[bus],  # bus id for each active bus
                 name=active_bus_name,  # name of the active bus
@@ -1218,57 +1280,87 @@ class DSSToCSVConverter:
         bus_df = bus_df.fillna(0)
         return bus_df
 
-    def get_gen_data(self) -> pd.DataFrame:
+    def _build_gen_row(
+        self, bus_name: str, gen_name: str, kw: float, kvar: float, kva_rated: float
+    ) -> dict:
+        """Build a gen_data row dict for a single generator or PV system."""
         s_base = self.s_base
-        generator_flag = self.dss.Generators.First()
-        gen_data = []
+        bus_spec = self.dss.CktElement.BusNames()[0]
+        bus_phases = bus_spec.split(".")[1:]
 
-        while generator_flag:
-            bus_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
+        # Initialize all columns to zero
+        each_gen: dict = dict(
+            id=self.bus_names_to_index_map[bus_name],
+            name=gen_name,
+            pa=0,
+            pb=0,
+            pc=0,
+            qa=0,
+            qb=0,
+            qc=0,
+            sa_max=0,
+            sb_max=0,
+            sc_max=0,
+            ps1=0,
+            ps2=0,
+            qs1=0,
+            qs2=0,
+            ss1_max=0,
+            ss2_max=0,
+            primary_phase="",
+            phases="",
+            qa_max=0,
+            qb_max=0,
+            qc_max=0,
+            qa_min=0,
+            qb_min=0,
+            qc_min=0,
+            control_variable="",
+        )
+
+        if bus_name in self.secondary_buses:
+            # ---- Secondary (triplex) generator ----
+            primary_phase = self.secondary_buses[bus_name]["primary_phase"]
+            each_gen["primary_phase"] = primary_phase
+            nodes = [int(n) for n in bus_phases if n != "0"]
+            node_to_leg = {1: "s1", 2: "s2"}
+
+            if sorted(nodes) == [1, 2]:
+                # 240 V phase-to-phase: split equally across both legs
+                each_gen["ps1"] = kw * 1000 / s_base / 2
+                each_gen["ps2"] = kw * 1000 / s_base / 2
+                each_gen["qs1"] = kvar * 1000 / s_base / 2
+                each_gen["qs2"] = kvar * 1000 / s_base / 2
+                each_gen["ss1_max"] = kva_rated * 1000 / s_base / 2
+                each_gen["ss2_max"] = kva_rated * 1000 / s_base / 2
+                each_gen["phases"] = "s1s2"
+            elif len(nodes) == 1 and nodes[0] in node_to_leg:
+                # 120 V single-leg
+                leg = node_to_leg[nodes[0]]
+                each_gen[f"p_{leg}"] = kw * 1000 / s_base
+                each_gen[f"q_{leg}"] = kvar * 1000 / s_base
+                each_gen[f"s_{leg}_max"] = kva_rated * 1000 / s_base
+                each_gen["phases"] = leg
+        else:
+            # ---- Primary generator ----
             n_phases = len(bus_phases)
-            if len(bus_phases) == 0 or len(bus_phases) >= 3:
+            if n_phases == 0 or n_phases >= 3:
                 n_phases = 3
             active_phases = np.array([0, 1, 2])
             if n_phases < 3:
-                active_phases = (
-                    np.array(self.dss.CktElement.BusNames()[0].split(".")[1:]).astype(
-                        int
-                    )
-                    - 1
-                )
+                active_phases = np.array(bus_phases).astype(int) - 1
 
-            active_power_per_phase = (
-                self.dss.Generators.kW() / n_phases * 1000
-            ) / s_base
-            reactive_power_per_phase = (
-                self.dss.Generators.kvar() / n_phases * 1000
-            ) / s_base
-            apparent_power_rating = (
-                self.dss.Generators.kVARated() / n_phases * 1000 / s_base
-            )
-            gen_name = self.dss.Generators.Name()
-            bus_name = self.dss.Generators.Bus1().split(".")[0]
-            each_gen = dict(
-                id=self.bus_names_to_index_map[bus_name],
-                name=gen_name,
-            )
+            p_per_phase = kw / n_phases * 1000 / s_base
+            q_per_phase = kvar / n_phases * 1000 / s_base
+            s_per_phase = kva_rated / n_phases * 1000 / s_base
+
             phases = ""
             for phase_id in active_phases:
                 ph = "abc"[phase_id]
-                each_gen[f"p{ph}"] = active_power_per_phase
-                phases = phases + ph
-            for phase_id in active_phases:
-                ph = "abc"[phase_id]
-                each_gen[f"q{ph}"] = reactive_power_per_phase
-            for phase_id in active_phases:
-                ph = "abc"[phase_id]
-                each_gen[f"s{ph}_max"] = apparent_power_rating
-            for ph in "abc":
-                if ph not in phases:
-                    each_gen[f"p{ph}"] = 0
-                    each_gen[f"q{ph}"] = 0
-                    each_gen[f"s{ph}_max"] = 0
-
+                each_gen[f"p{ph}"] = p_per_phase
+                each_gen[f"q{ph}"] = q_per_phase
+                each_gen[f"s{ph}_max"] = s_per_phase
+                phases += ph
             each_gen["phases"] = phases
 
             each_gen["qa_max"] = each_gen["sa_max"]
@@ -1277,119 +1369,103 @@ class DSSToCSVConverter:
             each_gen["qa_min"] = -each_gen["sa_max"]
             each_gen["qb_min"] = -each_gen["sb_max"]
             each_gen["qc_min"] = -each_gen["sc_max"]
-            each_gen["control_variable"] = "PQ"
 
-            gen_data.append(each_gen)
+        return each_gen
+
+    _GEN_COLUMNS = [
+        "id",
+        "name",
+        "pa",
+        "pb",
+        "pc",
+        "qa",
+        "qb",
+        "qc",
+        "sa_max",
+        "sb_max",
+        "sc_max",
+        "ps1",
+        "ps2",
+        "qs1",
+        "qs2",
+        "ss1_max",
+        "ss2_max",
+        "primary_phase",
+        "phases",
+        "qa_max",
+        "qb_max",
+        "qc_max",
+        "qa_min",
+        "qb_min",
+        "qc_min",
+        "control_variable",
+    ]
+
+    _GEN_AGG = dict(
+        id="first",
+        name="first",
+        pa="sum",
+        pb="sum",
+        pc="sum",
+        qa="sum",
+        qb="sum",
+        qc="sum",
+        sa_max="sum",
+        sb_max="sum",
+        sc_max="sum",
+        ps1="sum",
+        ps2="sum",
+        qs1="sum",
+        qs2="sum",
+        ss1_max="sum",
+        ss2_max="sum",
+        primary_phase="first",
+        phases="sum",
+        qa_max="sum",
+        qb_max="sum",
+        qc_max="sum",
+        qa_min="sum",
+        qb_min="sum",
+        qc_min="sum",
+        control_variable="first",
+    )
+
+    def get_gen_data(self) -> pd.DataFrame:
+        gen_data = []
+
+        generator_flag = self.dss.Generators.First()
+        while generator_flag:
+            bus_name = self.dss.Generators.Bus1().split(".")[0]
+            gen_data.append(
+                self._build_gen_row(
+                    bus_name,
+                    self.dss.Generators.Name(),
+                    self.dss.Generators.kW(),
+                    self.dss.Generators.kvar(),
+                    self.dss.Generators.kVARated(),
+                )
+            )
             generator_flag = self.dss.Generators.Next()
 
         pv_flag = self.dss.PVsystems.First()
         while pv_flag:
-            bus_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
-            n_phases = len(bus_phases)
-            if len(bus_phases) == 0 or len(bus_phases) >= 3:
-                n_phases = 3
-            active_phases = np.array([0, 1, 2])
-            if n_phases < 3:
-                active_phases = (
-                    np.array(self.dss.CktElement.BusNames()[0].split(".")[1:]).astype(
-                        int
-                    )
-                    - 1
-                )
-
-            active_power_per_phase = (
-                self.dss.PVsystems.Pmpp() / n_phases * 1000
-            ) / s_base
-            reactive_power_per_phase = (
-                self.dss.PVsystems.kvar() / n_phases * 1000
-            ) / s_base
-            apparent_power_rating = (
-                self.dss.PVsystems.kVARated() / n_phases * 1000 / s_base
-            )
-            gen_name = self.dss.PVsystems.Name()
             bus_name = self.dss.CktElement.BusNames()[0].split(".")[0]
-            each_gen = dict(
-                id=self.bus_names_to_index_map[bus_name],
-                name=gen_name,
+            gen_data.append(
+                self._build_gen_row(
+                    bus_name,
+                    self.dss.PVsystems.Name(),
+                    self.dss.PVsystems.Pmpp(),
+                    self.dss.PVsystems.kvar(),
+                    self.dss.PVsystems.kVARated(),
+                )
             )
-            phases = ""
-            for phase_id in active_phases:
-                ph = "abc"[phase_id]
-                each_gen[f"p{ph}"] = active_power_per_phase
-                phases = phases + ph
-            for phase_id in active_phases:
-                ph = "abc"[phase_id]
-                each_gen[f"q{ph}"] = reactive_power_per_phase
-            for phase_id in active_phases:
-                ph = "abc"[phase_id]
-                each_gen[f"s{ph}_max"] = apparent_power_rating
-            for ph in "abc":
-                if ph not in phases:
-                    each_gen[f"p{ph}"] = 0
-                    each_gen[f"q{ph}"] = 0
-                    each_gen[f"s{ph}_max"] = 0
-
-            each_gen["phases"] = phases
-
-            each_gen["qa_max"] = each_gen["sa_max"]
-            each_gen["qb_max"] = each_gen["sb_max"]
-            each_gen["qc_max"] = each_gen["sc_max"]
-            each_gen["qa_min"] = -each_gen["sa_max"]
-            each_gen["qb_min"] = -each_gen["sb_max"]
-            each_gen["qc_min"] = -each_gen["sc_max"]
-            each_gen["control_variable"] = "PQ"
-
-            gen_data.append(each_gen)
             pv_flag = self.dss.PVsystems.Next()
 
+        if not gen_data:
+            return pd.DataFrame({col: [] for col in self._GEN_COLUMNS})
+
         gen_df = pd.DataFrame(gen_data)
-        if len(gen_data) < 1:
-            gen_df = pd.DataFrame(
-                {
-                    "id": [],
-                    "name": [],
-                    "pa": [],
-                    "pb": [],
-                    "pc": [],
-                    "qa": [],
-                    "qb": [],
-                    "qc": [],
-                    "sa_max": [],
-                    "sb_max": [],
-                    "sc_max": [],
-                    "phases": [],
-                    "qa_max": [],
-                    "qb_max": [],
-                    "qc_max": [],
-                    "qa_min": [],
-                    "qb_min": [],
-                    "qc_min": [],
-                    "control_variable": [],
-                }
-            )
-        gen_df = gen_df.groupby(by=["id"], as_index=False).agg(
-            dict(
-                id="first",
-                name="first",
-                pa="sum",
-                pb="sum",
-                pc="sum",
-                qa="sum",
-                qb="sum",
-                qc="sum",
-                sa_max="sum",
-                sb_max="sum",
-                sc_max="sum",
-                phases="sum",
-                qa_max="sum",
-                qb_max="sum",
-                qc_max="sum",
-                qa_min="sum",
-                qb_min="sum",
-                qc_min="sum",
-                control_variable="first",
-            )
-        )
+        gen_df = gen_df.groupby(by=["id"], as_index=False).agg(self._GEN_AGG)
         return gen_df
 
     def get_cap_data(self) -> pd.DataFrame:
@@ -1638,8 +1714,8 @@ class DSSToCSVConverter:
                 node_to_leg = {1: "s1", 2: "s2"}
                 if sorted(nodes) == [1, 2]:
                     # 240 V line-to-line load across both legs.
-                    # OpenDSS reports one power entry per conductor (node),
-                    # so sum both to get the total load on the s1-s2 leg.
+                    # OpenDSS splits the power across both conductors,
+                    # so sum both entries to get the total load.
                     each_load["pl_s1s2"] = p_values[:2].sum() * 1000 / s_base
                     each_load["ql_s1s2"] = q_values[:2].sum() * 1000 / s_base
                 elif len(nodes) == 1 and nodes[0] in node_to_leg:
