@@ -2,10 +2,7 @@ import distopf as opf
 import pyomo.environ as pyo
 import networkx as nx
 
-from distopf.api import create_case
-from distopf.pyomo_models.lindist import create_lindist_model
 from distopf.pyomo_models.protocol import LindistModelProtocol
-from distopf.pyomo_models.objectives import substation_power_objective_rule
 from distopf.pyomo_models.constraints import (
     add_battery_constant_q_constraints_p_control,
     add_battery_energy_constraints,
@@ -14,17 +11,14 @@ from distopf.pyomo_models.constraints import (
     add_battery_soc_limits,
     add_capacitor_constraints,
     add_octagonal_inverter_constraints_pq_control,
-    add_circular_generator_constraints_pq_control,
     add_cvr_load_constraints,
     add_generator_constant_p_constraints_q_control,
     add_generator_constant_q_constraints_p_control,
     add_generator_limits,
-    add_p_flow_constraints,
     add_q_flow_constraints,
     add_regulator_constraints,
     add_swing_bus_constraints,
     add_voltage_drop_constraints,
-    add_voltage_limits,
 )
 from distopf.pyomo_models.slack_constraints import (
     add_thermal_slack_constraints,

@@ -50,18 +50,6 @@ from distopf.pyomo_models.slack_constraints import (
 )
 from distopf.pyomo_models.results import PyoResult
 
-# ---------------------------------------------------------------------------
-# Case + system data
-# ---------------------------------------------------------------------------
-case = create_case(
-    data_path=opf.CASES_DIR / "csv" / "ieee123_30der_bat",
-    ignore_schedule=True,
-    ignore_bat=True,
-    ignore_gen=True,
-    n_steps=1,
-    start_step=0,
-)
-
 
 # ---------------------------------------------------------------------------
 # Baseline OPF (for comparison)
@@ -109,7 +97,7 @@ def run_baseline_opf():
 # ---------------------------------------------------------------------------
 # Portfolio model
 # ---------------------------------------------------------------------------
-def run_der_expansion():
+def run_der_expansion(case):
     zones = create_zones_from_edge_names(case, ["sw2", "sw3", "sw4"])
     del zones[0]
     m = create_lindist_model(case)
@@ -142,9 +130,17 @@ def run_der_expansion():
 
 
 if __name__ == "__main__":
+    case = create_case(
+    data_path=opf.CASES_DIR / "csv" / "ieee123_30der_bat",
+    ignore_schedule=True,
+    ignore_bat=True,
+    ignore_gen=True,
+    n_steps=1,
+    start_step=0,
+)
     t0 = case.start_step
     result_baseline = run_baseline_opf()
-    m, zones, result_portfolio = run_der_expansion()
+    m, zones, result_portfolio = run_der_expansion(case)
     p_sub_baseline = result_baseline.objective_value
     p_sub = result_portfolio.objective_value
     print(f"Substation power  baseline : {p_sub_baseline} p.u.")
