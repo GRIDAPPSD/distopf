@@ -15,11 +15,12 @@ def conv():
 
 # ==================== center-tap detection (unit) ====================
 
+
 def test_split_bus_spec_parses_nodes(conv):
     assert conv._split_bus_spec("secbus.1.0") == ("secbus", [1, 0])
     assert conv._split_bus_spec("secbus.0.2") == ("secbus", [0, 2])
-    assert conv._split_bus_spec("pribus.1")   == ("pribus", [1])
-    assert conv._split_bus_spec("sourcebus")  == ("sourcebus", [])
+    assert conv._split_bus_spec("pribus.1") == ("pribus", [1])
+    assert conv._split_bus_spec("sourcebus") == ("sourcebus", [])
 
 
 def test_is_split_phase_pattern_true_cases(conv):
@@ -66,22 +67,30 @@ def test_primary_buses_not_in_secondary_dict(conv):
 
 # ==================== bus_data.csv ====================
 
+
 def test_bus_data_has_new_columns(conv):
-    for col in ["pl_s1", "ql_s1", "pl_s2", "ql_s2",
-                "pl_s1s2", "ql_s1s2", "primary_phase"]:
+    for col in [
+        "pl_s1",
+        "ql_s1",
+        "pl_s2",
+        "ql_s2",
+        "pl_s1s2",
+        "ql_s1s2",
+        "primary_phase",
+    ]:
         assert col in conv.bus_data.columns, f"Missing column: {col}"
 
 
 def test_secondary_bus_phases_string(conv):
     bus = conv.bus_data.set_index("name")
     assert bus.loc["loadbus", "phases"] == "s1s2"
-    assert bus.loc["secbus",  "phases"] == "s1s2"
+    assert bus.loc["secbus", "phases"] == "s1s2"
 
 
 def test_primary_phase_column_populated(conv):
     bus = conv.bus_data.set_index("name")
     assert bus.loc["loadbus", "primary_phase"] == "a"
-    assert bus.loc["secbus",  "primary_phase"] == "a"
+    assert bus.loc["secbus", "primary_phase"] == "a"
     pri = bus.loc["pribus", "primary_phase"]
     assert pd.isna(pri) or pri in ("", 0)
 
@@ -90,12 +99,12 @@ def test_secondary_loads_split_correctly(conv):
     """L1=2 kW on s1, L2=1.5 kW on s2, L12=3 kW across s1-s2 (25 kVA base)."""
     bus = conv.bus_data.set_index("name")
     row = bus.loc["loadbus"]
-    assert row.pl_s1   == pytest.approx(2.0   * 1000 / 25_000, rel=1e-3)
-    assert row.pl_s2   == pytest.approx(1.5   * 1000 / 25_000, rel=1e-3)
-    assert row.pl_s1s2 == pytest.approx(3.0   * 1000 / 25_000, rel=1e-3)
-    assert row.ql_s1   == pytest.approx(0.5   * 1000 / 25_000, rel=1e-3)
-    assert row.ql_s2   == pytest.approx(0.3   * 1000 / 25_000, rel=1e-3)
-    assert row.ql_s1s2 == pytest.approx(0.7   * 1000 / 25_000, rel=1e-3)
+    assert row.pl_s1 == pytest.approx(2.0 * 1000 / 25_000, rel=1e-3)
+    assert row.pl_s2 == pytest.approx(1.5 * 1000 / 25_000, rel=1e-3)
+    assert row.pl_s1s2 == pytest.approx(3.0 * 1000 / 25_000, rel=1e-3)
+    assert row.ql_s1 == pytest.approx(0.5 * 1000 / 25_000, rel=1e-3)
+    assert row.ql_s2 == pytest.approx(0.3 * 1000 / 25_000, rel=1e-3)
+    assert row.ql_s1s2 == pytest.approx(0.7 * 1000 / 25_000, rel=1e-3)
 
 
 def test_primary_bus_unaffected(conv):
@@ -106,10 +115,17 @@ def test_primary_bus_unaffected(conv):
 
 # ==================== branch_data.csv ====================
 
+
 def test_branch_data_has_new_columns(conv):
-    for col in ["r_s1s1", "r_s1s2", "r_s2s2",
-                "x_s1s1", "x_s1s2", "x_s2s2",
-                "primary_phase"]:
+    for col in [
+        "r_s1s1",
+        "r_s1s2",
+        "r_s2s2",
+        "x_s1s1",
+        "x_s1s2",
+        "x_s2s2",
+        "primary_phase",
+    ]:
         assert col in conv.branch_data.columns, f"Missing column: {col}"
 
 
@@ -147,8 +163,9 @@ def test_primary_line_unaffected(conv):
 
 # ==================== end-to-end ====================
 
+
 def test_csv_roundtrip(conv, tmp_path):
     conv.bus_data.to_csv(tmp_path / "bus_data.csv", index=False)
     conv.branch_data.to_csv(tmp_path / "branch_data.csv", index=False)
-    assert len(pd.read_csv(tmp_path / "bus_data.csv"))    == len(conv.bus_data)
+    assert len(pd.read_csv(tmp_path / "bus_data.csv")) == len(conv.bus_data)
     assert len(pd.read_csv(tmp_path / "branch_data.csv")) == len(conv.branch_data)
