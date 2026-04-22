@@ -529,8 +529,8 @@ class LinDistBaseMP(BaseModelMP):
             if not self.phase_exists(a):
                 continue
             s_rated = self.gen[f"s_{a}_max"]
-            q_max_manual = self.gen.get(f"q{a}_max", np.ones(len(self.gen)) * 100e3)
-            q_min_manual = self.gen.get(f"q{a}_min", np.ones(len(self.gen)) * -100e3)
+            q_max_manual = self.gen.get(f"q_{a}_max", np.ones(len(self.gen)) * 100e3)
+            q_min_manual = self.gen.get(f"q_{a}_min", np.ones(len(self.gen)) * -100e3)
             for j in self.gen_buses[a]:
                 gen_mult = self._get_gen_schedule_mult(j, t)
                 p_out = self.gen[f"p_{a}"][j] * gen_mult

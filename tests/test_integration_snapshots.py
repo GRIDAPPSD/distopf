@@ -348,7 +348,7 @@ def generate_all_references():
         json.dump(refs, f, indent=2, sort_keys=True)
     print(f"\nWrote {len(refs)} scenario references to {REFERENCE_FILE}")
 
-
-if __name__ == "__main__":
-    print("Generating integration reference data...\n")
-    generate_all_references()
+# disable reference generation to prevent accidental overwrites
+# if __name__ == "__main__":
+#     print("Generating integration reference data...\n")
+#     generate_all_references()
