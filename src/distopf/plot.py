@@ -1115,14 +1115,14 @@ def _process_gen_data(gen_data, p_gen, q_gen):
     q_gen = _latest_abc(q_gen)
 
     if p_gen is not None:
-        gen_data["pa"] = p_gen["a"].to_numpy()
-        gen_data["pb"] = p_gen["b"].to_numpy()
-        gen_data["pc"] = p_gen["c"].to_numpy()
+        gen_data["p_a"] = p_gen["a"].to_numpy()
+        gen_data["p_b"] = p_gen["b"].to_numpy()
+        gen_data["p_c"] = p_gen["c"].to_numpy()
 
     if q_gen is not None:
-        gen_data["qa"] = q_gen["a"].to_numpy()
-        gen_data["qb"] = q_gen["b"].to_numpy()
-        gen_data["qc"] = q_gen["c"].to_numpy()
+        gen_data["q_a"] = q_gen["a"].to_numpy()
+        gen_data["q_b"] = q_gen["b"].to_numpy()
+        gen_data["q_c"] = q_gen["c"].to_numpy()
 
     return gen_data
 
@@ -1236,7 +1236,7 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
         # Capacitor data (if present)
         if cap_data is not None and bus_row.id in cap_data.id.to_numpy():
             q_cap = cap_data.loc[
-                cap_data.id == bus_row.id, ["qa", "qb", "qc"]
+                cap_data.id == bus_row.id, ["q_a", "q_b", "q_c"]
             ].to_numpy()[0]
             qcap_a_str = format_phase_value(q_cap[0], "a")
             qcap_b_str = format_phase_value(q_cap[1], "b")
@@ -1246,10 +1246,10 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
         # Generator data (if present)
         if bus_row.id in gen_data.id.to_numpy():
             p_gen = gen_data.loc[
-                gen_data.id == bus_row.id, ["pa", "pb", "pc"]
+                gen_data.id == bus_row.id, ["p_a", "p_b", "p_c"]
             ].to_numpy()[0]
             q_gen = gen_data.loc[
-                gen_data.id == bus_row.id, ["qa", "qb", "qc"]
+                gen_data.id == bus_row.id, ["q_a", "q_b", "q_c"]
             ].to_numpy()[0]
             pgen_a_str = format_phase_value(p_gen[0], "a")
             pgen_b_str = format_phase_value(p_gen[1], "b")

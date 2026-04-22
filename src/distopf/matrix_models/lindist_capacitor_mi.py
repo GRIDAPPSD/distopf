@@ -74,7 +74,7 @@ class LinDistModelCapMI(LinDistBase):
         qij = self.idx("qij", j, a)
         q_cap_nom = 0
         if self.cap is not None:
-            q_cap_nom = get(self.cap[f"q{a}"], j, 0)
+            q_cap_nom = get(self.cap[f"q_{a}"], j, 0)
         # equation indexes
         zc = self.idx("zc", j, a)
         qc = self.idx("q_cap", j, a)

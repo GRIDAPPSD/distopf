@@ -63,8 +63,8 @@ class LineProcessor(BaseProcessor):
 
         # Initialize impedance matrix
         for combo in ["aa", "ab", "ac", "bb", "bc", "cc"]:
-            data[f"r{combo}"] = 0.0
-            data[f"x{combo}"] = 0.0
+            data[f"r_{combo}"] = 0.0
+            data[f"x_{combo}"] = 0.0
 
         # Process phase impedance data
         for impedance_data in line.PerLengthImpedance.PhaseImpedanceData:
@@ -75,8 +75,8 @@ class LineProcessor(BaseProcessor):
             real = length * float(impedance_data.r) / z_base
             imag = length * float(impedance_data.x) / z_base
 
-            data[f"r{ph}"] = real
-            data[f"x{ph}"] = imag
+            data[f"r_{ph}"] = real
+            data[f"x_{ph}"] = imag
 
     def _process_line_impedance_no_phases(self, line, data: dict, z_base: float):
         length = float(line.length)
@@ -90,8 +90,8 @@ class LineProcessor(BaseProcessor):
             # raise AttributeError(f"r not found for line {line.name}")
         # Initialize impedance matrix
         for combo in ["aa", "ab", "ac", "bb", "bc", "cc"]:
-            data[f"r{combo}"] = 0.0
-            data[f"x{combo}"] = 0.0
+            data[f"r_{combo}"] = 0.0
+            data[f"x_{combo}"] = 0.0
         for combo in ["aa", "bb", "cc"]:
-            data[f"r{combo}"] = length * float(r) / z_base
-            data[f"x{combo}"] = length * float(x) / z_base
+            data[f"r_{combo}"] = length * float(r) / z_base
+            data[f"x_{combo}"] = length * float(x) / z_base

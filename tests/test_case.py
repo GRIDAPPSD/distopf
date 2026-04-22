@@ -107,9 +107,9 @@ class TestCaseValidation:
         """Negative generator ratings should raise."""
         case = create_case(CASES_DIR / "csv" / "ieee123_30der")
         if case.gen_data is not None and len(case.gen_data) > 0:
-            case.gen_data.loc[case.gen_data.index[0], "sa_max"] = -100
+            case.gen_data.loc[case.gen_data.index[0], "s_a_max"] = -100
 
-            with pytest.raises(ValueError, match="negative sa_max"):
+            with pytest.raises(ValueError, match="negative s_a_max"):
                 case._validate_case()
 
     def test_multiple_errors_reported(self):
@@ -328,9 +328,9 @@ class TestCaseModify:
     def test_modify_gen_mult(self):
         """gen_mult should scale generator outputs."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-        original_pa = case.gen_data["pa"].sum()
+        original_pa = case.gen_data["p_a"].sum()
         case.modify(gen_mult=2.0)
-        assert abs(case.gen_data["pa"].sum() - 2.0 * original_pa) < 1e-9
+        assert abs(case.gen_data["p_a"].sum() - 2.0 * original_pa) < 1e-9
 
     def test_modify_v_swing(self):
         """v_swing should set swing bus voltage."""

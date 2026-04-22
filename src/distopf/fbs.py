@@ -92,19 +92,19 @@ class FBS:
             z = np.zeros((3, 3), dtype=complex)
 
             # Diagonal elements
-            z[0, 0] = complex(get(branch, "raa", 0), get(branch, "xaa", 0))
-            z[1, 1] = complex(get(branch, "rbb", 0), get(branch, "xbb", 0))
-            z[2, 2] = complex(get(branch, "rcc", 0), get(branch, "xcc", 0))
+            z[0, 0] = complex(get(branch, "r_aa", 0), get(branch, "x_aa", 0))
+            z[1, 1] = complex(get(branch, "r_bb", 0), get(branch, "x_bb", 0))
+            z[2, 2] = complex(get(branch, "r_cc", 0), get(branch, "x_cc", 0))
 
             # Off-diagonal elements (mutual impedances)
             z[0, 1] = z[1, 0] = complex(
-                get(branch, "rab", 0), get(branch, "xab", 0)
+                get(branch, "r_ab", 0), get(branch, "x_ab", 0)
             )  # A-B
             z[0, 2] = z[2, 0] = complex(
-                get(branch, "rac", 0), get(branch, "xac", 0)
+                get(branch, "r_ac", 0), get(branch, "x_ac", 0)
             )  # A-C
             z[1, 2] = z[2, 1] = complex(
-                get(branch, "rbc", 0), get(branch, "xbc", 0)
+                get(branch, "r_bc", 0), get(branch, "x_bc", 0)
             )  # B-C
 
             impedances[tb] = z
@@ -152,9 +152,9 @@ class FBS:
                 # Build complex power array [S_a, S_b, S_c]
                 S_gen = np.array(
                     [
-                        complex(get(gen, "pa", 0), get(gen, "qa", 0)),
-                        complex(get(gen, "pb", 0), get(gen, "qb", 0)),
-                        complex(get(gen, "pc", 0), get(gen, "qc", 0)),
+                        complex(get(gen, "p_a", 0), get(gen, "q_a", 0)),
+                        complex(get(gen, "p_b", 0), get(gen, "q_b", 0)),
+                        complex(get(gen, "p_c", 0), get(gen, "q_c", 0)),
                     ]
                 )
                 generations[node_id] = S_gen
@@ -167,7 +167,7 @@ class FBS:
             for idx, cap in self.cap_data.iterrows():
                 node_id = int(cap["id"])
                 Q_cap = np.array(
-                    [get(cap, "qa", 0), get(cap, "qb", 0), get(cap, "qc", 0)]
+                    [get(cap, "q_a", 0), get(cap, "q_b", 0), get(cap, "q_c", 0)]
                 )
                 capacitors[node_id] = Q_cap
         return capacitors
@@ -787,11 +787,11 @@ class FBS:
         if self.gen_data is not None and len(self.gen_data) > 0:
             gen_df = self.gen_data.copy()
             # Map pa/pb/pc -> a/b/c and qa/qb/qc -> a/b/c with a time column t=0
-            p_cols = {"pa": "a", "pb": "b", "pc": "c"}
-            q_cols = {"qa": "a", "qb": "b", "qc": "c"}
+            p_cols = {"p_a": "a", "p_b": "b", "p_c": "c"}
+            q_cols = {"q_a": "a", "q_b": "b", "q_c": "c"}
 
             # p_gens
-            p_present = [c for c in ["pa", "pb", "pc"] if c in gen_df.columns]
+            p_present = [c for c in ["p_a", "p_b", "p_c"] if c in gen_df.columns]
             if p_present:
                 p_gens_df = gen_df[
                     ["id"] + (["name"] if "name" in gen_df.columns else []) + p_present
@@ -803,7 +803,7 @@ class FBS:
                 p_gens_df = pd.DataFrame(columns=["id", "name", "t", "a", "b", "c"])
 
             # q_gens
-            q_present = [c for c in ["qa", "qb", "qc"] if c in gen_df.columns]
+            q_present = [c for c in ["q_a", "q_b", "q_c"] if c in gen_df.columns]
             if q_present:
                 q_gens_df = gen_df[
                     ["id"] + (["name"] if "name" in gen_df.columns else []) + q_present
@@ -1296,7 +1296,7 @@ def _apply_gen_setpoints_to_case(
     if p_gens is not None:
         if "t" in p_gens.columns:
             p_gens = p_gens[p_gens["t"] == p_gens["t"].min()]
-        p_col_map = {"a": "pa", "b": "pb", "c": "pc"}
+        p_col_map = {"a": "p_a", "b": "p_b", "c": "p_c"}
         p_phases = [c for c in ["a", "b", "c"] if c in p_gens.columns]
         if p_phases:
             p_update = (
@@ -1308,7 +1308,7 @@ def _apply_gen_setpoints_to_case(
     if q_gens is not None:
         if "t" in q_gens.columns:
             q_gens = q_gens[q_gens["t"] == q_gens["t"].min()]
-        q_col_map = {"a": "qa", "b": "qb", "c": "qc"}
+        q_col_map = {"a": "q_a", "b": "q_b", "c": "q_c"}
         q_phases = [c for c in ["a", "b", "c"] if c in q_gens.columns]
         if q_phases:
             q_update = (

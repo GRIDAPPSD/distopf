@@ -81,7 +81,7 @@ def _create_rx_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 
     for _, row in case.branch_data.iterrows():
         for phase_pair in m.phase_pair_set:
-            r_col, x_col = f"r{phase_pair}", f"x{phase_pair}"
+            r_col, x_col = f"r_{phase_pair}", f"x_{phase_pair}"
 
             if r_col in case.branch_data.columns and x_col in case.branch_data.columns:
                 r_data[(row.tb, phase_pair)] = row[r_col]
@@ -174,9 +174,9 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
                 continue
 
             # Generation limits
-            s_rated = getattr(row, f"s{phase}_max", 1000.0)
-            q_max = getattr(row, f"q{phase}_max", s_rated)
-            q_min = getattr(row, f"q{phase}_min", -s_rated)
+            s_rated = getattr(row, f"s_{phase}_max", 1000.0)
+            q_max = getattr(row, f"q_{phase}_max", s_rated)
+            q_min = getattr(row, f"q_{phase}_min", -s_rated)
             s_rated_data[(row.id, phase)] = s_rated
             q_gen_min_data[(row.id, phase)] = q_min
             q_gen_max_data[(row.id, phase)] = q_max
@@ -187,8 +187,8 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 
             # Nominal generation values, scaled by schedule
             gen_shape = getattr(row, "gen_shape", "PV")
-            p_gen = getattr(row, f"p{phase}", 0.0)
-            q_gen = getattr(row, f"q{phase}", 0.0)
+            p_gen = getattr(row, f"p_{phase}", 0.0)
+            q_gen = getattr(row, f"q_{phase}", 0.0)
             for t in m.time_set:
                 gen_mult = _get_gen_schedule_mult(gen_shape, t, case.schedules)
                 p_gen_data[(row.id, phase, t)] = p_gen * gen_mult
@@ -238,7 +238,7 @@ def _create_capacitor_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     q_cap_data = {}
     for _, row in case.cap_data.iterrows():
         for phase in row.phases:
-            q_cap = getattr(row, f"q{phase}", 0.0)
+            q_cap = getattr(row, f"q_{phase}", 0.0)
             q_cap_data[(row.id, phase)] = q_cap
 
     m.q_cap_nom = pyo.Param(

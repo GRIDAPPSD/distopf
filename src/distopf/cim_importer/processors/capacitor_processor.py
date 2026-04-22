@@ -23,9 +23,9 @@ class CapacitorProcessor(BaseProcessor):
         cap_data = {
             "id": bus.name,
             "name": capacitor.name,
-            "qa": 0.0,
-            "qb": 0.0,
-            "qc": 0.0,
+            "q_a": 0.0,
+            "q_b": 0.0,
+            "q_c": 0.0,
             "phases": "",
         }
 
@@ -69,9 +69,9 @@ class CapacitorProcessor(BaseProcessor):
                 phase_data[phase_letter] = q_var / self.s_base
                 active_phases.add(phase_letter)
 
-        cap_data["qa"] = phase_data.get("a", 0.0)
-        cap_data["qb"] = phase_data.get("b", 0.0)
-        cap_data["qc"] = phase_data.get("c", 0.0)
+        cap_data["q_a"] = phase_data.get("a", 0.0)
+        cap_data["q_b"] = phase_data.get("b", 0.0)
+        cap_data["q_c"] = phase_data.get("c", 0.0)
         cap_data["phases"] = "".join(sorted(active_phases))
         return cap_data
 

@@ -386,8 +386,10 @@ def add_octagonal_thermal_constraints(m: LindistModelProtocol) -> None:
 
     where c = sqrt(2) - 1 ≈ 0.4142
 
-    Requires branch_data to have columns 'sa_max', 'sb_max', 'sc_max' for
-    per-phase apparent power limits. Branches without limits are skipped.
+    Requires branch_data to have columns for branch apparent power limits:
+    primary phases: 's_a_max', 's_b_max', 's_c_max'
+    triplex phases: 's_s1_max', 's_s2_max' (legacy: 's1_max', 's2_max')
+    Branches without limits are skipped.
     """
     # Check if thermal limits exist in the model
     if not hasattr(m, "s_branch_max"):
@@ -480,8 +482,10 @@ def add_circular_thermal_constraints(m: LindistModelProtocol) -> None:
     This is a nonlinear (quadratic) constraint requiring a nonlinear solver
     (e.g., IPOPT) or a solver supporting second-order cone constraints.
 
-    Requires branch_data to have columns 'sa_max', 'sb_max', 'sc_max' for
-    per-phase apparent power limits. Branches without limits are skipped.
+    Requires branch_data to have columns for branch apparent power limits:
+    primary phases: 's_a_max', 's_b_max', 's_c_max'
+    triplex phases: 's_s1_max', 's_s2_max' (legacy: 's1_max', 's2_max')
+    Branches without limits are skipped.
     """
     if not hasattr(m, "s_branch_max"):
         return

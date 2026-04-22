@@ -208,20 +208,20 @@ class BaseModelMP:
         row = np.array(np.r_[branch.fb, branch.tb], dtype=int) - 1
         col = np.array(np.r_[branch.tb, branch.fb], dtype=int) - 1
         r = {
-            "aa": csr_array((np.r_[branch.raa, branch.raa], (row, col))),
-            "ab": csr_array((np.r_[branch.rab, branch.rab], (row, col))),
-            "ac": csr_array((np.r_[branch.rac, branch.rac], (row, col))),
-            "bb": csr_array((np.r_[branch.rbb, branch.rbb], (row, col))),
-            "bc": csr_array((np.r_[branch.rbc, branch.rbc], (row, col))),
-            "cc": csr_array((np.r_[branch.rcc, branch.rcc], (row, col))),
+            "aa": csr_array((np.r_[branch.r_aa, branch.r_aa], (row, col))),
+            "ab": csr_array((np.r_[branch.r_ab, branch.r_ab], (row, col))),
+            "ac": csr_array((np.r_[branch.r_ac, branch.r_ac], (row, col))),
+            "bb": csr_array((np.r_[branch.r_bb, branch.r_bb], (row, col))),
+            "bc": csr_array((np.r_[branch.r_bc, branch.r_bc], (row, col))),
+            "cc": csr_array((np.r_[branch.r_cc, branch.r_cc], (row, col))),
         }
         x = {
-            "aa": csr_array((np.r_[branch.xaa, branch.xaa], (row, col))),
-            "ab": csr_array((np.r_[branch.xab, branch.xab], (row, col))),
-            "ac": csr_array((np.r_[branch.xac, branch.xac], (row, col))),
-            "bb": csr_array((np.r_[branch.xbb, branch.xbb], (row, col))),
-            "bc": csr_array((np.r_[branch.xbc, branch.xbc], (row, col))),
-            "cc": csr_array((np.r_[branch.xcc, branch.xcc], (row, col))),
+            "aa": csr_array((np.r_[branch.x_aa, branch.x_aa], (row, col))),
+            "ab": csr_array((np.r_[branch.x_ab, branch.x_ab], (row, col))),
+            "ac": csr_array((np.r_[branch.x_ac, branch.x_ac], (row, col))),
+            "bb": csr_array((np.r_[branch.x_bb, branch.x_bb], (row, col))),
+            "bc": csr_array((np.r_[branch.x_bc, branch.x_bc], (row, col))),
+            "cc": csr_array((np.r_[branch.x_cc, branch.x_cc], (row, col))),
         }
         return r, x
 
@@ -528,12 +528,12 @@ class LinDistBaseMP(BaseModelMP):
         for a in "abc":
             if not self.phase_exists(a):
                 continue
-            s_rated = self.gen[f"s{a}_max"]
+            s_rated = self.gen[f"s_{a}_max"]
             q_max_manual = self.gen.get(f"q{a}_max", np.ones(len(self.gen)) * 100e3)
             q_min_manual = self.gen.get(f"q{a}_min", np.ones(len(self.gen)) * -100e3)
             for j in self.gen_buses[a]:
                 gen_mult = self._get_gen_schedule_mult(j, t)
-                p_out = self.gen[f"p{a}"][j] * gen_mult
+                p_out = self.gen[f"p_{a}"][j] * gen_mult
                 q_max = ((s_rated[j] ** 2) - (p_out**2)) ** (1 / 2)
                 q_min = -q_max
                 mode = self.gen.loc[j, "control_variable"]
@@ -634,7 +634,7 @@ class LinDistBaseMP(BaseModelMP):
             return self.pg_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["qg", "q_gen"]:  # reactive power generation at node
             return self.qg_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
-        if var in ["qc", "q_cap"]:  # reactive power injection by capacitor
+        if var in ["q_c", "q_cap"]:  # reactive power injection by capacitor
             return self.qc_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
         if var in ["ch", "charge"]:
             return self.charge_map.get(t, {}).get(phase, pd.Series()).get(node_j, [])
@@ -823,8 +823,8 @@ class LinDistBaseMP(BaseModelMP):
         p_gen_nom, q_gen_nom = 0, 0
         gen_mult = self._get_gen_schedule_mult(j, t)
         if self.gen is not None:
-            p_gen_nom = get(self.gen[f"p{a}"], j, 0)
-            q_gen_nom = get(self.gen[f"q{a}"], j, 0)
+            p_gen_nom = get(self.gen[f"p_{a}"], j, 0)
+            q_gen_nom = get(self.gen[f"q_{a}"], j, 0)
         # equation indexes
         pij = self.idx("pij", j, a, t=t)
         qij = self.idx("qij", j, a, t=t)
@@ -876,7 +876,7 @@ class LinDistBaseMP(BaseModelMP):
             t = self.start_step
         q_cap_nom = 0
         if self.cap is not None:
-            q_cap_nom = get(self.cap[f"q{a}"], j, 0)
+            q_cap_nom = get(self.cap[f"q_{a}"], j, 0)
         # equation indexes
         qij = self.idx("qij", j, a, t=t)
         vj = self.idx("v", j, a, t=t)
@@ -1016,7 +1016,7 @@ class LinDistBaseMP(BaseModelMP):
                         continue
                     pg = self.idx("pg", j, a, t=t)
                     qg = self.idx("qg", j, a, t=t)
-                    s_rated = float(self.gen.at[j, f"s{a}_max"])
+                    s_rated = float(self.gen.at[j, f"s_{a}_max"])
                     coef = sqrt(3) / 3  # ~=0.5774
                     # Right half plane. Positive P
                     # limit for small +P and large +Q
@@ -1066,7 +1066,7 @@ class LinDistBaseMP(BaseModelMP):
                         continue
                     pg = self.idx("pg", j, a, t=t)
                     qg = self.idx("qg", j, a, t=t)
-                    s_rated = float(self.gen.at[j, f"s{a}_max"])
+                    s_rated = float(self.gen.at[j, f"s_{a}_max"])
                     coef = sqrt(2) - 1  # ~=0.4142
                     # Right half plane. Positive P
                     # limit for small +P and large +Q
@@ -1163,9 +1163,9 @@ class LinDistBaseMP(BaseModelMP):
 
         # ########## Aineq and Bineq Formation ###########
         if (
-            "sa_max" not in self.branch.columns
-            or "sb_max" not in self.branch.columns
-            or "sc_max" not in self.branch.columns
+            "s_a_max" not in self.branch.columns
+            or "s_b_max" not in self.branch.columns
+            or "s_c_max" not in self.branch.columns
         ):
             return lil_array((0, self.n_x)), zeros(0)
         n_inequalities = 8
@@ -1173,9 +1173,9 @@ class LinDistBaseMP(BaseModelMP):
         n_rows_ineq = (
             n_inequalities
             * (
-                len(np.where(~self.branch.sa_max.isna())[0])
-                + len(np.where(~self.branch.sb_max.isna())[0])
-                + len(np.where(~self.branch.sc_max.isna())[0])
+                len(np.where(~self.branch.s_a_max.isna())[0])
+                + len(np.where(~self.branch.s_b_max.isna())[0])
+                + len(np.where(~self.branch.s_c_max.isna())[0])
             )
             * self.n_steps
         )
@@ -1189,7 +1189,7 @@ class LinDistBaseMP(BaseModelMP):
                     if not self.phase_exists(a, j):
                         continue
                     s_rated = self.branch.loc[
-                        self.branch.tb == tb, f"s{a}_max"
+                        self.branch.tb == tb, f"s_{a}_max"
                     ].to_numpy()[0]
                     if np.isnan(s_rated):
                         continue

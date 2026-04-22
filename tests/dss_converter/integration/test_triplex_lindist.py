@@ -14,7 +14,6 @@ from distopf.dss_importer.dss_to_csv_converter import DSSToCSVConverter
 from distopf import CASES_DIR, create_case
 
 DSS = CASES_DIR / "dss" / "triplex_pv" / "triplex_pv.dss"
-CSV_DIR = CASES_DIR / "csv" / "triplex_pv"
 S_BASE = 25_000
 
 
@@ -24,8 +23,15 @@ def dss_conv():
 
 
 @pytest.fixture(scope="module")
-def case():
-    return create_case(CSV_DIR)
+def csv_dir(tmp_path_factory, dss_conv):
+    out_dir = tmp_path_factory.mktemp("triplex_pv_csv")
+    dss_conv.to_csv(out_dir)
+    return out_dir
+
+
+@pytest.fixture(scope="module")
+def case(csv_dir):
+    return create_case(csv_dir)
 
 
 @pytest.fixture(scope="module")

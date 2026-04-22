@@ -128,7 +128,7 @@ def test_triplex_line_row(conv):
     row = tpx.iloc[0]
     for col in ["r_s1s1", "r_s1s2", "r_s2s2", "x_s1s1", "x_s1s2", "x_s2s2"]:
         assert pd.notna(row[col]) and row[col] != 0, f"{col} should be populated"
-    for col in ["raa", "rbb", "rcc", "xaa", "xbb", "xcc"]:
+    for col in ["r_aa", "r_bb", "r_cc", "x_aa", "x_bb", "x_cc"]:
         assert pd.isna(row[col]) or row[col] == 0
     assert row.phases == "s1s2"
     assert row.primary_phase == "a"
@@ -140,7 +140,7 @@ def test_primary_line_unaffected(conv):
     row = pri.iloc[0]
     assert row.type in ("line", "overhead_line")
     assert row.phases == "a"
-    assert pd.notna(row.raa) and row.raa != 0
+    assert pd.notna(row.r_aa) and row.r_aa != 0
     for col in ["r_s1s1", "r_s1s2", "r_s2s2"]:
         assert pd.isna(row[col]) or row[col] == 0
 

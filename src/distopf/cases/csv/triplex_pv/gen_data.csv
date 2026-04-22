@@ -1,5 +1,5 @@
-id,name,pa,pb,pc,qa,qb,qc,sa_max,sb_max,sc_max,ps1,ps2,qs1,qs2,ss1_max,ss2_max,primary_phase,phases,qa_max,qb_max,qc_max,qa_min,qb_min,qc_min,control_variable
-5,pv4,0,0,0,0,0,0,0,0,0,0.25,0.25,0.0,0.0,0.3,0.3,c,s1s2,0,0,0,0,0,0,
-7,pv1,0,0,0,0,0,0,0,0,0,0.2,0.2,0.0,0.0,0.25,0.25,a,s1s2,0,0,0,0,0,0,
-8,pv2,0,0,0,0,0,0,0,0,0,0.0,0.0,0.0,0.0,0.0,0.0,a,s1,0,0,0,0,0,0,
-11,pv3,0,0,0,0,0,0,0,0,0,0.0,0.0,0.0,0.0,0.0,0.0,b,s2,0,0,0,0,0,0,
+id,name,p_a,p_b,p_c,q_a,q_b,q_c,s_a_max,s_b_max,s_c_max,p_s1,p_s2,q_s1,q_s2,s_s1_max,s_s2_max,primary_phase,phases,q_a_max,q_b_max,q_c_max,q_a_min,q_b_min,q_c_min,control_variable,gen_shape
+4,pv1,0,0,0,0,0,0,0,0,0,0.2,0.2,0.0,0.0,0.25,0.25,a,s1s2,0,0,0,0,0,0,,PV
+5,pv2,0,0,0,0,0,0,0,0,0,0.25,0.0,0.0,0.0,0.3,0.0,a,s1,0,0,0,0,0,0,,PV
+8,pv3,0,0,0,0,0,0,0,0,0,0.0,0.35,0.0,0.0,0.0,0.4,b,s2,0,0,0,0,0,0,,PV
+11,pv4,0,0,0,0,0,0,0,0,0,0.25,0.25,0.0,0.0,0.3,0.3,c,s1s2,0,0,0,0,0,0,,PV

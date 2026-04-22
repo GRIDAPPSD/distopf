@@ -838,11 +838,11 @@ class Case:
             q_max = s_rated
         if q_min is None:
             q_min = -s_rated
-        gen.loc[i, ["qa_max", "qb_max", "qc_max"]] = q_max  # unlimited
-        gen.loc[i, ["qa_min", "qb_min", "qc_min"]] = q_min  # unlimited
+        gen.loc[i, ["q_a_max", "q_b_max", "q_c_max"]] = q_max  # unlimited
+        gen.loc[i, ["q_a_min", "q_b_min", "q_c_min"]] = q_min  # unlimited
 
-        gen.loc[:, ["pa", "pb", "pc", "qa", "qb", "qc"]] = (
-            gen.loc[:, ["pa", "pb", "pc", "qa", "qb", "qc"]].astype(float).fillna(0.0)
+        gen.loc[:, ["p_a", "p_b", "p_c", "q_a", "q_b", "q_c"]] = (
+            gen.loc[:, ["p_a", "p_b", "p_c", "q_a", "q_b", "q_c"]].astype(float).fillna(0.0)
         )
         gen.loc[:, [f"s{a}_max" for a in "abc"]] = (
             gen.loc[:, [f"s{a}_max" for a in "abc"]].astype(float).fillna(0.0)
@@ -1453,9 +1453,9 @@ def modify_case(
         )
     # Modify generation multiplier
     if gen_mult is not None and case.gen_data is not None:
-        case.gen_data.loc[:, ["pa", "pb", "pc"]] *= gen_mult
-        case.gen_data.loc[:, ["qa", "qb", "qc"]] *= gen_mult
-        case.gen_data.loc[:, ["sa_max", "sb_max", "sc_max"]] *= gen_mult
+        case.gen_data.loc[:, ["p_a", "p_b", "p_c"]] *= gen_mult
+        case.gen_data.loc[:, ["q_a", "q_b", "q_c"]] *= gen_mult
+        case.gen_data.loc[:, ["s_a_max", "s_b_max", "s_c_max"]] *= gen_mult
     # Modify control_variable
     if control_variable is not None and case.gen_data is not None:
         if control_variable == "":

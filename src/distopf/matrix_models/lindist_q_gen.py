@@ -51,8 +51,8 @@ class LinDistModelQGen(LinDistBase):
         for a in "abc":
             if not self.phase_exists(a):
                 continue
-            s_rated = self.gen[f"s{a}_max"]
-            p_out = self.gen[f"p{a}"]
+            s_rated = self.gen[f"s_{a}_max"]
+            p_out = self.gen[f"p_{a}"]
             q_max = ((s_rated**2) - (p_out**2)) ** (1 / 2)
             q_min = -q_max
             q_max_manual = self.gen.get(f"q{a}_max", np.ones_like(q_min) * 100e3)
@@ -76,7 +76,7 @@ class LinDistModelQGen(LinDistBase):
             return get(self.v_map[phase], node_j, [])
         if var in ["qg", "q_gen"]:  # reactive power generation at node
             return get(self.qg_map[phase], node_j, [])
-        if var in ["qc", "q_cap"]:  # reactive power injection by capacitor
+        if var in ["q_c", "q_cap"]:  # reactive power injection by capacitor
             return get(self.qc_map[phase], node_j, [])
         if var in ["vx"]:
             return self.vx_map[phase].get(node_j, [])
@@ -95,7 +95,7 @@ class LinDistModelQGen(LinDistBase):
         vj = self.idx("v", j, phase)
         p_gen_nom = 0, 0
         if self.gen is not None:
-            p_gen_nom = get(self.gen[f"p{phase}"], j, 0)
+            p_gen_nom = get(self.gen[f"p_{phase}"], j, 0)
         p_load_nom, q_load_nom = 0, 0
         if self.bus.bus_type[j] == opf.PQ_BUS:
             p_load_nom = self.bus[f"pl_{phase}"][j]
@@ -125,7 +125,7 @@ class LinDistModelQGen(LinDistBase):
     def add_capacitor_model(self, a_eq, b_eq, j, phase):
         q_cap_nom = 0
         if self.cap is not None:
-            q_cap_nom = get(self.cap[f"q{phase}"], j, 0)
+            q_cap_nom = get(self.cap[f"q_{phase}"], j, 0)
         # equation indexes
         vj = self.idx("v", j, phase)
         qc = self.idx("q_cap", j, phase)
@@ -135,9 +135,9 @@ class LinDistModelQGen(LinDistBase):
 
     def get_p_gens(self, x):
         df = self.get_device_variables(x, self.qg_map)
-        df.a = self.gen_data.pa.to_numpy()
-        df.b = self.gen_data.pb.to_numpy()
-        df.c = self.gen_data.pc.to_numpy()
+        df.a = self.gen_data.p_a.to_numpy()
+        df.b = self.gen_data.p_b.to_numpy()
+        df.c = self.gen_data.p_c.to_numpy()
         return df
 
     def get_apparent_power_flows(self, x):

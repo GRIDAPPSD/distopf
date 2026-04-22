@@ -95,12 +95,7 @@ def _create_rx_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 
     for _, row in case.branch_data.iterrows():
         for phase_pair in m.phase_pair_set:
-            # Triplex columns use underscore: r_s1s1, x_s1s2, etc.
-            # Primary columns have no underscore: raa, xab, etc.
-            if phase_pair.startswith("s"):
-                r_col, x_col = f"r_{phase_pair}", f"x_{phase_pair}"
-            else:
-                r_col, x_col = f"r{phase_pair}", f"x{phase_pair}"
+            r_col, x_col = f"r_{phase_pair}", f"x_{phase_pair}"
 
             if r_col in case.branch_data.columns and x_col in case.branch_data.columns:
                 r_data[(row.tb, phase_pair)] = row[r_col]
@@ -201,27 +196,11 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
                 continue
 
             # Generation limits and nominal values
-            # if phase in TRIPLEX_PHASES:
-            #     # Triplex generator columns use underscore: p_s1, s_s1_max, etc.
-            #     s_rated = getattr(row, f"s_{phase}_max", 0.0)
-            #     q_max = (
-            #         getattr(row, f"q_{phase}_max", s_rated)
-            #         if hasattr(row, f"q_{phase}_max")
-            #         else s_rated
-            #     )
-            #     q_min = (
-            #         getattr(row, f"q_{phase}_min", -s_rated)
-            #         if hasattr(row, f"q_{phase}_min")
-            #         else -s_rated
-            #     )
-            #     p_gen = getattr(row, f"p_{phase}", 0.0)
-            #     q_gen = getattr(row, f"q_{phase}", 0.0)
-            # else:
-            s_rated = getattr(row, f"s{phase}_max", 1000.0)
-            q_max = getattr(row, f"q{phase}_max", s_rated)
-            q_min = getattr(row, f"q{phase}_min", -s_rated)
-            p_gen = getattr(row, f"p{phase}", 0.0)
-            q_gen = getattr(row, f"q{phase}", 0.0)
+            s_rated = getattr(row, f"s_{phase}_max", 1000.0)
+            q_max = getattr(row, f"q_{phase}_max", s_rated)
+            q_min = getattr(row, f"q_{phase}_min", -s_rated)
+            p_gen = getattr(row, f"p_{phase}", 0.0)
+            q_gen = getattr(row, f"q_{phase}", 0.0)
 
             s_rated_data[(row.id, phase)] = s_rated
             q_gen_min_data[(row.id, phase)] = q_min
@@ -281,8 +260,8 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 def _create_capacitor_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     q_cap_data = {}
     for _, row in case.cap_data.iterrows():
-        for phase in row.phases:
-            q_cap = getattr(row, f"q{phase}", 0.0)
+        for phase in _parse_phases(str(row.phases)):
+            q_cap = getattr(row, f"q_{phase}", 0.0)
             q_cap_data[(row.id, phase)] = q_cap
 
     m.q_cap_nom = pyo.Param(
@@ -296,7 +275,7 @@ def _create_capacitor_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 def _create_regulator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     ratio_data = {}
     for _, row in case.reg_data.iterrows():
-        for phase in row.phases:
+        for phase in _parse_phases(str(row.phases)):
             ratio_data[(row.tb, phase)] = getattr(row, f"ratio_{phase}", 1.0)
 
     m.reg_ratio = pyo.Param(
@@ -509,22 +488,35 @@ def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 def _create_branch_thermal_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     """Create branch thermal limit parameters."""
     s_max_data = {}
+    thermal_col_by_phase = {
+        "a": ("s_a_max",),
+        "b": ("s_b_max",),
+        "c": ("s_c_max",),
+        "s1": ("s_s1_max", "s1_max"),
+        "s2": ("s_s2_max", "s2_max"),
+    }
     has_thermal_limits = (
-        "sa_max" in case.branch_data.columns
-        or "sb_max" in case.branch_data.columns
-        or "sc_max" in case.branch_data.columns
+        "s_a_max" in case.branch_data.columns
+        or "s_b_max" in case.branch_data.columns
+        or "s_c_max" in case.branch_data.columns
+        or "s_s1_max" in case.branch_data.columns
+        or "s_s2_max" in case.branch_data.columns
+        or "s1_max" in case.branch_data.columns
+        or "s2_max" in case.branch_data.columns
     )
 
     if not has_thermal_limits:
         return
 
     for _, row in case.branch_data.iterrows():
-        for phase in "abc":
-            col = f"s{phase}_max"
-            if col in case.branch_data.columns:
-                val = getattr(row, col, None)
-                if val is not None and not pd.isna(val):
-                    s_max_data[(row.tb, phase)] = val
+        phases = _parse_phases(str(row.phases))
+        for phase in phases:
+            for col in thermal_col_by_phase.get(phase, ()):  # pragma: no branch
+                if col in case.branch_data.columns:
+                    val = getattr(row, col, None)
+                    if val is not None and not pd.isna(val):
+                        s_max_data[(row.tb, phase)] = val
+                        break
 
     if s_max_data:
         m.s_branch_max = pyo.Param(

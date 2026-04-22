@@ -827,18 +827,18 @@ class DSSToCSVConverter:
             tb=tb,
             from_name=bus1,
             to_name=bus2,
-            raa=r_matrix[0, 0] / z_base,
-            rab=r_matrix[0, 1] / z_base,
-            rac=r_matrix[0, 2] / z_base,
-            rbb=r_matrix[1, 1] / z_base,
-            rbc=r_matrix[1, 2] / z_base,
-            rcc=r_matrix[2, 2] / z_base,
-            xaa=x_matrix[0, 0] / z_base,
-            xab=x_matrix[0, 1] / z_base,
-            xac=x_matrix[0, 2] / z_base,
-            xbb=x_matrix[1, 1] / z_base,
-            xbc=x_matrix[1, 2] / z_base,
-            xcc=x_matrix[2, 2] / z_base,
+            r_aa=r_matrix[0, 0] / z_base,
+            r_ab=r_matrix[0, 1] / z_base,
+            r_ac=r_matrix[0, 2] / z_base,
+            r_bb=r_matrix[1, 1] / z_base,
+            r_bc=r_matrix[1, 2] / z_base,
+            r_cc=r_matrix[2, 2] / z_base,
+            x_aa=x_matrix[0, 0] / z_base,
+            x_ab=x_matrix[0, 1] / z_base,
+            x_ac=x_matrix[0, 2] / z_base,
+            x_bb=x_matrix[1, 1] / z_base,
+            x_bc=x_matrix[1, 2] / z_base,
+            x_cc=x_matrix[2, 2] / z_base,
             r_s1s1=np.nan,
             r_s1s2=np.nan,
             r_s2s2=np.nan,
@@ -954,18 +954,18 @@ class DSSToCSVConverter:
                 tb=tb,
                 from_name=from_name,
                 to_name=to_name,
-                raa=np.nan,
-                rab=np.nan,
-                rac=np.nan,
-                rbb=np.nan,
-                rbc=np.nan,
-                rcc=np.nan,
-                xaa=np.nan,
-                xab=np.nan,
-                xac=np.nan,
-                xbb=np.nan,
-                xbc=np.nan,
-                xcc=np.nan,
+                r_aa=np.nan,
+                r_ab=np.nan,
+                r_ac=np.nan,
+                r_bb=np.nan,
+                r_bc=np.nan,
+                r_cc=np.nan,
+                x_aa=np.nan,
+                x_ab=np.nan,
+                x_ac=np.nan,
+                x_bb=np.nan,
+                x_bc=np.nan,
+                x_cc=np.nan,
                 r_s1s1=r2[0, 0] / z_base,
                 r_s1s2=r2[0, 1] / z_base,
                 r_s2s2=r2[1, 1] / z_base,
@@ -1091,18 +1091,18 @@ class DSSToCSVConverter:
                 tb=tb,
                 from_name=from_name,
                 to_name=to_name,
-                raa=np.nan,
-                rab=np.nan,
-                rac=np.nan,
-                rbb=np.nan,
-                rbc=np.nan,
-                rcc=np.nan,
-                xaa=np.nan,
-                xab=np.nan,
-                xac=np.nan,
-                xbb=np.nan,
-                xbc=np.nan,
-                xcc=np.nan,
+                r_aa=np.nan,
+                r_ab=np.nan,
+                r_ac=np.nan,
+                r_bb=np.nan,
+                r_bc=np.nan,
+                r_cc=np.nan,
+                x_aa=np.nan,
+                x_ab=np.nan,
+                x_ac=np.nan,
+                x_bb=np.nan,
+                x_bc=np.nan,
+                x_cc=np.nan,
                 r_s1s1=r_s1s1,
                 r_s1s2=r_s1s2,
                 r_s2s2=r_s2s2,
@@ -1161,18 +1161,18 @@ class DSSToCSVConverter:
                     "tb": "max",
                     "from_name": "first",
                     "to_name": "first",
-                    "raa": "sum",
-                    "rab": "sum",
-                    "rac": "sum",
-                    "rbb": "sum",
-                    "rbc": "sum",
-                    "rcc": "sum",
-                    "xaa": "sum",
-                    "xab": "sum",
-                    "xac": "sum",
-                    "xbb": "sum",
-                    "xbc": "sum",
-                    "xcc": "sum",
+                    "r_aa": "sum",
+                    "r_ab": "sum",
+                    "r_ac": "sum",
+                    "r_bb": "sum",
+                    "r_bc": "sum",
+                    "r_cc": "sum",
+                    "x_aa": "sum",
+                    "x_ab": "sum",
+                    "x_ac": "sum",
+                    "x_bb": "sum",
+                    "x_bc": "sum",
+                    "x_cc": "sum",
                     "r_s1s1": "sum",  # <-- NEW
                     "r_s1s2": "sum",
                     "r_s2s2": "sum",
@@ -1292,30 +1292,31 @@ class DSSToCSVConverter:
         each_gen: dict = dict(
             id=self.bus_names_to_index_map[bus_name],
             name=gen_name,
-            pa=0,
-            pb=0,
-            pc=0,
-            qa=0,
-            qb=0,
-            qc=0,
-            sa_max=0,
-            sb_max=0,
-            sc_max=0,
-            ps1=0,
-            ps2=0,
-            qs1=0,
-            qs2=0,
-            ss1_max=0,
-            ss2_max=0,
+            p_a=0,
+            p_b=0,
+            p_c=0,
+            q_a=0,
+            q_b=0,
+            q_c=0,
+            s_a_max=0,
+            s_b_max=0,
+            s_c_max=0,
+            p_s1=0,
+            p_s2=0,
+            q_s1=0,
+            q_s2=0,
+            s_s1_max=0,
+            s_s2_max=0,
             primary_phase="",
             phases="",
-            qa_max=0,
-            qb_max=0,
-            qc_max=0,
-            qa_min=0,
-            qb_min=0,
-            qc_min=0,
+            q_a_max=0,
+            q_b_max=0,
+            q_c_max=0,
+            q_a_min=0,
+            q_b_min=0,
+            q_c_min=0,
             control_variable="",
+            gen_shape="PV",
         )
 
         if bus_name in self.secondary_buses:
@@ -1327,12 +1328,12 @@ class DSSToCSVConverter:
 
             if sorted(nodes) == [1, 2]:
                 # 240 V phase-to-phase: split equally across both legs
-                each_gen["ps1"] = kw * 1000 / s_base / 2
-                each_gen["ps2"] = kw * 1000 / s_base / 2
-                each_gen["qs1"] = kvar * 1000 / s_base / 2
-                each_gen["qs2"] = kvar * 1000 / s_base / 2
-                each_gen["ss1_max"] = kva_rated * 1000 / s_base / 2
-                each_gen["ss2_max"] = kva_rated * 1000 / s_base / 2
+                each_gen["p_s1"] = kw * 1000 / s_base / 2
+                each_gen["p_s2"] = kw * 1000 / s_base / 2
+                each_gen["q_s1"] = kvar * 1000 / s_base / 2
+                each_gen["q_s2"] = kvar * 1000 / s_base / 2
+                each_gen["s_s1_max"] = kva_rated * 1000 / s_base / 2
+                each_gen["s_s2_max"] = kva_rated * 1000 / s_base / 2
                 each_gen["phases"] = "s1s2"
             elif len(nodes) == 1 and nodes[0] in node_to_leg:
                 # 120 V single-leg
@@ -1357,77 +1358,79 @@ class DSSToCSVConverter:
             phases = ""
             for phase_id in active_phases:
                 ph = "abc"[phase_id]
-                each_gen[f"p{ph}"] = p_per_phase
-                each_gen[f"q{ph}"] = q_per_phase
-                each_gen[f"s{ph}_max"] = s_per_phase
+                each_gen[f"p_{ph}"] = p_per_phase
+                each_gen[f"q_{ph}"] = q_per_phase
+                each_gen[f"s_{ph}_max"] = s_per_phase
                 phases += ph
             each_gen["phases"] = phases
 
-            each_gen["qa_max"] = each_gen["sa_max"]
-            each_gen["qb_max"] = each_gen["sb_max"]
-            each_gen["qc_max"] = each_gen["sc_max"]
-            each_gen["qa_min"] = -each_gen["sa_max"]
-            each_gen["qb_min"] = -each_gen["sb_max"]
-            each_gen["qc_min"] = -each_gen["sc_max"]
+            each_gen["q_a_max"] = each_gen["s_a_max"]
+            each_gen["q_b_max"] = each_gen["s_b_max"]
+            each_gen["q_c_max"] = each_gen["s_c_max"]
+            each_gen["q_a_min"] = -each_gen["s_a_max"]
+            each_gen["q_b_min"] = -each_gen["s_b_max"]
+            each_gen["q_c_min"] = -each_gen["s_c_max"]
 
         return each_gen
 
     _GEN_COLUMNS = [
         "id",
         "name",
-        "pa",
-        "pb",
-        "pc",
-        "qa",
-        "qb",
-        "qc",
-        "sa_max",
-        "sb_max",
-        "sc_max",
-        "ps1",
-        "ps2",
-        "qs1",
-        "qs2",
-        "ss1_max",
-        "ss2_max",
+        "p_a",
+        "p_b",
+        "p_c",
+        "q_a",
+        "q_b",
+        "q_c",
+        "s_a_max",
+        "s_b_max",
+        "s_c_max",
+        "p_s1",
+        "p_s2",
+        "q_s1",
+        "q_s2",
+        "s_s1_max",
+        "s_s2_max",
         "primary_phase",
         "phases",
-        "qa_max",
-        "qb_max",
-        "qc_max",
-        "qa_min",
-        "qb_min",
-        "qc_min",
+        "q_a_max",
+        "q_b_max",
+        "q_c_max",
+        "q_a_min",
+        "q_b_min",
+        "q_c_min",
         "control_variable",
+        "gen_shape",
     ]
 
     _GEN_AGG = dict(
         id="first",
         name="first",
-        pa="sum",
-        pb="sum",
-        pc="sum",
-        qa="sum",
-        qb="sum",
-        qc="sum",
-        sa_max="sum",
-        sb_max="sum",
-        sc_max="sum",
-        ps1="sum",
-        ps2="sum",
-        qs1="sum",
-        qs2="sum",
-        ss1_max="sum",
-        ss2_max="sum",
+        p_a="sum",
+        p_b="sum",
+        p_c="sum",
+        q_a="sum",
+        q_b="sum",
+        q_c="sum",
+        s_a_max="sum",
+        s_b_max="sum",
+        s_c_max="sum",
+        p_s1="sum",
+        p_s2="sum",
+        q_s1="sum",
+        q_s2="sum",
+        s_s1_max="sum",
+        s_s2_max="sum",
         primary_phase="first",
         phases="sum",
-        qa_max="sum",
-        qb_max="sum",
-        qc_max="sum",
-        qa_min="sum",
-        qb_min="sum",
-        qc_min="sum",
+        q_a_max="sum",
+        q_b_max="sum",
+        q_c_max="sum",
+        q_a_min="sum",
+        q_b_min="sum",
+        q_c_min="sum",
         control_variable="first",
+        gen_shape="first",
     )
 
     def get_gen_data(self) -> pd.DataFrame:
@@ -1489,17 +1492,17 @@ class DSSToCSVConverter:
                 each_cap = dict(
                     id=self.bus_names_to_index_map[cap_bus_name],
                     name=cap_bus_name,
-                    qa=(
+                    q_a=(
                         self.dss.Capacitors.kvar() * 1000 / s_base
                         if cap_phase in {"a"}
                         else 0
                     ),
-                    qb=(
+                    q_b=(
                         self.dss.Capacitors.kvar() * 1000 / s_base
                         if cap_phase in {"b"}
                         else 0
                     ),
-                    qc=(
+                    q_c=(
                         self.dss.Capacitors.kvar() * 1000 / s_base
                         if cap_phase in {"c"}
                         else 0
@@ -1510,9 +1513,9 @@ class DSSToCSVConverter:
                 each_cap = dict(
                     id=self.bus_names_to_index_map[cap_bus_name],
                     name=cap_bus_name,
-                    qa=(self.dss.Capacitors.kvar() * 1000 / 3) / s_base,
-                    qb=(self.dss.Capacitors.kvar() * 1000 / 3) / s_base,
-                    qc=(self.dss.Capacitors.kvar() * 1000 / 3) / s_base,
+                    q_a=(self.dss.Capacitors.kvar() * 1000 / 3) / s_base,
+                    q_b=(self.dss.Capacitors.kvar() * 1000 / 3) / s_base,
+                    q_c=(self.dss.Capacitors.kvar() * 1000 / 3) / s_base,
                     phases=cap_phase,
                 )
 
@@ -1524,9 +1527,9 @@ class DSSToCSVConverter:
                 {
                     "id": [],
                     "name": [],
-                    "qa": [],
-                    "qb": [],
-                    "qc": [],
+                    "q_a": [],
+                    "q_b": [],
+                    "q_c": [],
                     "phases": [],
                 }
             )
@@ -1535,9 +1538,9 @@ class DSSToCSVConverter:
             dict(
                 id="first",
                 name="first",
-                qa="sum",
-                qb="sum",
-                qc="sum",
+                q_a="sum",
+                q_b="sum",
+                q_c="sum",
                 phases="sum",
             )
         )
