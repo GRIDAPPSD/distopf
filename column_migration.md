@@ -3,10 +3,12 @@
 ## Progress Notes
 
 - [x] Step 1 complete (2026-04-21): Added backwards-compat rename shims in `src/distopf/utils.py` for generator, capacitor, and branch legacy columns. `handle_*_input()` now normalizes to underscore-based canonical columns.
-- [ ] Step 2 in progress: Update Python source files to only reference underscore-based names.
-- [ ] Step 3 pending: Update built-in CSV headers.
-- [ ] Step 4 pending: Update tests.
-- [ ] Step 5 pending: Update examples.
+- [x] Step 2 complete (2026-04-21): Updated Python source to use underscore-based column names, including pyomo, matrix, matrix_bess, importer, validator, plotting, and API paths.
+- [x] Step 3 complete (2026-04-21): Updated built-in `gen_data.csv`, `cap_data.csv`, and `branch_data.csv` headers across case directories.
+- [x] Step 4 complete (2026-04-21): Updated tests for new column names (utilities, pyomo, CIM, DSS, and case tests).
+- [x] Step 5 complete (2026-04-21): Updated examples to new underscore-based names.
+- [x] Additional coverage note (2026-04-21): Migrated extra files discovered during validation (`spatial_decomposition`, additional CIM processors/validators, and related tests) so repository references are consistent.
+- [x] Verification complete (2026-04-21): Focused pytest run passed (`110 passed`) on utilities, pyomo model, case validation, DSS converter unit tests, and CIM processor unit tests.
 
 ## Goal
 

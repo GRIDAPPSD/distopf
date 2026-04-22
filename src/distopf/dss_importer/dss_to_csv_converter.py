@@ -100,9 +100,9 @@ class DSSToCSVConverter:
             self.dss.Circuit.SetActiveBus(bus2)
             flag = self.dss.PDElements.Next()
         g = nx.Graph()
-        g.add_edges_from(set(branches))
-        node_list = nx.dfs_preorder_nodes(g, self.source)
-        node_list = list(node_list)
+        # Keep graph construction deterministic so DFS numbering is reproducible.
+        g.add_edges_from(sorted(set(branches)))
+        node_list = list(nx.dfs_preorder_nodes(g, self.source, sort_neighbors=sorted))
         return node_list
 
     @property
@@ -1285,6 +1285,10 @@ class DSSToCSVConverter:
     ) -> dict:
         """Build a gen_data row dict for a single generator or PV system."""
         s_base = self.s_base
+        # Ensure exported apparent-power limit can support the exported P/Q setpoint.
+        # Some feeders use PV DC oversizing (Pmpp > inverter kVA), and exporting
+        # fixed p_gen with s_rated < |S| creates an infeasible OPF model.
+        # kva_rated = max(float(kva_rated), float(np.hypot(kw, kvar)))
         bus_spec = self.dss.CktElement.BusNames()[0]
         bus_phases = bus_spec.split(".")[1:]
 
@@ -1422,7 +1426,7 @@ class DSSToCSVConverter:
         s_s1_max="sum",
         s_s2_max="sum",
         primary_phase="first",
-        phases="sum",
+        phases="first",
         q_a_max="sum",
         q_b_max="sum",
         q_c_max="sum",
@@ -1453,11 +1457,15 @@ class DSSToCSVConverter:
         pv_flag = self.dss.PVsystems.First()
         while pv_flag:
             bus_name = self.dss.CktElement.BusNames()[0].split(".")[0]
+            try:
+                pv_kw = self.dss.PVsystems.kW()
+            except Exception:
+                pv_kw = self.dss.PVsystems.Pmpp()
             gen_data.append(
                 self._build_gen_row(
                     bus_name,
                     self.dss.PVsystems.Name(),
-                    self.dss.PVsystems.Pmpp(),
+                    pv_kw,
                     self.dss.PVsystems.kvar(),
                     self.dss.PVsystems.kVARated(),
                 )
