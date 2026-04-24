@@ -104,9 +104,9 @@ def test_pv_abc_columns_zero(conv):
     for name in ("pv1", "pv2", "pv3", "pv4"):
         row = gen.loc[name]
         for ph in "abc":
-            assert row[f"p{ph}"] == 0
-            assert row[f"q{ph}"] == 0
-            assert row[f"s{ph}_max"] == 0
+            assert row[f"p_{ph}"] == 0
+            assert row[f"q_{ph}"] == 0
+            assert row[f"s_{ph}_max"] == 0
 
 
 def test_loads_house1(conv):

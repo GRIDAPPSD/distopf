@@ -212,9 +212,9 @@ def add_generator_constant_q_constraints(m: LindistModelProtocol) -> None:
 def add_generator_constant_p_constraints_q_control(m: LindistModelProtocol) -> None:
     def _rule(m: LindistModelProtocol, _id, ph, t):
         ct = m.gen_control_type[_id, ph]
-        if ct not in (ControlVariable.NONE, ControlVariable.Q):
-            return pyo.Constraint.Skip
-        return m.p_gen[_id, ph, t] == m.p_gen_nom[_id, ph, t]
+        if ct in (ControlVariable.NONE, ControlVariable.Q):
+            return m.p_gen[_id, ph, t] == m.p_gen_nom[_id, ph, t]
+        return pyo.Constraint.Skip
 
     m.constant_p_gen = pyo.Constraint(m.gen_phase_set, m.time_set, rule=_rule)
 
@@ -222,9 +222,9 @@ def add_generator_constant_p_constraints_q_control(m: LindistModelProtocol) -> N
 def add_generator_constant_q_constraints_p_control(m: LindistModelProtocol) -> None:
     def _rule(m: LindistModelProtocol, _id, ph, t):
         ct = m.gen_control_type[_id, ph]
-        if ct not in (ControlVariable.NONE, ControlVariable.P):
-            return pyo.Constraint.Skip
-        return m.q_gen[_id, ph, t] == m.q_gen_nom[_id, ph, t]
+        if ct in (ControlVariable.NONE, ControlVariable.P):
+            return m.q_gen[_id, ph, t] == m.q_gen_nom[_id, ph, t]
+        return pyo.Constraint.Skip
 
     m.constant_q_gen = pyo.Constraint(m.gen_phase_set, m.time_set, rule=_rule)
 
@@ -344,6 +344,8 @@ def add_generator_limits(m: LindistModelProtocol) -> None:
     """Add generator bounds following the original base.py logic"""
 
     def p_gen_bounds(m: LindistModelProtocol, _id, ph, t):
+        if m.gen_control_type[_id, ph] == ControlVariable.NONE:
+            return pyo.Constraint.Skip
         return (
             0,
             m.p_gen[_id, ph, t],
@@ -351,6 +353,8 @@ def add_generator_limits(m: LindistModelProtocol) -> None:
         )
 
     def q_gen_bounds(m: LindistModelProtocol, _id, ph, t):
+        if m.gen_control_type[_id, ph] == ControlVariable.NONE:
+            return pyo.Constraint.Skip
         if m.gen_control_type[_id, ph] == ControlVariable.Q:
             q_max = sqrt(max(0, m.s_rated[_id, ph] ** 2 - m.p_gen_nom[_id, ph, t] ** 2))
             return (

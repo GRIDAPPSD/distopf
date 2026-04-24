@@ -6,6 +6,17 @@ import numpy as np
 from opendssdirect import dss
 import pandas as pd
 
+def _merge_phases(s: pd.Series) -> str:
+    seen: set[str] = set()
+    phase_order = ["a", "b", "c", "s1", "s2"]
+    for val in s.dropna():
+        remaining = str(val)
+        # consume s1/s2 first so the lone 's' doesn't confuse single-char phases
+        for tok in phase_order:
+            if tok in remaining:
+                seen.add(tok)
+                remaining = remaining.replace(tok, "")
+    return "".join(tok for tok in phase_order if tok in seen)
 
 def load_dss_model(
     cim_file: str | Path, s_base: float = 1e6
@@ -1319,6 +1330,10 @@ class DSSToCSVConverter:
             q_a_min=0,
             q_b_min=0,
             q_c_min=0,
+            q_s1_max=0,
+            q_s2_max=0,
+            q_s1_min=0,
+            q_s2_min=0,
             control_variable="",
             gen_shape="PV",
         )
@@ -1332,19 +1347,27 @@ class DSSToCSVConverter:
 
             if sorted(nodes) == [1, 2]:
                 # 240 V phase-to-phase: split equally across both legs
+                s_leg = kva_rated * 1000 / s_base / 2
                 each_gen["p_s1"] = kw * 1000 / s_base / 2
                 each_gen["p_s2"] = kw * 1000 / s_base / 2
                 each_gen["q_s1"] = kvar * 1000 / s_base / 2
                 each_gen["q_s2"] = kvar * 1000 / s_base / 2
-                each_gen["s_s1_max"] = kva_rated * 1000 / s_base / 2
-                each_gen["s_s2_max"] = kva_rated * 1000 / s_base / 2
+                each_gen["s_s1_max"] = s_leg
+                each_gen["s_s2_max"] = s_leg
+                each_gen["q_s1_max"] = s_leg
+                each_gen["q_s2_max"] = s_leg
+                each_gen["q_s1_min"] = -s_leg
+                each_gen["q_s2_min"] = -s_leg
                 each_gen["phases"] = "s1s2"
             elif len(nodes) == 1 and nodes[0] in node_to_leg:
                 # 120 V single-leg
                 leg = node_to_leg[nodes[0]]
+                s_leg = kva_rated * 1000 / s_base
                 each_gen[f"p_{leg}"] = kw * 1000 / s_base
                 each_gen[f"q_{leg}"] = kvar * 1000 / s_base
-                each_gen[f"s_{leg}_max"] = kva_rated * 1000 / s_base
+                each_gen[f"s_{leg}_max"] = s_leg
+                each_gen[f"q_{leg}_max"] = s_leg
+                each_gen[f"q_{leg}_min"] = -s_leg
                 each_gen["phases"] = leg
         else:
             # ---- Primary generator ----
@@ -1403,9 +1426,14 @@ class DSSToCSVConverter:
         "q_a_min",
         "q_b_min",
         "q_c_min",
+        "q_s1_max",
+        "q_s2_max",
+        "q_s1_min",
+        "q_s2_min",
         "control_variable",
         "gen_shape",
     ]
+
 
     _GEN_AGG = dict(
         id="first",
@@ -1426,13 +1454,17 @@ class DSSToCSVConverter:
         s_s1_max="sum",
         s_s2_max="sum",
         primary_phase="first",
-        phases="first",
+        phases=_merge_phases,
         q_a_max="sum",
         q_b_max="sum",
         q_c_max="sum",
         q_a_min="sum",
         q_b_min="sum",
         q_c_min="sum",
+        q_s1_max="sum",
+        q_s2_max="sum",
+        q_s1_min="sum",
+        q_s2_min="sum",
         control_variable="first",
         gen_shape="first",
     )
@@ -1457,10 +1489,11 @@ class DSSToCSVConverter:
         pv_flag = self.dss.PVsystems.First()
         while pv_flag:
             bus_name = self.dss.CktElement.BusNames()[0].split(".")[0]
-            try:
-                pv_kw = self.dss.PVsystems.kW()
-            except Exception:
-                pv_kw = self.dss.PVsystems.Pmpp()
+            # try:
+            # pv_kw = self.dss.PVsystems.kW()
+            # pv_kw = 0
+            # except Exception:
+            pv_kw = self.dss.PVsystems.Pmpp()
             gen_data.append(
                 self._build_gen_row(
                     bus_name,
