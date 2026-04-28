@@ -41,6 +41,7 @@ from distopf.pyomo_models.capacity_expansion_constraints import (
     add_pv_parameters,
     add_bess_parameters,
     add_capacity_expansion_with_slack_constraints,
+    add_capacity_expansion_from_absolute_capacity,
 )
 from distopf.pyomo_models.slack_constraints import (
     add_voltage_slack_constraints,
@@ -98,12 +99,16 @@ def run_baseline_opf():
 # Portfolio model
 # ---------------------------------------------------------------------------
 def run_der_expansion(case):
-    zones = create_zones_from_edge_names(case, ["sw2", "sw3", "sw4"])
+    zones = create_zones_from_edge_names(case, ["line_2_3", "line_2_5", "line_2_7"])
     del zones[0]
     m = create_lindist_model(case)
 
-    add_capacity_expansion_as_fraction_of_load(
-        m, case, fraction=1.0, relative_capacity={"PV": 0.5, "BESS": 0.5}
+    # add_capacity_expansion_as_fraction_of_load(
+    #     m, case, fraction=1.0, relative_capacity={"PV": 0.5, "BESS": 0.5}
+    # )
+    add_capacity_expansion_from_absolute_capacity(
+        m,
+        absolute_capacity={"PV": 1.5, "BESS": 1.5},
     )
     add_pv_parameters(m, curtailment_max=0.0, capacity_factor=1.0, case=case)
     add_bess_parameters(m, e_max=10, soc=0.5, discharge_derate=1, charge_derate=1)
@@ -131,16 +136,34 @@ def run_der_expansion(case):
 
 if __name__ == "__main__":
     case = create_case(
-    data_path=opf.CASES_DIR / "csv" / "ieee123_30der_bat",
-    ignore_schedule=True,
+    data_path=opf.CASES_DIR / "csv" / "foresight_test",
+    ignore_schedule=False,
     ignore_bat=True,
     ignore_gen=True,
-    n_steps=1,
+    n_steps=2,
     start_step=0,
 )
     t0 = case.start_step
     result_baseline = run_baseline_opf()
     m, zones, result_portfolio = run_der_expansion(case)
+    r2 = opf.PowerFlowResult(
+        voltages=getattr(result_portfolio, "voltages", None),
+        active_power_flows=getattr(result_portfolio, "p_flow", None),
+        reactive_power_flows=getattr(result_portfolio, "q_flow", None),
+        active_power_generation=getattr(result_portfolio, "p_gen", None),
+        reactive_power_generation=getattr(result_portfolio, "q_gen", None),
+        battery_active_power=getattr(result_portfolio, "p_bat", None),
+        battery_reactive_power=getattr(result_portfolio, "q_bat", None),
+        capacitor_reactive_power=getattr(result_portfolio, "q_cap", None),
+        objective_value=result_portfolio.objective_value,
+        converged=True,
+        solver_status="ok",
+        solver="pyomo",
+        backend="pyomo",
+        raw_result=result_portfolio,
+        model=m,
+        case=case,
+    )
     p_sub_baseline = result_baseline.objective_value
     p_sub = result_portfolio.objective_value
     print(f"Substation power  baseline : {p_sub_baseline} p.u.")
@@ -150,13 +173,16 @@ if __name__ == "__main__":
     print()
     for z in zones:
         for r in m.resource_set:
+            dispatch_by_t = ", ".join(
+                f"t{t}={pyo.value(m.p_zr[z, r, t]):.4f}" for t in m.time_set
+            )
             print(
-                f"  {r}   Zone-{z}: p_max={pyo.value(m.p_max[z, r]):.4f}  dispatch={pyo.value(m.p_zr[z, r, t0]):.4f} p.u."
+                f"  {r}   Zone-{z}: p_max={pyo.value(m.p_max[z, r]):.4f}  dispatch[{dispatch_by_t}] p.u."
             )
 
     print("\nNode-level DER allocation:")
     print(
-        "node  zone  pv_cap_alloc  bess_cap_alloc  pv_dispatch_alloc  bess_dispatch_alloc"
+        "node  zone  pv_cap_alloc  bess_cap_alloc  pv_dispatch_alloc_by_t  bess_dispatch_alloc_by_t"
     )
     has_pv = "PV" in set(m.resource_set)
     has_bess = "BESS" in set(m.resource_set)
@@ -169,16 +195,24 @@ if __name__ == "__main__":
                 if has_bess
                 else 0.0
             )
-            pv_dispatch = (
-                pyo.value(m.alpha[_id, "PV"] * m.p_zr[z, "PV", t0]) if has_pv else 0.0
+            pv_dispatch_by_t = (
+                ", ".join(
+                    f"t{t}={pyo.value(m.alpha[_id, 'PV'] * m.p_zr[z, 'PV', t]):.6f}"
+                    for t in m.time_set
+                )
+                if has_pv
+                else "n/a"
             )
-            bess_dispatch = (
-                pyo.value(m.alpha[_id, "BESS"] * m.p_zr[z, "BESS", t0])
+            bess_dispatch_by_t = (
+                ", ".join(
+                    f"t{t}={pyo.value(m.alpha[_id, 'BESS'] * m.p_zr[z, 'BESS', t]):.6f}"
+                    for t in m.time_set
+                )
                 if has_bess
-                else 0.0
+                else "n/a"
             )
             print(
-                f"{_id:4d}  {z:4d}  {pv_cap:12.6f}  {bess_cap:14.6f}  {pv_dispatch:17.6f}  {bess_dispatch:19.6f}"
+                f"{_id:4d}  {z:4d}  {pv_cap:12.6f}  {bess_cap:14.6f}  {pv_dispatch_by_t:>24s}  {bess_dispatch_by_t:>26s}"
             )
 
     # Extract and report voltage slack violations
@@ -237,5 +271,6 @@ if __name__ == "__main__":
     dif_v = vp.loc[:, ["a", "b", "c"]] - vb.loc[:, ["a", "b", "c"]]
     print(dif_v.max())
     print()
-    case.plot_network().show(renderer="browser")
+    # case.plot_network().show(renderer="browser")
     # opf.compare_flows(result_baseline.p_flows, result_portfolio.p_flows).show(renderer="browser")
+    r2.plot_network().show(renderer="browser")

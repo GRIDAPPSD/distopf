@@ -64,11 +64,49 @@ def add_capacity_expansion_as_fraction_of_load(
     m.relative_capacity = pyo.Param(m.resource_set, initialize=relative_capacity)
 
 
-def add_pv_parameters(m, curtailment_max=1.0, capacity_factor=0.8):
+def add_capacity_expansion_from_absolute_capacity(
+    m, absolute_capacity={"PV": 0.5, "BESS": 0.5}
+):
+    """
+    Initialize capacity-expansion budget from absolute per-resource capacities (p.u.).
+
+    Parameters
+    ----------
+    absolute_capacity : dict[str, float]
+        Absolute capacity target for each resource in p.u.
+    """
+    if not absolute_capacity:
+        raise ValueError("absolute_capacity cannot be empty.")
+
+    total_capacity = sum(absolute_capacity.values())
+    if total_capacity == 0:
+        raise ValueError("Sum of absolute capacities cannot be zero.")
+    if any(v < 0 for v in absolute_capacity.values()):
+        raise ValueError("Absolute capacities must be non-negative.")
+
+    relative_capacity = {k: v / total_capacity for k, v in absolute_capacity.items()}
+    m.resource_set = pyo.Set(initialize=absolute_capacity.keys())
+    m.total_capacity_expansion = pyo.Param(initialize=total_capacity)
+    m.relative_capacity = pyo.Param(m.resource_set, initialize=relative_capacity)
+
+
+def add_pv_parameters(
+    m,
+    curtailment_max=1.0,
+    capacity_factor=0.8,
+    case: opf.Case | None = None,
+    pv_shape: str = "PV",
+):
     m.curtailment_max = pyo.Param(
         initialize=curtailment_max
     )  # max curtailment fraction (1 = fully curtailable)
-    m.capacity_factor = pyo.Param(initialize=capacity_factor)
+    # Always use a time-indexed capacity factor.
+    # If schedules contain pv_shape, use those values; otherwise repeat scalar across time.
+    if case is not None and pv_shape in case.schedules.columns:
+        cf_by_time = {t: case.schedules.at[t, pv_shape] for t in m.time_set}
+    else:
+        cf_by_time = {t: capacity_factor for t in m.time_set}
+    m.capacity_factor = pyo.Param(m.time_set, initialize=cf_by_time)
 
 
 def add_bess_parameters(
@@ -175,13 +213,13 @@ def add_pv_capacity_constraints(m):
         m.pv_set,
         m.time_set,
         rule=lambda m, z, r, t: m.p_zr[z, r, t]
-        >= (1 - m.curtailment_max) * m.capacity_factor * m.p_max[z, r],
+        >= (1 - m.curtailment_max) * m.capacity_factor[t] * m.p_max[z, r],
     )
     m.pv_gen_max = pyo.Constraint(
         m.zone_set,
         m.pv_set,
         m.time_set,
-        rule=lambda m, z, r, t: m.p_zr[z, r, t] <= m.capacity_factor * m.p_max[z, r],
+        rule=lambda m, z, r, t: m.p_zr[z, r, t] <= m.capacity_factor[t] * m.p_max[z, r],
     )
 
 
