@@ -269,11 +269,11 @@ class TestSets:
 
         branch_phase_list = list(model.branch_phase_set)
 
-        # Check specific branch-phase combinations (branches identified by to_bus)
-        assert (2, "a") in branch_phase_list  # branch to bus 2 has abc phases
-        assert (7, "b") in branch_phase_list  # branch to bus 7 has cb phases
-        assert (7, "c") in branch_phase_list
-        assert (7, "a") not in branch_phase_list  # branch to bus 7 doesn't have a phase
+        # Check specific branch-phase combinations (branches identified by (fb, tb, phase))
+        assert any(tb == 2 and ph == "a" for _, tb, ph in branch_phase_list)
+        assert any(tb == 7 and ph == "b" for _, tb, ph in branch_phase_list)
+        assert any(tb == 7 and ph == "c" for _, tb, ph in branch_phase_list)
+        assert not any(tb == 7 and ph == "a" for _, tb, ph in branch_phase_list)
 
     def test_gen_phase_set_empty(self, ieee13_case):
         """Test generator phase set when no generators exist"""
@@ -328,16 +328,16 @@ class TestParameters:
 
         # Check that parameters exist and have expected values
         # From CSV: branch 1->2 has raa=0.0008786982248520712
-        assert pyo.value(model.r[2, "aa"]) == pytest.approx(
+        assert pyo.value(model.r[1, 2, "aa"]) == pytest.approx(
             0.0008786982248520712, rel=1e-10
         )
-        assert pyo.value(model.x[2, "aa"]) == pytest.approx(
+        assert pyo.value(model.x[1, 2, "aa"]) == pytest.approx(
             0.0015976331360946748, rel=1e-10
         )
 
         # Check off-diagonal terms
-        assert pyo.value(model.r[2, "ab"]) == 0.0
-        assert pyo.value(model.x[2, "ab"]) == 0.0
+        assert pyo.value(model.r[1, 2, "ab"]) == 0.0
+        assert pyo.value(model.x[1, 2, "ab"]) == 0.0
 
 
 class TestModelIntegrity:

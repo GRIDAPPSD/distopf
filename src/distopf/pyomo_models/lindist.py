@@ -1,7 +1,7 @@
 from enum import IntEnum
 import warnings
 import pyomo.environ as pyo  # type: ignore
-from typing import Tuple, List
+from typing import Any
 import pandas as pd
 from distopf.api import Case
 from distopf.pyomo_models.protocol import LindistModelProtocol
@@ -45,13 +45,25 @@ def _parse_phases(phases_str: str) -> list[str]:
     return list(phases_str)
 
 
-def _create_phase_tuples(df: pd.DataFrame, id_col: str = "id") -> List[Tuple[int, str]]:
-    """Create (id, phase) tuples from dataframe with phases column"""
-    result = []
+def _create_phase_tuples(df: pd.DataFrame, id_col: str = "id") -> list[tuple[int, str]]:
+    """Create (id, phase) tuples from dataframe with phases column."""
+    result: list[tuple[int, str]] = []
     for _, row in df.iterrows():
-        result.extend(
-            [(int(row[id_col]), phase) for phase in _parse_phases(str(row.phases))]
-        )
+        phases = _parse_phases(str(row.phases))
+        for phase in phases:
+            result.append((int(row[id_col]), phase))
+    return result
+
+
+def _create_branch_phase_tuples(
+    df: pd.DataFrame, from_col: str = "fb", to_col: str = "tb"
+) -> list[tuple[int, int, str]]:
+    """Create (fb, tb, phase) tuples from dataframe with phases column."""
+    result: list[tuple[int, int, str]] = []
+    for _, row in df.iterrows():
+        phases = _parse_phases(str(row.phases))
+        for phase in phases:
+            result.append((int(row[from_col]), int(row[to_col]), phase))
     return result
 
 
@@ -69,19 +81,23 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
         dimen=2,
     )
     m.branch_set = pyo.Set(
-        initialize=case.bus_data[case.bus_data.bus_type != "SWING"].id.tolist()
+        initialize=[
+            (int(fb), int(tb))
+            for fb, tb in case.branch_data.loc[:, ["fb", "tb"]].to_numpy()
+        ],
+        dimen=2,
     )
     m.phase_pair_set = pyo.Set(
         initialize=["aa", "ab", "ac", "bb", "bc", "cc", "s1s1", "s1s2", "s2s2"]
     )
     m.bus_phase_set = pyo.Set(initialize=_create_phase_tuples(case.bus_data), dimen=2)
     m.branch_phase_set = pyo.Set(
-        initialize=_create_phase_tuples(case.branch_data, "tb"), dimen=2
+        initialize=_create_branch_phase_tuples(case.branch_data), dimen=3
     )
     m.gen_phase_set = pyo.Set(initialize=_create_phase_tuples(case.gen_data), dimen=2)
     m.cap_phase_set = pyo.Set(initialize=_create_phase_tuples(case.cap_data), dimen=2)
     m.reg_phase_set = pyo.Set(
-        initialize=_create_phase_tuples(case.reg_data, "tb"), dimen=2
+        initialize=_create_branch_phase_tuples(case.reg_data), dimen=3
     )
     m.bat_phase_set = pyo.Set(
         initialize=_create_phase_tuples(case.bat_data, "id"), dimen=2
@@ -94,12 +110,14 @@ def _create_rx_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     r_data, x_data = {}, {}
 
     for _, row in case.branch_data.iterrows():
+        fb = int(row.fb)
+        tb = int(row.tb)
         for phase_pair in m.phase_pair_set:
             r_col, x_col = f"r_{phase_pair}", f"x_{phase_pair}"
 
             if r_col in case.branch_data.columns and x_col in case.branch_data.columns:
-                r_data[(row.tb, phase_pair)] = row[r_col]
-                x_data[(row.tb, phase_pair)] = row[x_col]
+                r_data[(fb, tb, phase_pair)] = row[r_col]
+                x_data[(fb, tb, phase_pair)] = row[x_col]
 
     m.r = pyo.Param(m.branch_set, m.phase_pair_set, initialize=r_data, default=0.0)
     m.x = pyo.Param(m.branch_set, m.phase_pair_set, initialize=x_data, default=0.0)
@@ -173,7 +191,17 @@ def _get_gen_schedule_mult(gen_shape: str, t: int, schedules: pd.DataFrame) -> f
     if not gen_shape or pd.isna(gen_shape):
         return 1.0
     if gen_shape in schedules.columns:
-        return float(schedules.at[t, gen_shape])
+        value: Any = schedules.at[t, gen_shape]
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            warnings.warn(
+                f"gen_shape='{gen_shape}' schedule value at t={t} is non-numeric "
+                f"({value!r}). Using multiplier=1.0.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return 1.0
     if gen_shape != "PV":
         warnings.warn(
             f"gen_shape='{gen_shape}' not found in schedules columns "
@@ -275,8 +303,10 @@ def _create_capacitor_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 def _create_regulator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     ratio_data = {}
     for _, row in case.reg_data.iterrows():
+        fb = int(row.fb)
+        tb = int(row.tb)
         for phase in _parse_phases(str(row.phases)):
-            ratio_data[(row.tb, phase)] = getattr(row, f"ratio_{phase}", 1.0)
+            ratio_data[(fb, tb, phase)] = getattr(row, f"ratio_{phase}", 1.0)
 
     m.reg_ratio = pyo.Param(
         m.reg_phase_set,
@@ -509,13 +539,15 @@ def _create_branch_thermal_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         return
 
     for _, row in case.branch_data.iterrows():
+        fb = int(row.fb)
+        tb = int(row.tb)
         phases = _parse_phases(str(row.phases))
         for phase in phases:
             for col in thermal_col_by_phase.get(phase, ()):  # pragma: no branch
                 if col in case.branch_data.columns:
                     val = getattr(row, col, None)
                     if val is not None and not pd.isna(val):
-                        s_max_data[(row.tb, phase)] = val
+                        s_max_data[(fb, tb, phase)] = val
                         break
 
     if s_max_data:
@@ -572,9 +604,6 @@ def create_lindist_model(
     m.reg_mi_enabled = control_regulators
 
     # Maps
-    m.from_bus_map = {
-        int(tb): int(fb) for fb, tb in case.branch_data.loc[:, ["fb", "tb"]].to_numpy()
-    }
     # Map secondary branch (by to-bus id) to the primary phase of its center-tap xfmr.
     # Only applies at the primary→secondary boundary (center-tap transformer),
     # NOT for secondary→secondary (triplex line) branches.
@@ -587,11 +616,14 @@ def create_lindist_model(
                 from_phases = str(bus_phases.get(int(row.fb), ""))
                 # Only mark as center-tap xfmr if from_bus has primary phases
                 if "s1" not in from_phases and "s2" not in from_phases:
-                    m.primary_phase_map[int(row.tb)] = str(pp)
+                    m.primary_phase_map[(int(row.fb), int(row.tb))] = str(pp)
     m.to_bus_map = {
-        int(bus_id): case.branch_data.loc[
-            case.branch_data.fb == int(bus_id), "tb"
-        ].to_list()
+        int(bus_id): [
+            (int(fb), int(tb))
+            for fb, tb in case.branch_data.loc[
+                case.branch_data.fb == int(bus_id), ["fb", "tb"]
+            ].to_numpy()
+        ]
         for bus_id in case.bus_data.id.to_numpy()
     }
     m.name_map = {
@@ -670,7 +702,7 @@ def create_lindist_model(
             m.tap_set,
             m.time_set,
             domain=pyo.Binary,
-            initialize=lambda m, _id, ph, k, t: 1 if k == 16 else 0,
+            initialize=lambda m, fb, tb, ph, k, t: 1 if k == 16 else 0,
             doc="Binary tap selection (1 if tap k is selected)",
         )
 

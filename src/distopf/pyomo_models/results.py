@@ -39,17 +39,13 @@ class PyoResult:
         for var in vars:
             setattr(self, var, get_values(getattr(model, var)))
 
-        # Enrich flow variables with branch columns (fb, from_name)
-        # and rename id→tb, name→to_name to match the standard branch format
+        # Backward-compatibility enrichment for legacy flow extraction output.
+        # New branch-indexed flows already contain fb/tb columns.
         flow_vars = ["p_flow", "q_flow"]
-        from_bus_map = getattr(model, "from_bus_map", {})
-        name_map = getattr(model, "name_map", {})
         for fvar in flow_vars:
             df = getattr(self, fvar, None)
-            if df is not None and "id" in df.columns:
+            if df is not None and "id" in df.columns and "fb" not in df.columns:
                 df = df.rename(columns={"id": "tb", "name": "to_name"})
-                df.insert(0, "fb", df["tb"].map(from_bus_map))
-                df.insert(2, "from_name", df["fb"].map(name_map))
                 setattr(self, fvar, df)
 
         # Extract duals if requested and available
@@ -148,9 +144,13 @@ class PyoResult:
 def get_values(var: pyo.Var) -> pd.DataFrame:
     """Extract variable values and pivot to wide format."""
     df = get_values_tidy(var)
-    df = df.pivot(
-        index=["id", "name", "t"], columns="phase", values="value"
-    ).reset_index()
+    if df.empty:
+        return df
+    if {"fb", "tb", "from_name", "to_name"}.issubset(df.columns):
+        index_cols = ["fb", "tb", "from_name", "to_name", "t"]
+    else:
+        index_cols = ["id", "name", "t"]
+    df = df.pivot(index=index_cols, columns="phase", values="value").reset_index()
     df.columns.name = None
     return df
 
@@ -202,6 +202,22 @@ def get_values_tidy(var: pyo.Var) -> pd.DataFrame:
                 for (_id, _ph, t), _val in var.extract_values().items()
             ],
             columns=["id", "name", "t", "phase", "value"],
+        )
+    if var.dim() == 4:
+        return pd.DataFrame(
+            data=[
+                [
+                    fb,
+                    var.model().name_map[fb],
+                    tb,
+                    var.model().name_map[tb],
+                    t,
+                    _ph,
+                    _val,
+                ]
+                for (fb, tb, _ph, t), _val in var.extract_values().items()
+            ],
+            columns=["fb", "tb", "from_name", "to_name", "t", "phase", "value"],
         )
     return pd.DataFrame(columns=["id", "name", "t", "phase", "value"])
 
@@ -273,17 +289,63 @@ def get_constraint_duals_tidy(
 
     first_idx = next(iter(constraint))
 
-    # 3-phase constraint: (_id, phase, t)
+    # 3D constraint: either (_id, phase, t) or (fb, tb, phase)
     if isinstance(first_idx, tuple) and len(first_idx) == 3:
         data = []
-        for (_id, _ph, t), _ in constraint.items():
-            dual_val = model.dual[constraint[_id, _ph, t]]
-            if dual_val is not None:
+        for idx, _ in constraint.items():
+            dual_val = model.dual[constraint[idx]]
+            if dual_val is None:
+                continue
+            # Bus-phase-time pattern
+            if isinstance(idx[1], str):
+                _id, _ph, t = idx
                 name = model.name_map.get(_id, _id)
                 data.append([_id, name, t, _ph, dual_val])
+            # Branch-phase pattern (fb, tb, ph)
+            else:
+                fb, tb, _ph = idx
+                data.append(
+                    [
+                        fb,
+                        tb,
+                        model.name_map.get(fb, fb),
+                        model.name_map.get(tb, tb),
+                        _ph,
+                        dual_val,
+                    ]
+                )
 
         if data:
-            return pd.DataFrame(data, columns=["id", "name", "t", "phase", "dual"])
+            if isinstance(first_idx[1], str):
+                return pd.DataFrame(data, columns=["id", "name", "t", "phase", "dual"])
+            return pd.DataFrame(
+                data,
+                columns=["fb", "tb", "from_name", "to_name", "phase", "dual"],
+            )
+
+    # 4D branch-phase-time constraints: (fb, tb, phase, t)
+    elif isinstance(first_idx, tuple) and len(first_idx) == 4:
+        data = []
+        for (fb, tb, _ph, t), _ in constraint.items():
+            dual_val = model.dual[constraint[fb, tb, _ph, t]]
+            if dual_val is not None:
+                data.append(
+                    [
+                        fb,
+                        tb,
+                        model.name_map.get(fb, fb),
+                        model.name_map.get(tb, tb),
+                        t,
+                        _ph,
+                        dual_val,
+                    ]
+                )
+
+        if data:
+            return pd.DataFrame(
+                data,
+                columns=["fb", "tb", "from_name", "to_name", "t", "phase", "dual"],
+            )
 
     # 2-phase constraint: (_id, t)
     elif isinstance(first_idx, tuple) and len(first_idx) == 2:
