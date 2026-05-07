@@ -1,3 +1,4 @@
+from platform import node
 from typing import Optional
 from functools import cache
 from pathlib import Path
@@ -5,6 +6,7 @@ import networkx as nx
 import numpy as np
 from opendssdirect import dss
 import pandas as pd
+
 
 def _merge_phases(s: pd.Series) -> str:
     seen: set[str] = set()
@@ -18,6 +20,7 @@ def _merge_phases(s: pd.Series) -> str:
                 remaining = remaining.replace(tok, "")
     return "".join(tok for tok in phase_order if tok in seen)
 
+
 def load_dss_model(
     cim_file: str | Path, s_base: float = 1e6
 ) -> dict[str, pd.DataFrame]:
@@ -30,6 +33,39 @@ def load_dss_model(
         reg_data=converter.reg_data,
     )
     return data
+
+
+def build_graph(case) -> nx.Graph:
+    """Build an undirected NetworkX graph from node/edge DataFrames.
+
+    All columns from *case.bus_data* become node attributes (keyed by ``id``).
+    All columns from *case.branch_data* become edge attributes (keyed by ``fb``/``tb``).
+
+    Args:
+        case: distopf Case object with .bus_data and .branch_data DataFrames
+
+    Returns:
+        An undirected ``nx.Graph`` with all attributes attached.
+    """
+    g = nx.Graph()
+    g.add_nodes_from((r.pop("id"), r) for r in case.bus_data.to_dicts())
+    g.add_edges_from((r.pop("fb"), r.pop("tb"), r) for r in case.branch_data.to_dicts())
+    return g
+
+
+def get_spanning_tree(g: nx.Graph) -> nx.Graph:
+    h = g.copy()
+
+    # --- Step 1: default weights -------------------------------------------
+    for fb, tb, data in h.edges(data=True):
+        data.setdefault("weight", 1)
+
+        if h[fb][tb].get("status", 1) == "OPEN":
+            h[fb][tb]["weight"] = 10000
+
+    # --- Step 4: run minimum spanning tree (MST) -----------------------------------------------
+    mst = nx.minimum_spanning_tree(h)
+    return mst
 
 
 class DSSToCSVConverter:
@@ -113,6 +149,7 @@ class DSSToCSVConverter:
         g = nx.Graph()
         # Keep graph construction deterministic so DFS numbering is reproducible.
         g.add_edges_from(sorted(set(branches)))
+        g = get_spanning_tree(g)
         node_list = list(nx.dfs_preorder_nodes(g, self.source, sort_neighbors=sorted))
         return node_list
 
@@ -129,6 +166,68 @@ class DSSToCSVConverter:
 
     def bus_names_to_index_map_fun(self, bus: str) -> int:
         return self.bus_names_to_index_map[bus]
+
+    @cache
+    def _bus_depth_map(self) -> dict[str, int]:
+        """Depth of each reachable bus in a deterministic source-rooted tree."""
+        flag = self.dss.PDElements.First()
+        edges: set[tuple[str, str]] = set()
+        while flag:
+            element_type = self.dss.CktElement.Name().lower().split(".")[0]
+            if element_type not in ["line", "transformer", "reactor"]:
+                flag = self.dss.PDElements.Next()
+                continue
+
+            if element_type == "line" and self.dss.Lines.IsSwitch():
+                is_open = self.dss.CktElement.IsOpen(
+                    1, 1
+                ) or self.dss.CktElement.IsOpen(2, 1)
+                if is_open:
+                    flag = self.dss.PDElements.Next()
+                    continue
+
+            bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
+            bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
+            edge = tuple(sorted((bus1, bus2)))
+            edges.add(edge)
+            flag = self.dss.PDElements.Next()
+
+        g = nx.Graph()
+        g.add_nodes_from(self.bus_names)
+        g.add_edges_from(sorted(edges))
+        g = get_spanning_tree(g)
+
+        if self.source not in g:
+            return {}
+
+        tree = nx.bfs_tree(g, self.source, sort_neighbors=sorted)
+        return nx.single_source_shortest_path_length(tree, self.source)
+
+    def _orient_edge(self, bus1: str, bus2: str) -> tuple[str, str]:
+        """Orient an edge from upstream to downstream using source depth.
+
+        Falls back to deterministic bus index ordering when depth is tied/unknown.
+        """
+        depth = self._bus_depth_map()
+        d1 = depth.get(bus1)
+        d2 = depth.get(bus2)
+
+        if d1 is not None and d2 is not None:
+            if d1 < d2:
+                return bus1, bus2
+            if d2 < d1:
+                return bus2, bus1
+
+        if d1 is not None and d2 is None:
+            return bus1, bus2
+        if d2 is not None and d1 is None:
+            return bus2, bus1
+
+        i1 = self.bus_names_to_index_map.get(bus1, float("inf"))
+        i2 = self.bus_names_to_index_map.get(bus2, float("inf"))
+        if i1 <= i2:
+            return bus1, bus2
+        return bus2, bus1
 
     @property
     def basekV_LL(self) -> float:
@@ -815,11 +914,9 @@ class DSSToCSVConverter:
     ):
         bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
         bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
+        bus1, bus2 = self._orient_edge(bus1, bus2)
         fb = self.bus_names_to_index_map[bus1]
         tb = self.bus_names_to_index_map[bus2]
-        if fb > tb:
-            fb, tb = tb, fb
-            bus1, bus2 = bus2, bus1
         self.dss.Circuit.SetActiveBus(bus2)
         base_kv_ln = self.dss.Bus.kVBase()
         z_base = (base_kv_ln * 1000) ** 2 / self.s_base
@@ -929,12 +1026,9 @@ class DSSToCSVConverter:
                 )
 
             # Determine bus ordering (fb < tb)
-            fb = self.bus_names_to_index_map[bus1]
-            tb = self.bus_names_to_index_map[bus2]
-            from_name, to_name = bus1, bus2
-            if fb > tb:
-                fb, tb = tb, fb
-                from_name, to_name = to_name, from_name
+            from_name, to_name = self._orient_edge(bus1, bus2)
+            fb = self.bus_names_to_index_map[from_name]
+            tb = self.bus_names_to_index_map[to_name]
 
             # Secondary-side base quantities.
             # OpenDSS reports kVBase = V_LL/sqrt(3) for center-tap secondaries
@@ -1041,10 +1135,9 @@ class DSSToCSVConverter:
 
             fb = self.bus_names_to_index_map[primary_bus]
             tb = self.bus_names_to_index_map[secondary_bus]
-            from_name, to_name = primary_bus, secondary_bus
-            if fb > tb:
-                fb, tb = tb, fb
-                from_name, to_name = to_name, from_name
+            from_name, to_name = self._orient_edge(primary_bus, secondary_bus)
+            fb = self.bus_names_to_index_map[from_name]
+            tb = self.bus_names_to_index_map[to_name]
 
             # Secondary-side base quantities.
             # OpenDSS reports kVBase = V_LL/sqrt(3); correct to V_LL/2 for
@@ -1434,7 +1527,6 @@ class DSSToCSVConverter:
         "gen_shape",
     ]
 
-
     _GEN_AGG = dict(
         id="first",
         name="first",
@@ -1605,15 +1697,12 @@ class DSSToCSVConverter:
             if element_name not in reg_names:
                 flag = self.dss.Transformers.Next()
                 continue
-            bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
-            bus2 = self.dss.CktElement.BusNames()[-1].split(".")[0]
+            raw_bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
+            raw_bus2 = self.dss.CktElement.BusNames()[-1].split(".")[0]
+            bus1, bus2 = self._orient_edge(raw_bus1, raw_bus2)
             fb = self.bus_names_to_index_map[bus1]
             tb = self.bus_names_to_index_map[bus2]
-            tap_direction = 1
-            if fb > tb:
-                fb, tb = tb, fb
-                bus1, bus2 = bus2, bus1
-                tap_direction = -1
+            tap_direction = 1 if (bus1, bus2) == (raw_bus1, raw_bus2) else -1
             self.dss.Circuit.SetActiveBus(bus2)
             line_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
             line_phases = sorted(line_phases)
@@ -1628,8 +1717,8 @@ class DSSToCSVConverter:
             ratio = self.dss.Transformers.Tap()
             tap = (ratio - 1) / 0.00625 * tap_direction
             each_reg = {}
-            each_reg["fb"] = self.bus_names_to_index_map[bus1]
-            each_reg["tb"] = self.bus_names_to_index_map[bus2]
+            each_reg["fb"] = fb
+            each_reg["tb"] = tb
             each_reg["from_name"] = bus1
             each_reg["to_name"] = bus2
             for ph in line_phase:
