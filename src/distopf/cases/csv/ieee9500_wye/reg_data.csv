@@ -1,0 +1,7 @@
+fb,tb,from_name,to_name,tap_a,tap_b,tap_c,phases
+20,21,regxfmr_hvmv11sub3_lsb,hvmv11sub3_lsb,-1.0,-1.0,-2.0,abc
+1520,1521,regxfmr_190-8581,190-8581,5.0,4.0,3.0,abc
+2527,2528,190-8593,regxfmr_190-8593,-7.0,-4.0,-1.0,abc
+3236,3237,regxfmr_hvmv11sub2_lsb,hvmv11sub2_lsb,-2.0,-2.0,-3.0,abc
+3562,3563,190-7361,regxfmr_190-7361,-1.0,-4.0,-5.0,abc
+4956,4957,regxfmr_hvmv11sub1_lsb,hvmv11sub1_lsb,-3.0,-3.0,-3.0,abc
