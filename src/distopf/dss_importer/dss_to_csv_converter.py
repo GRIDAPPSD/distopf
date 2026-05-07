@@ -912,24 +912,35 @@ class DSSToCSVConverter:
     def _create_branch_row(
         self, r_matrix, x_matrix, element_type, element_name, switch_status
     ):
-        bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
-        bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
+        bus_names = self.dss.CktElement.BusNames()
+        bus1 = bus_names[0].split(".")[0]
+        bus2 = bus_names[1].split(".")[0]
         bus1, bus2 = self._orient_edge(bus1, bus2)
         fb = self.bus_names_to_index_map[bus1]
         tb = self.bus_names_to_index_map[bus2]
         self.dss.Circuit.SetActiveBus(bus2)
         base_kv_ln = self.dss.Bus.kVBase()
         z_base = (base_kv_ln * 1000) ** 2 / self.s_base
-        line_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
-        line_phases = sorted(line_phases)
+
+        # Parse phase nodes from the terminal matching the oriented from-bus.
+        # Using terminal 0 unconditionally can mismatch phases after orientation.
+        phase_nodes = []
+        if bus_names[0].split(".")[0] == bus1:
+            phase_nodes = bus_names[0].split(".")[1:]
+        elif bus_names[1].split(".")[0] == bus1:
+            phase_nodes = bus_names[1].split(".")[1:]
+
         phases = "abc"
         n_phases = self.dss.CktElement.NumPhases()
         if n_phases < 3:
-            active_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
+            active_phases = [n for n in phase_nodes if n != "0"]
             if "0" in active_phases:
                 active_phases.remove("0")
-            active_phases = np.array(active_phases).astype(int) - 1
-            phases = "".join("abc"[i] for i in active_phases)
+            if len(active_phases) > 0:
+                active_phases = np.array(active_phases).astype(int) - 1
+                phases = "".join("abc"[i] for i in active_phases)
+            else:
+                phases = ""
         return dict(
             fb=fb,
             tb=tb,
