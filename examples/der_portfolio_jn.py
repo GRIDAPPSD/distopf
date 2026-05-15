@@ -51,10 +51,47 @@ from distopf.pyomo_models.slack_constraints import (
 from distopf.pyomo_models.results import PyoResult
 
 
+def _build_result(pyo_result, case=None, model=None, solver_name: str | None = None):
+    """Build PowerFlowResult from solved pyomo model."""
+    return opf.PowerFlowResult(
+        voltages=getattr(pyo_result, "voltages", None),
+        active_power_flows=getattr(pyo_result, "p_flow", None),
+        reactive_power_flows=getattr(pyo_result, "q_flow", None),
+        active_power_generation=getattr(pyo_result, "p_gen", None),
+        reactive_power_generation=getattr(pyo_result, "q_gen", None),
+        active_power_loads=getattr(pyo_result, "p_load", None),
+        reactive_power_loads=getattr(pyo_result, "q_load", None),
+        capacitor_reactive_power=getattr(pyo_result, "q_cap", None),
+        tap_ratios=getattr(pyo_result, "reg_ratio", None),
+        battery_active_power=getattr(pyo_result, "p_bat", None),
+        battery_reactive_power=getattr(pyo_result, "q_bat", None),
+        p_charge=getattr(pyo_result, "p_charge", None),
+        p_discharge=getattr(pyo_result, "p_discharge", None),
+        soc=getattr(pyo_result, "soc", None),
+        dual_power_balance_p=getattr(pyo_result, "dual_power_balance_p", None),
+        dual_power_balance_q=getattr(pyo_result, "dual_power_balance_q", None),
+        dual_voltage_drop=getattr(pyo_result, "dual_voltage_drop", None),
+        dual_voltage_limits_lower=getattr(
+            pyo_result, "dual_voltage_limits_lower", None
+        ),
+        dual_voltage_limits_upper=getattr(
+            pyo_result, "dual_voltage_limits_upper", None
+        ),
+        objective_value=getattr(pyo_result, "objective_value", None),
+        converged=True,
+        solver=solver_name,
+        solve_time=getattr(pyo_result, "solve_time", None),
+        result_type="opf",
+        raw_result=pyo_result,
+        model=model,
+        case=case,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Baseline OPF (for comparison)
 # ---------------------------------------------------------------------------
-def run_baseline_opf():
+def run_baseline_opf(case):
     def _add_standard_constraints(m):
         add_p_flow_constraints(m)
         add_q_flow_constraints(m)
@@ -91,14 +128,23 @@ def run_baseline_opf():
     res = opt.solve(m_base, tee=False)
     if res.solver.status != pyo.SolverStatus.ok:
         raise RuntimeError("Baseline solve failed")
-    return PyoResult(m_base, pyo.value(substation_power_objective_rule(m_base)))
+    return PyoResult(m_base, pyo.value(substation_power_objective_rule(m_base))), m_base
 
 
 # ---------------------------------------------------------------------------
 # Portfolio model
 # ---------------------------------------------------------------------------
 def run_der_expansion(case):
-    zones = create_zones_from_edge_names(case, ["sw2", "sw3", "sw4"])
+    # zones = create_zones_from_edge_names(case, ["sw2", "sw3", "sw4"])
+    zones = create_zones_from_edge_names(
+        case,
+        [
+            "jn-a",
+            "jn-b",
+            "jn-c",
+            "jn-d",
+        ],
+    )
     del zones[0]
     m = create_lindist_model(case)
 
@@ -126,20 +172,20 @@ def run_der_expansion(case):
     # ---------------------------------------------------------------------------
     p_sub = pyo.value(substation_power_objective_rule(m))
     result = PyoResult(m, pyo.value(substation_power_objective_rule(m)))
+    result = _build_result(result, case=case, model=m, solver_name="highs")
     return m, zones, result
 
 
 if __name__ == "__main__":
     case = create_case(
-        data_path=opf.CASES_DIR / "csv" / "ieee123_30der_bat",
-        ignore_schedule=True,
-        ignore_bat=True,
-        ignore_gen=True,
-        n_steps=1,
-        start_step=0,
+        data_path="scratch/JN_creek",
     )
     t0 = case.start_step
-    result_baseline = run_baseline_opf()
+    result_baseline, model = run_baseline_opf(case)
+    result_baseline = _build_result(
+        result_baseline, case=case, model=model, solver_name="highs"
+    )
+    # result_baseline.plot_network().show(renderer="browser")
     m, zones, result_portfolio = run_der_expansion(case)
     p_sub_baseline = result_baseline.objective_value
     p_sub = result_portfolio.objective_value
@@ -161,25 +207,25 @@ if __name__ == "__main__":
     has_pv = "PV" in set(m.resource_set)
     has_bess = "BESS" in set(m.resource_set)
     # Iterate through zones and their buses directly
-    for z in sorted(zones.keys()):
-        for _id in sorted(zones[z]):
-            pv_cap = pyo.value(m.alpha[_id, "PV"] * m.p_max[z, "PV"]) if has_pv else 0.0
-            bess_cap = (
-                pyo.value(m.alpha[_id, "BESS"] * m.p_max[z, "BESS"])
-                if has_bess
-                else 0.0
-            )
-            pv_dispatch = (
-                pyo.value(m.alpha[_id, "PV"] * m.p_zr[z, "PV", t0]) if has_pv else 0.0
-            )
-            bess_dispatch = (
-                pyo.value(m.alpha[_id, "BESS"] * m.p_zr[z, "BESS", t0])
-                if has_bess
-                else 0.0
-            )
-            print(
-                f"{_id:4d}  {z:4d}  {pv_cap:12.6f}  {bess_cap:14.6f}  {pv_dispatch:17.6f}  {bess_dispatch:19.6f}"
-            )
+    # for z in sorted(zones.keys()):
+    #     for _id in sorted(zones[z]):
+    #         pv_cap = pyo.value(m.alpha[_id, "PV"] * m.p_max[z, "PV"]) if has_pv else 0.0
+    #         bess_cap = (
+    #             pyo.value(m.alpha[_id, "BESS"] * m.p_max[z, "BESS"])
+    #             if has_bess
+    #             else 0.0
+    #         )
+    #         pv_dispatch = (
+    #             pyo.value(m.alpha[_id, "PV"] * m.p_zr[z, "PV", t0]) if has_pv else 0.0
+    #         )
+    #         bess_dispatch = (
+    #             pyo.value(m.alpha[_id, "BESS"] * m.p_zr[z, "BESS", t0])
+    #             if has_bess
+    #             else 0.0
+    #         )
+    #         print(
+    #             f"{_id:4d}  {z:4d}  {pv_cap:12.6f}  {bess_cap:14.6f}  {pv_dispatch:17.6f}  {bess_dispatch:19.6f}"
+    #         )
 
     # Extract and report voltage slack violations
     print("\nVoltage Slack Variables (Violations):")
@@ -198,10 +244,10 @@ if __name__ == "__main__":
         print("\n  Detailed Voltage Slack Values:")
         print("  Bus  Phase  Time  Slack Value")
         print("  " + "-" * 30)
-        for (bus_id, ph, t), slack_val in sorted(voltage_slack_violations.items())[:20]:
+        for (bus_id, ph, t), slack_val in sorted(voltage_slack_violations.items())[:10]:
             print(f"  {bus_id:3d}  {ph:5s}  {t:4d}  {slack_val:.8f}")
-        if len(voltage_slack_violations) > 20:
-            print(f"  ... and {len(voltage_slack_violations) - 20} more")
+        if len(voltage_slack_violations) > 10:
+            print(f"  ... and {len(voltage_slack_violations) - 10} more")
 
     # Extract and report thermal slack violations
     print("\nThermal Slack Variables (Violations):")
@@ -221,15 +267,15 @@ if __name__ == "__main__":
         print("  Branch  Phase  Time  Slack Value")
         print("  " + "-" * 32)
         for (branch_id, ph, t), slack_val in sorted(thermal_slack_violations.items())[
-            :20
+            :10
         ]:
             print(f"  {branch_id:6d}  {ph:5s}  {t:4d}  {slack_val:.8f}")
-        if len(thermal_slack_violations) > 20:
-            print(f"  ... and {len(thermal_slack_violations) - 20} more")
+        if len(thermal_slack_violations) > 10:
+            print(f"  ... and {len(thermal_slack_violations) - 10} more")
 
     dif_flow = (
-        result_portfolio.p_flow.loc[:, ["a", "b", "c"]]
-        - result_baseline.p_flow.loc[:, ["a", "b", "c"]]
+        result_portfolio.active_power_flows.loc[:, ["a", "b", "c"]]
+        - result_baseline.active_power_flows.loc[:, ["a", "b", "c"]]
     )
     print(dif_flow.max())
     vb = result_baseline.voltages
