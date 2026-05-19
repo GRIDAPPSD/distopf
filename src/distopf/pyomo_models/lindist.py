@@ -149,6 +149,7 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     p_gen_data, q_gen_data = {}, {}
     s_rated_data, q_gen_min_data, q_gen_max_data = {}, {}, {}
     gen_control_data = {}
+    cost_data = {}
 
     for _, row in case.gen_data.iterrows():
         for phase in row.phases:
@@ -167,6 +168,9 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             control_var = getattr(row, "control_variable", "")
             gen_control_data[(row.id, phase)] = CONTROL_VARIABLE_MAP[control_var]
 
+            # Generation Energy price per unit active power for one hour
+            cost = getattr(row, "cost", 0.0)
+            cost_data[(row.id, phase)] = cost
             # Nominal generation values, scaled by schedule
             gen_shape = getattr(row, "gen_shape", "PV")
             p_gen = getattr(row, f"p{phase}", 0.0)
@@ -214,7 +218,12 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         default=0,
         doc="Generator control variable type",
     )
-
+    m.gen_cost = pyo.Param(
+        m.gen_phase_set,
+        initialize=cost_data,
+        default=0.0,
+        doc="Generation cost per unit active power per hour",
+    )
 
 def _create_capacitor_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     q_cap_data = {}

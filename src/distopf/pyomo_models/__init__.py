@@ -72,6 +72,9 @@ from distopf.pyomo_models.objectives import (
     none_rule,
     loss_objective,
     loss_objective_rule,
+    generation_cost_with_substation_quadratic_penalty_objective,
+    generation_cost_with_substation_quadratic_penalty_objective_rule,
+    add_generation_cost_with_substation_quadratic_penalty_objective,
     create_penalized_objective,
     set_objective,
 )
@@ -119,6 +122,9 @@ __all__ = [
     "none_rule",
     "loss_objective",
     "loss_objective_rule",
+    "generation_cost_with_substation_quadratic_penalty_objective",
+    "generation_cost_with_substation_quadratic_penalty_objective_rule",
+    "add_generation_cost_with_substation_quadratic_penalty_objective",
     "create_penalized_objective",
     "set_objective",
     # Solver

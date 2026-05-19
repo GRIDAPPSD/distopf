@@ -121,6 +121,65 @@ def substation_cost_objective_rule(model: LindistModelProtocol):
     return total_cost
 
 
+
+
+def gen_cost_rule(model: LindistModelProtocol):
+    generation_cost = 0
+    for _id, ph in model.gen_phase_set:
+        for t in model.time_set:
+            generation_cost += (
+                model.p_gen[_id, ph, t] * model.gen_cost[_id, ph] * model.delta_t
+            )
+    return generation_cost
+
+def total_cost_rule(model: LindistModelProtocol):
+    return gen_cost_rule(model) + substation_cost_objective_rule(model)
+
+
+def generation_cost_with_substation_quadratic_penalty_objective_rule(
+    model: LindistModelProtocol,
+    substation_penalty_weight: float = 1e6,
+):
+    """
+    Minimize generation energy cost plus quadratic penalty on substation load.
+
+    Generation energy cost uses ``schedule_price[t]`` when available and
+    falls back to a unit price of 1.0 when price data is not defined.
+
+    The substation term penalizes nonzero active power exchange at the swing
+    bus by summing squared substation active power flows across phases/time.
+
+    Parameters
+    ----------
+    model : LindistModelProtocol
+        Pyomo model.
+    substation_penalty_weight : float
+        Weight for the quadratic substation load penalty.
+
+    Returns
+    -------
+    Pyomo expression for total generation cost + substation penalty.
+    """
+    print(f"Substation penalty weight: {substation_penalty_weight}")
+    generation_cost = 0
+    for _id, ph in model.gen_phase_set:
+        for t in model.time_set:
+            energy_price = (
+                model.schedule_price[t] if hasattr(model, "schedule_price") else 1.0
+            )
+            generation_cost += model.p_gen[_id, ph, t] * energy_price
+
+    substation_penalty = 0
+    for _id, ph in model.branch_phase_set:
+        for t in model.time_set:
+            if model.from_bus_map[_id] in model.swing_bus_set:
+                substation_penalty += model.p_flow[_id, ph, t] ** 2
+
+    return gen_cost_rule(model) + 1e6 * substation_penalty
+
+
+
+
 def demand_charge_objective_rule(model: LindistModelProtocol):
     """
     Minimize demand charge based on peak substation power.
@@ -508,6 +567,23 @@ def add_voltage_deviation_objective(model: LindistModelProtocol) -> None:
     )
 
 
+def add_generation_cost_with_substation_quadratic_penalty_objective(
+    model: LindistModelProtocol,
+    substation_penalty_weight: float = 1.0,
+) -> None:
+    """Add generation-cost + quadratic substation-load penalty objective."""
+    set_objective(
+        model,
+        pyo.Objective(
+            rule=lambda m: generation_cost_with_substation_quadratic_penalty_objective_rule(
+                m,
+                substation_penalty_weight=substation_penalty_weight,
+            ),
+            sense=pyo.minimize,
+        ),
+    )
+
+
 def add_penalized_loss_objective(
     model: LindistModelProtocol,
     voltage_weight: float = 1e3,
@@ -594,4 +670,9 @@ voltage_deviation_objective = pyo.Objective(
 
 generation_curtailment_objective = pyo.Objective(
     rule=generation_curtailment_objective_rule, sense=pyo.minimize
+)
+
+generation_cost_with_substation_quadratic_penalty_objective = pyo.Objective(
+    rule=generation_cost_with_substation_quadratic_penalty_objective_rule,
+    sense=pyo.minimize,
 )

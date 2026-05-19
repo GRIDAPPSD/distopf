@@ -361,6 +361,7 @@ class PyomoWrapper(Wrapper):
             substation_power_objective_rule,
             voltage_deviation_objective_rule,
             generation_curtailment_objective_rule,
+            generation_cost_with_substation_quadratic_penalty_objective_rule,
         )
 
         if objective is None:
@@ -380,6 +381,8 @@ class PyomoWrapper(Wrapper):
             "curtail": generation_curtailment_objective_rule,
             "curtail_min": generation_curtailment_objective_rule,
             "curtailment": generation_curtailment_objective_rule,
+            "generation_cost_substation_penalty": generation_cost_with_substation_quadratic_penalty_objective_rule,
+            "gen_cost_substation_penalty": generation_cost_with_substation_quadratic_penalty_objective_rule,
         }
 
         if obj_lower in objective_map:
