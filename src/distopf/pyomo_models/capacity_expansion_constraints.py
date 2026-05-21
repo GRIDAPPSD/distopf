@@ -158,7 +158,7 @@ def add_capacity_expansion_variables(m, case: opf.Case, zones):
 
     m.zone_set = pyo.Set(initialize=list(zones.keys()))
     # Map each bus to its zone (None if not in any zone)
-    m.z_of_bus = pyo.Param(m.bus_set, initialize=None, mutable=True)
+    m.z_of_bus = pyo.Param(m.bus_set, initialize=None, mutable=True, within=pyo.Any)
     for z, buses in zones.items():
         for _id in buses:
             m.z_of_bus[_id] = z

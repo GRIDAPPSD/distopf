@@ -476,6 +476,7 @@ def _create_branch_thermal_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             initialize=s_max_data,
             default=None,
             doc="Branch apparent power thermal limit",
+            within=pyo.Any
         )
 
 
