@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 import distopf as opf
 from distopf.distributed.spatial.decompose import decompose
-from distopf.distributed.spatial.enapp_copy import solve_enapp
+from distopf.distributed.spatial.enapp import solve_enapp
 
 
 # Tolerance for numerical comparisons (relative and absolute)

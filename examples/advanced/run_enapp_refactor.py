@@ -1,6 +1,6 @@
 import distopf as opf
 from distopf.matrix_models.matrix_bess.objectives import cp_obj_cost_min
-from distopf.distributed.spatial.enapp_copy import solve_enapp
+from distopf.distributed.spatial.enapp import solve_enapp
 from distopf.api import create_case
 from distopf import CASES_DIR
 import cvxpy as cp

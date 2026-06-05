@@ -4,7 +4,7 @@ import pandas as pd
 
 import distopf as opf
 from distopf.distributed.spatial.decompose import decompose
-from distopf.distributed.spatial.enapp_copy import parse_s_dn, parse_v_dn, solve_enapp
+from distopf.distributed.spatial.enapp import parse_s_dn, parse_v_dn, solve_enapp
 
 AREA_INFO = {
     "area1": {

@@ -19,7 +19,7 @@ decomposition reproduces the same cost as the monolithic per-area baseline.
 from pathlib import Path
 import numpy as np
 import distopf as opf
-from distopf.distributed.spatial.enapp_copy import solve_enapp
+from distopf.distributed.spatial.enapp import solve_enapp
 from distopf.distributed.temporal import solve_tenapp_aprx, energy_cost_min
 
 OUTPUT_DIR = Path("scratch/enapp_tenapp")

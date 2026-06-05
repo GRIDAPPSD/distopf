@@ -1,11 +1,15 @@
 from pathlib import Path
 import distopf as opf
-from distopf.pyomo_models.objectives import substation_cost_objective_rule, loss_objective_rule
+from distopf.pyomo_models.objectives import (
+    gen_cost_rule,
+    substation_cost_objective_rule,
+    total_cost_rule,
+)
 
 from distopf.distributed.spatial.enapp import Case, solve_enapp, PowerFlowResult
 from distopf.distributed.temporal import solve_tenapp_aprx, energy_cost_min
 
-OUTPUT_DIR = Path("scratch/enapp_123_debug")
+OUTPUT_DIR = Path("scratch/enapp_123_isolated")
 PHASES = ("a", "b", "c")
 
 
@@ -13,18 +17,25 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     case = opf.create_case(
-        opf.CASES_DIR / "csv" / "ieee123_30der_bat",
-        n_steps=24,
+        opf.CASES_DIR / "csv" / "ieee123_30der",
+        n_steps=1,
         start_step=0,
         ignore_bat=True,
-        # ignore_gen=True,
         # ignore_schedule=True,
+        # ignore_gen=True,
     )
-    demand_charge = 0  # $/p.u. power
-    # case.bus_data.v_max = 2
-    # case.bus_data.v_min = 0
-    case.gen_data.control_variable = "Q"
-    case.bat_data.control_variable = "P"
+    case.branch_data.loc[case.branch_data.fb == 1, ["sa_max", "sb_max", "sc_max"]] = (
+        0.000001
+    )
+    case.schedules["PV"] = 1.0
+    case.schedules["default"] = 1.0
+    case.schedules["price"] = 0
+    case.modify(gen_mult=5, control_variable="PQ", v_min=0.0, v_max=2.0)
+    case.gen_data["cost"] = 10
+    print("Total Load: \n")
+    print(case.bus_data.loc[:, ["pl_a", "pl_b", "pl_c"]].sum())
+    print("Total Gen: \n")
+    print(case.gen_data.loc[:, ["pa", "pb", "pc"]].sum())
     # case.reg_data.loc[case.reg_data.tb == 127, ["tap_a", "tap_b", "tap_c"]] = [0.0, 0.0, 0.0]
     # case.reg_data.loc[case.reg_data.tb == 127, ["ratio_a", "ratio_b", "ratio_c"]] = [1.0, 1.0, 1.0]
 
@@ -56,12 +67,8 @@ def main() -> None:
     }
 
     result_c = case.run_opf(
-        objective=loss_objective_rule,
-        # demand_charge=demand_charge,
-        # cost_curve=case.schedules.price.to_numpy(),
+        objective=total_cost_rule,
         formulation="lindist",
-        wrapper="pyomo",
-        solver="ipopt",
     )
     print(result_c.objective_value, " in ", result_c.solve_time)
     # result_c.plot_network().show(renderer="browser")
@@ -71,38 +78,34 @@ def main() -> None:
     ) -> None:
         print("ENAPP iteration ", it)
         # for area_name, boundary_vars in boundaries.items():
-            # print(area_name)
-            # print(f"objective value: {all_results[area_name].objective_value}")
-            # print(f"{area_name} s_up")
-            # print(boundary_vars.s_up)
-            # print(f"{area_name} v_down")
-            # print(boundary_vars.v_down)
-            # all_results[area_name].plot_network().show(renderer="browser")
+        # print(area_name)
+        # print(f"objective value: {all_results[area_name].objective_value}")
+        # print(f"{area_name} s_up")
+        # print(boundary_vars.s_up)
+        # print(f"{area_name} v_down")
+        # print(boundary_vars.v_down)
+        # all_results[area_name].plot_network().show(renderer="browser")
         # print()
 
     result_enapp = solve_enapp(
         case,
         area_info,
         tol=1e-6,
-        objective=loss_objective_rule,
-        # objective="min_loss",
+        # objective=substation_cost_objective_rule,
+        objective="min_loss",
         wrapper="pyomo",
         formulation="lindist",
         iteration_callback=iteration_callback,
-        solver="ipopt",
     )
     print(result_enapp.objective_value)
 
     v_d = result_enapp.voltages
     v_c = result_c.voltages
-    p_gens_c = result_c.p_gens
-    p_gens_enapp = result_enapp.p_gens
-    opf.compare_voltages(p_gens_c, p_gens_enapp).show(renderer="browser")
     # print(result_enapp.q_gens)
     # print(result_c.q_gens)
     # print(v_c)
     # print(v_d)
-    opf.compare_voltages(v_c, v_d).show(renderer="browser")
+    opf.compare_voltages(v_c, v_d, t=1).show(renderer="browser")
     print()
 
 

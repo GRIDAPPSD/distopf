@@ -2,7 +2,7 @@ from pathlib import Path
 import distopf as opf
 from distopf.pyomo_models.objectives import substation_cost_objective_rule
 
-from distopf.distributed.spatial.enapp_copy import Case, solve_enapp, PowerFlowResult
+from distopf.distributed.spatial.enapp import Case, solve_enapp, PowerFlowResult
 
 OUTPUT_DIR = Path("scratch/enapp_123_debug")
 PHASES = ("a", "b", "c")
