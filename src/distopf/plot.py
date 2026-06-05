@@ -70,55 +70,68 @@ def plot_voltages(v: pd.DataFrame, t=None) -> go.Figure:
 def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
     """
     Visually compare voltages by plotting two different results.
-    Parameters
-    ----------
-    v1 : pd.DataFrame
-    v2 : pd.DataFrame
-
-    Returns
-    -------
-    fig : Plotly figure object
+    If 't' column is present in both DataFrames, a slider is added to select
+    the timestep. If `t` is provided, only that timestep is plotted.
     """
     v1 = v1.copy()
     v2 = v2.copy()
-    if "id" not in v1.columns:
-        v1["id"] = v1.index
-    if "name" not in v1.columns:
-        v1["name"] = v1["id"]
-    if "id" not in v2.columns:
-        v2["id"] = v2.index
-    if "name" not in v2.columns:
-        v2["name"] = v2["id"]
-    t1 = t2 = t
-    if t is None and "t" in v1.columns:
-        t1 = min(v1.t)
-    if t is None and "t" in v2.columns:
-        t2 = min(v2.t)
-    if "t" in v1.columns and "t" in v2.columns:
-        assert t1 == t2
-    if "t" in v1.columns:
-        v1 = pd.DataFrame(v1.loc[v1.t == t1, :])
-        v1 = v1.drop("t", axis=1)
-    if "t" in v2.columns:
-        v2 = pd.DataFrame(v2.loc[v2.t == t2, :])
-        v2 = v2.drop("t", axis=1)
-    v1 = v1.melt(
-        ignore_index=True, var_name="phase", id_vars=["id", "name"], value_name="v1"
-    )
-    v2 = v2.melt(
-        ignore_index=True, var_name="phase", id_vars=["id", "name"], value_name="v2"
-    )
-    v = pd.merge(v1, v2, on=["id", "name", "phase"])
+
+    for df in (v1, v2):
+        if "id" not in df.columns:
+            df["id"] = df.index
+        if "name" not in df.columns:
+            df["name"] = df["id"]
+
+    has_t1 = "t" in v1.columns
+    has_t2 = "t" in v2.columns
+
+    # If user passed a specific t, filter to that single timestep
+    if t is not None:
+        if has_t1:
+            v1 = v1.loc[v1.t == t, :]
+        if has_t2:
+            v2 = v2.loc[v2.t == t, :]
+
+    id_vars1 = ["id", "name"] + (["t"] if "t" in v1.columns else [])
+    id_vars2 = ["id", "name"] + (["t"] if "t" in v2.columns else [])
+
+    v1m = v1.melt(ignore_index=True, var_name="phase",
+                  id_vars=id_vars1, value_name="v1")
+    v2m = v2.melt(ignore_index=True, var_name="phase",
+                  id_vars=id_vars2, value_name="v2")
+
+    merge_keys = ["id", "name", "phase"]
+    if "t" in v1m.columns and "t" in v2m.columns:
+        merge_keys.append("t")
+
+    v = pd.merge(v1m, v2m, on=merge_keys)
+
+    long_id_vars = ["id", "name", "phase"] + (["t"] if "t" in v.columns else [])
     v = v.melt(
         ignore_index=True,
         var_name="value",
-        id_vars=["id", "name", "phase"],
+        id_vars=long_id_vars,
         value_name="v",
-    ).sort_values(by=["id", "phase"])
-    # v1["v1"] = v1["v1"].astype(float)
-    # v2["v2"] = v2["v2"].astype(float)
-    # v = pd.merge(v1, v2, on=["name", "phase"])
-    fig = px.line(v, x="name", facet_col="phase", y="v", color="value", markers=True)
+    ).sort_values(by=long_id_vars)
+
+    # Build figure - use animation_frame if we have a time column
+    if "t" in v.columns and v["t"].nunique() > 1:
+        v = v.sort_values(by=["t", "id", "phase"])
+        fig = px.line(
+            v, x="name", facet_col="phase", y="v",
+            color="value", markers=True,
+            animation_frame="t",
+        )
+        # Fix y-axis range so it doesn't jump between frames
+        ymin, ymax = v["v"].min(), v["v"].max()
+        pad = (ymax - ymin) * 0.05 if ymax > ymin else 1
+        fig.update_yaxes(range=[ymin - pad, ymax + pad])
+    else:
+        fig = px.line(
+            v, x="name", facet_col="phase", y="v",
+            color="value", markers=True,
+        )
+
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
     fig.for_each_xaxis(lambda a: a.update(title="Bus Name"))
     return fig
