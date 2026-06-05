@@ -1,14 +1,11 @@
-import multiprocessing as mp
 from copy import deepcopy
 from pathlib import Path
-import numpy as np
 import pandas as pd
 import distopf as opf
-from distopf.matrix_models.matrix_bess.solvers import cvxpy_solve
-from distopf.matrix_models.matrix_bess.lindist_loads_mp import LinDistMPL
 from distopf.matrix_models.matrix_bess.lindist_mp import LinDistMP
 from distopf.matrix_models.matrix_bess.objectives import cp_obj_cost_min
-from distopf.matrix_models.matrix_bess.spatial_decomposition.enapp import solve_enapp
+
+from distopf.distributed.spatial.enapp import solve_enapp
 from distopf.api import create_case
 from distopf import CASES_DIR
 import plotly.express as px
@@ -30,7 +27,7 @@ def main():
     m = LinDistMP(case=case)
     m.build()
     # plot_network(m).show()
-    area_info_ = {
+    area_info = {
         "area1": {
             "up_areas": [],
             "down_areas": ["area2", "area3"],
@@ -51,41 +48,36 @@ def main():
         },
     }
 
-    # area_models = decompose(m, sources)
-    result_c = cvxpy_solve(
-        m,
-        cp_obj_cost_min,
+    result_c = case.run_opf(
+        objective=cp_obj_cost_min,
         solver=cp.CLARABEL,
         demand_charge=demand_charge,
         cost_curve=case.schedules.price.to_numpy(),
+        formulation="lindist_mp",
     )
-    print(result_c.fun, " in ", result_c.runtime)
+    print(result_c.objective_value, " in ", result_c.solve_time)
     result_enapp = solve_enapp(
-        m,
-        area_info_,
+        case,
+        area_info,
         tol=1e-6,
         solver=cp.CLARABEL,
         objective=cp_obj_cost_min,
         demand_charge=demand_charge,
         cost_curve=case.schedules.price.to_numpy(),
+        formulation="lindist_mp",
     )
-    print(result_enapp.fun)
+    print(result_enapp.objective_value)
 
-    def at_time(df: pd.DataFrame, t):
-        names = [name for name in df.columns if name != "t"]
-        _df = deepcopy(df.loc[df.t == t, names])
-        return _df
-
-    v_d = m.get_voltages(result_enapp.x)
-    v_c = m.get_voltages(result_c.x)
-    print(m.get_q_gens(result_enapp.x))
-    print(m.get_q_gens(result_c.x))
+    v_d = result_enapp.voltages
+    v_c = result_c.voltages
+    print(result_enapp.q_gens)
+    print(result_c.q_gens)
 
     opf.compare_voltages(v_c, v_d, t=12).show(renderer="browser")
     opf.compare_voltages(v_c, v_d, t=13).show(renderer="browser")
     # np.savetxt("copf33x.csv", result_c.x)
     # np.savetxt("dopf33x.csv", result_enapp.x)
-    px.scatter(result_c.x - result_enapp.x).show(renderer="browser")
+    # px.scatter(result_c.x - result_enapp.x).show(renderer="browser")
     print()
 
 

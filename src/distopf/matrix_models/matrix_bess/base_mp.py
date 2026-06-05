@@ -987,10 +987,10 @@ class LinDistBaseMP(BaseModelMP):
         """
         # a_bat, b_bat = self.create_battery_cycle_limit_constraints()
         a_inv, b_inv = self.create_inverter_octagon_constraints()
-        # a_therm, b_therm = self.create_octagon_thermal_constraints()
+        a_therm, b_therm = self.create_octagon_thermal_constraints()
         a_bat8, b_bat8 = self.create_octagon_battery_constraints()
-        a_ub = vstack([a_inv, a_bat8])  # a_therm, a_bat
-        b_ub = np.r_[b_inv, b_bat8]  # b_therm, b_bat
+        a_ub = vstack([a_inv, a_bat8, a_therm])  # a_therm, a_bat
+        b_ub = np.r_[b_inv, b_bat8, b_therm]  # b_therm, b_bat
         return csr_array(a_ub), b_ub
 
     def create_hexagon_constraints(self) -> tuple[csr_array, np.ndarray]:

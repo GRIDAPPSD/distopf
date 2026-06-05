@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from distopf.wrappers.base import Wrapper
 
@@ -98,8 +99,9 @@ class MatrixBessWrapper(Wrapper):
         # Resolve objective function
         obj_func = self._resolve_objective(objective)
 
-        # Solve
+        start_time = perf_counter()
         self.result = cvxpy_solve(self.model, obj_func, **kwargs)
+        solve_time = perf_counter() - start_time
 
         if raw_result:
             return self.result
@@ -122,6 +124,7 @@ class MatrixBessWrapper(Wrapper):
             raw_result=self.result,
             model=self.model,
             case=self.case,
+            solve_time=solve_time,
         )
 
     def _resolve_objective(self, objective: Any) -> Any:

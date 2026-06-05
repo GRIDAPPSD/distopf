@@ -81,6 +81,16 @@ class PowerFlowResult:
         Error details if solve failed
     case_name : str or None
         Case identifier for benchmarking and result tracking
+    area_results : dict[str, PowerFlowResult] or None
+        Per-area results for ENAPP/decomposed solves.
+    boundary_error_per_iter : list[float] or None
+        Boundary mismatch metric over ENAPP iterations.
+    enapp_iterations : int or None
+        Number of ENAPP coordination iterations.
+    enapp_runtime : float or None
+        Total ENAPP runtime in seconds.
+    enapp_parallel_used : bool or None
+        Whether ENAPP multiprocessing remained enabled throughout solve.
     raw_result : Any
         Raw result object from the underlying solver (for advanced access)
     model : Any
@@ -157,6 +167,13 @@ class PowerFlowResult:
     )
     error_message: Optional[str] = None  # Error details if solve failed
     case_name: Optional[str] = None  # Case identifier for benchmarking
+
+    # ENAPP/distributed metadata
+    area_results: Optional[dict[str, "PowerFlowResult"]] = None
+    boundary_error_per_iter: Optional[list[float]] = None
+    enapp_iterations: Optional[int] = None
+    enapp_runtime: Optional[float] = None
+    enapp_parallel_used: Optional[bool] = None
 
     # References (not included in repr for cleanliness)
     raw_result: Any = field(default=None, repr=False)

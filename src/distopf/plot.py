@@ -26,14 +26,12 @@ def _get_id_name_cols(df: pd.DataFrame) -> tuple[str, str]:
 
 def _choose_t(df, t=None):
     df = df.copy()
-    if t is None:
-        t = 0
     if "t" in df.columns:
         if t is None and len(df) > 0:
             t = min(df.t)
         df = df.loc[df.t == t, :]
         df = df.drop("t", axis=1)
-    return df
+    return df, t
 
 
 def plot_voltages(v: pd.DataFrame, t=None) -> go.Figure:
@@ -58,7 +56,7 @@ def plot_voltages(v: pd.DataFrame, t=None) -> go.Figure:
     # if "t" in v.columns:
     #     v = v.loc[v.t == t, :]
     #     v = v.drop("t", axis=1)
-    v = _choose_t(v, t=t)
+    v, _t = _choose_t(v, t=t)
     v = v.melt(
         ignore_index=False, id_vars=["id", "name"], var_name="phase", value_name="v"
     )
@@ -72,55 +70,68 @@ def plot_voltages(v: pd.DataFrame, t=None) -> go.Figure:
 def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
     """
     Visually compare voltages by plotting two different results.
-    Parameters
-    ----------
-    v1 : pd.DataFrame
-    v2 : pd.DataFrame
-
-    Returns
-    -------
-    fig : Plotly figure object
+    If 't' column is present in both DataFrames, a slider is added to select
+    the timestep. If `t` is provided, only that timestep is plotted.
     """
     v1 = v1.copy()
     v2 = v2.copy()
-    if "id" not in v1.columns:
-        v1["id"] = v1.index
-    if "name" not in v1.columns:
-        v1["name"] = v1["id"]
-    if "id" not in v2.columns:
-        v2["id"] = v2.index
-    if "name" not in v2.columns:
-        v2["name"] = v2["id"]
-    t1 = t2 = t
-    if t is None and "t" in v1.columns:
-        t1 = min(v1.t)
-    if t is None and "t" in v2.columns:
-        t2 = min(v2.t)
-    if "t" in v1.columns and "t" in v2.columns:
-        assert t1 == t2
-    if "t" in v1.columns:
-        v1 = pd.DataFrame(v1.loc[v1.t == t1, :])
-        v1 = v1.drop("t", axis=1)
-    if "t" in v2.columns:
-        v2 = pd.DataFrame(v2.loc[v2.t == t2, :])
-        v2 = v2.drop("t", axis=1)
-    v1 = v1.melt(
-        ignore_index=True, var_name="phase", id_vars=["id", "name"], value_name="v1"
-    )
-    v2 = v2.melt(
-        ignore_index=True, var_name="phase", id_vars=["id", "name"], value_name="v2"
-    )
-    v = pd.merge(v1, v2, on=["id", "name", "phase"])
+
+    for df in (v1, v2):
+        if "id" not in df.columns:
+            df["id"] = df.index
+        if "name" not in df.columns:
+            df["name"] = df["id"]
+
+    has_t1 = "t" in v1.columns
+    has_t2 = "t" in v2.columns
+
+    # If user passed a specific t, filter to that single timestep
+    if t is not None:
+        if has_t1:
+            v1 = v1.loc[v1.t == t, :]
+        if has_t2:
+            v2 = v2.loc[v2.t == t, :]
+
+    id_vars1 = ["id", "name"] + (["t"] if "t" in v1.columns else [])
+    id_vars2 = ["id", "name"] + (["t"] if "t" in v2.columns else [])
+
+    v1m = v1.melt(ignore_index=True, var_name="phase",
+                  id_vars=id_vars1, value_name="v1")
+    v2m = v2.melt(ignore_index=True, var_name="phase",
+                  id_vars=id_vars2, value_name="v2")
+
+    merge_keys = ["id", "name", "phase"]
+    if "t" in v1m.columns and "t" in v2m.columns:
+        merge_keys.append("t")
+
+    v = pd.merge(v1m, v2m, on=merge_keys)
+
+    long_id_vars = ["id", "name", "phase"] + (["t"] if "t" in v.columns else [])
     v = v.melt(
         ignore_index=True,
         var_name="value",
-        id_vars=["id", "name", "phase"],
+        id_vars=long_id_vars,
         value_name="v",
-    ).sort_values(by=["id", "phase"])
-    # v1["v1"] = v1["v1"].astype(float)
-    # v2["v2"] = v2["v2"].astype(float)
-    # v = pd.merge(v1, v2, on=["name", "phase"])
-    fig = px.line(v, x="name", facet_col="phase", y="v", color="value", markers=True)
+    ).sort_values(by=long_id_vars)
+
+    # Build figure - use animation_frame if we have a time column
+    if "t" in v.columns and v["t"].nunique() > 1:
+        v = v.sort_values(by=["t", "id", "phase"])
+        fig = px.line(
+            v, x="name", facet_col="phase", y="v",
+            color="value", markers=True,
+            animation_frame="t",
+        )
+        # Fix y-axis range so it doesn't jump between frames
+        ymin, ymax = v["v"].min(), v["v"].max()
+        pad = (ymax - ymin) * 0.05 if ymax > ymin else 1
+        fig.update_yaxes(range=[ymin - pad, ymax + pad])
+    else:
+        fig = px.line(
+            v, x="name", facet_col="phase", y="v",
+            color="value", markers=True,
+        )
+
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
     fig.for_each_xaxis(lambda a: a.update(title="Bus Name"))
     return fig
@@ -192,7 +203,7 @@ def plot_power_flows(s: pd.DataFrame, t=None) -> go.Figure:
     -------
     fig : Plotly figure object
     """
-    s = _choose_t(s, t)
+    s, _t = _choose_t(s, t)
     s = s.melt(
         ignore_index=True,
         id_vars=["fb", "tb", "from_name", "to_name"],
@@ -910,7 +921,7 @@ def plot_line_flow_vs_distance(
 
 
 def plot_network(
-    model: LinDistBase | Case,
+    case: LinDistBase | Case,
     v: Optional[pd.DataFrame] = None,
     s: Optional[pd.DataFrame] = None,
     p_flow: Optional[pd.DataFrame] = None,
@@ -946,13 +957,13 @@ def plot_network(
     _v = None
     _s = None
     if s is not None:
-        _s = _choose_t(s.copy(), t)
+        _s, _t = _choose_t(s.copy(), t)
     if v is not None:
-        _v = _choose_t(v.copy(), t)
+        _v, _t = _choose_t(v.copy(), t)
     if s is None and p_flow is not None and q_flow is not None:
         from_bus_map = {
             int(tb): int(fb)
-            for fb, tb in model.branch_data.loc[:, ["fb", "tb"]].to_numpy()
+            for fb, tb in case.branch_data.loc[:, ["fb", "tb"]].to_numpy()
         }
         _s = p_flow.copy()
         _s = _s.drop(["a", "b", "c"], axis=1)
@@ -963,31 +974,33 @@ def plot_network(
             _s["tb"] = _s["id"]
         if "fb" not in _s.columns:
             _s["fb"] = _s["tb"].map(from_bus_map)
-        _s = _choose_t(_s, t)
+        _s, _t = _choose_t(_s, t)
     if p_gen is not None and p_gen.shape[0] == 0:
         p_gen = None
     if q_gen is not None and q_gen.shape[0] == 0:
         q_gen = None
     if p_gen is not None:
-        p_gen = _choose_t(p_gen, t)
+        p_gen, _t = _choose_t(p_gen, t)
     if q_gen is not None:
-        q_gen = _choose_t(q_gen, t)
+        q_gen, _t = _choose_t(q_gen, t)
 
     # validate phases
     if show_phases.lower() not in ["a", "b", "c", "abc"]:
         raise ValueError("Invalid phase. Must be 'a', 'b', 'c', or 'abc'.")
     show_phases = show_phases.lower()
     phase_list = sorted([ph.lower() for ph in show_phases])
-    bus_data = model.bus_data.copy()
-    branch_data = model.branch_data.copy()
-    gen_data = model.gen_data.copy()
-    cap_data = model.cap_data.copy()
+    bus_data = case.bus_data.copy()
+    branch_data = case.branch_data.copy()
+    gen_data = case.gen_data.copy()
+    cap_data = case.cap_data.copy()
+    schedules = case.schedules.copy()
 
     node_size = 10
     edge_scale = 10
     edge_min = 1
 
     bus_data = _process_bus_data(bus_data, _v, phase_list)
+    bus_data = _displace_overlapping_nodes(bus_data, branch_data)
     branch_data = _process_branch_data(
         branch_data, bus_data, _s, phase_list, edge_scale, edge_min
     )
@@ -1002,7 +1015,9 @@ def plot_network(
         branch_data, node_size, show_reactive_power
     )
 
-    node_trace.text = _make_hover_text(branch_data, bus_data, cap_data, gen_data)
+    node_trace.text = _make_hover_text(
+        branch_data, bus_data, cap_data, gen_data, schedules, _t
+    )
     title = _make_title(show_phases, show_reactive_power)
 
     fig = go.Figure(
@@ -1032,6 +1047,55 @@ def plot_network(
     )
 
     return fig
+
+
+def _displace_overlapping_nodes(bus_data, branch_data, displacement_scale=0.03):
+    """Displace downstream nodes that overlap their upstream parent."""
+    active = branch_data.loc[branch_data.status != "OPEN"]
+    children_map = active.groupby(active.fb.astype(int))["tb"].apply(
+        lambda s: s.astype(int).tolist()
+    ).to_dict()
+    parent_map = active[["fb", "tb"]].astype(int).set_index("tb")["fb"].to_dict()
+
+    xy = bus_data[["x", "y"]].to_numpy()
+    rounded = bus_data[["x", "y"]].round(10)
+
+    for _, group in bus_data.groupby([rounded.x, rounded.y]):
+        if len(group) <= 1:
+            continue
+        origin = group[["x", "y"]].iloc[0].to_numpy()
+        group_ids = set(group.id.astype(int))
+
+        for idx, row in group.iterrows():
+            bus_id = int(row.id)
+            if parent_map.get(bus_id) not in group_ids:
+                continue
+
+            # Direction toward non-co-located downstream children
+            kids = children_map.get(bus_id, [])
+            d = np.array([0.0, 0.0])
+            if kids:
+                kid_xy = xy[np.array(kids) - 1]
+                mask = np.linalg.norm(kid_xy - origin, axis=1) > 1e-10
+                if mask.any():
+                    d = kid_xy[mask].mean(axis=0) - origin
+
+            # Fallback: away from nearest non-co-located ancestor
+            cur = bus_id
+            while np.linalg.norm(d) < 1e-10 and cur in parent_map:
+                cur = parent_map[cur]
+                p = xy[cur - 1]
+                if np.linalg.norm(p - origin) > 1e-10:
+                    d = origin - p
+
+            if np.linalg.norm(d) < 1e-10:
+                d = np.array([1.0, 0.0])
+
+            d = d / np.linalg.norm(d) * displacement_scale
+            bus_data.at[idx, "x"] = origin[0] + d[0]
+            bus_data.at[idx, "y"] = origin[1] + d[1]
+
+    return bus_data
 
 
 def _process_bus_data(bus_data, _v, phase_list):
@@ -1195,7 +1259,7 @@ def _make_edge_traces(branch_data, show_phases, show_reactive_power):
     return edge_traces
 
 
-def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
+def _make_hover_text(branch_data, bus_data, cap_data, gen_data, schedules, t):
     text = []
     for i, bus_row in enumerate(bus_data.itertuples()):
         bus_phases = bus_row.phases.lower()  # e.g. "abc", "ac", "ab", etc.
@@ -1222,14 +1286,24 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
         hover_text += f"⚡ V Mag   {va_str} {vb_str} {vc_str}<br>"
 
         # Load data
-        pla, plb, plc = bus_row.pl_a, bus_row.pl_b, bus_row.pl_c
-        qla, qlb, qlc = bus_row.ql_a, bus_row.ql_b, bus_row.ql_c
-        pla_str = format_phase_value(pla, "a")
-        plb_str = format_phase_value(plb, "b")
-        plc_str = format_phase_value(plc, "c")
-        qla_str = format_phase_value(qla, "a")
-        qlb_str = format_phase_value(qlb, "b")
-        qlc_str = format_phase_value(qlc, "c")
+        pl = {"a": bus_row.pl_a, "b": bus_row.pl_b, "c": bus_row.pl_c}
+        ql = {"a": bus_row.ql_a, "b": bus_row.ql_b, "c": bus_row.ql_c}
+        load_shape = bus_row.load_shape if hasattr(bus_row, "load_shape") else None
+        load_mult_p = load_mult_q = 1.0
+        for a in ["a", "b", "c"]:
+            if load_shape in schedules.columns:
+                load_mult_p = load_mult_q = schedules.at[t, load_shape]
+            elif f"{load_shape}.{a}.p" in schedules.columns:
+                load_mult_p = schedules.at[t, f"{load_shape}.{a}.p"]
+                load_mult_q = schedules.at[t, f"{load_shape}.{a}.q"]
+            pl[a] = pl[a] * load_mult_p if pl[a] is not None else None
+            ql[a] = ql[a] * load_mult_q if ql[a] is not None else None
+        pla_str = format_phase_value(pl["a"], "a")
+        plb_str = format_phase_value(pl["b"], "b")
+        plc_str = format_phase_value(pl["c"], "c")
+        qla_str = format_phase_value(ql["a"], "a")
+        qlb_str = format_phase_value(ql["b"], "b")
+        qlc_str = format_phase_value(ql["c"], "c")
         hover_text += f"💡 P Load  {pla_str} {plb_str} {plc_str}<br>"
         hover_text += f"💡 Q Load  {qla_str} {qlb_str} {qlc_str}<br>"
 

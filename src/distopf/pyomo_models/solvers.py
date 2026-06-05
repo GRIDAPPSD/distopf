@@ -12,9 +12,9 @@ def solve(model: LindistModelProtocol, solver="ipopt", duals=True) -> PyoResult:
     results = pyo.SolverFactory(solver).solve(model)
 
     if results.solver.status == pyo.SolverStatus.ok:
-        print("Optimization successful!")
+        # print("Optimization successful!")
         obj_value = pyo.value(model.objective)
-        print(f"Objective value: {obj_value}")
+        # print(f"Objective value: {obj_value}")
         res = PyoResult(model, objective_value=obj_value, extract_duals=duals)
 
     else:

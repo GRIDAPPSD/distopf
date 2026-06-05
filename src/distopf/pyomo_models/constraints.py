@@ -350,9 +350,16 @@ def add_octagonal_thermal_constraints(m: LindistModelProtocol) -> None:
 
     c = sqrt2 - 1  # ≈ 0.4142
 
+    # def _has_thermal_limit(m, _id, ph):
+    #     """Check if branch has a valid thermal limit."""
+    #     limit = pyo.value(m.s_branch_max.get((_id, ph), None))
+    #     return limit is not None and limit > 0
+
     def _has_thermal_limit(m, _id, ph):
         """Check if branch has a valid thermal limit."""
-        limit = pyo.value(m.s_branch_max.get((_id, ph), None))
+        if (_id, ph) not in m.s_branch_max:
+            return False
+        limit = pyo.value(m.s_branch_max[_id, ph])
         return limit is not None and limit > 0
 
     # Quadrant 1: +P, +Q
