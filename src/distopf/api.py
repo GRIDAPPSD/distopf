@@ -1451,11 +1451,27 @@ def modify_case(
         case.bus_data.loc[:, ["pl_a", "ql_a", "pl_b", "ql_b", "pl_c", "ql_c"]] *= (
             load_mult
         )
+        if "pl_s1" in case.bus_data.columns:
+            case.bus_data.loc[:, ["pl_s1"]] *= load_mult
+        if "pl_s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["pl_s2"]] *= load_mult
+        if "pl_s1s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["pl_s1s2"]] *= load_mult
+        if "ql_s1" in case.bus_data.columns:
+            case.bus_data.loc[:, ["ql_s1"]] *= load_mult
+        if "ql_s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["ql_s2"]] *= load_mult
+        if "ql_s1s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["ql_s1s2"]] *= load_mult
     # Modify generation multiplier
     if gen_mult is not None and case.gen_data is not None:
         case.gen_data.loc[:, ["p_a", "p_b", "p_c"]] *= gen_mult
         case.gen_data.loc[:, ["q_a", "q_b", "q_c"]] *= gen_mult
         case.gen_data.loc[:, ["s_a_max", "s_b_max", "s_c_max"]] *= gen_mult
+        if "p_s1" in case.gen_data.columns:
+            case.gen_data.loc[:, ["p_s1"]] *= gen_mult
+        if "p_s2" in case.gen_data.columns:
+            case.gen_data.loc[:, ["p_s2"]] *= gen_mult
     # Modify control_variable
     if control_variable is not None and case.gen_data is not None:
         if control_variable == "":

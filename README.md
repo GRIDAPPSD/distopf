@@ -257,8 +257,8 @@ case = opf.Case(
 
 - id: bus id
 - name: generator name
-- pa, pb, pc: active power output (p.u.)
-- qa, qb, qc: reactive power output (p.u.)
+- p_a, p_b, p_c: active power output (p.u.)
+- q_a, q_b, q_c: reactive power output (p.u.)
 - s_base: base power (VA)
 - sa_max, sb_max, sc_max: rated maximum apparent power output (VA)
 - phases: generator phases (abc string) (this IS implemented)

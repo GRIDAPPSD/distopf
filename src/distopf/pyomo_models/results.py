@@ -208,8 +208,8 @@ def get_values_tidy(var: pyo.Var) -> pd.DataFrame:
             data=[
                 [
                     fb,
-                    var.model().name_map[fb],
                     tb,
+                    var.model().name_map[fb],
                     var.model().name_map[tb],
                     t,
                     _ph,

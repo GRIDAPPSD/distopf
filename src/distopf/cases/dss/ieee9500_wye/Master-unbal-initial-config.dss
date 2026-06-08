@@ -24,7 +24,7 @@ Redirect  LoadXfmrCodes.dss
 Redirect  TriplexLines.dss
 Redirect  UnbalancedLoads.dss
 Redirect  Capacitors.dss
-Redirect  CapControls.dss
+! Redirect  CapControls.dss
 Redirect  Regulators.dss
 
 Redirect  Generators.dss
