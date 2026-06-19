@@ -110,6 +110,7 @@ class PyomoWrapper(Wrapper):
         equality_only = kwargs.pop("equality_only", False)
         reg_tap_change_limit = kwargs.pop("reg_tap_change_limit", None)
         duals = kwargs.pop("duals", False)
+        verbose = kwargs.pop("verbose", False)
 
         voltage_weight = kwargs.pop("voltage_weight", None)
         thermal_weight = kwargs.pop("thermal_weight", None)
@@ -148,7 +149,7 @@ class PyomoWrapper(Wrapper):
         else:
             self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
 
-        self.result = solve(self.model, solver=solver, duals=duals)
+        self.result = solve(self.model, solver=solver, duals=duals, verbose=verbose)
 
         if raw_result:
             return self.result
@@ -173,6 +174,7 @@ class PyomoWrapper(Wrapper):
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         initialize = kwargs.pop("initialize", "fbs")
         solver_name = kwargs.pop("solver", "ipopt")
+        verbose = kwargs.pop("verbose", False)
 
         if (control_regulators or control_capacitors) and solver_name == "ipopt":
             raise ValueError(
@@ -196,7 +198,7 @@ class PyomoWrapper(Wrapper):
         obj_rule = self._resolve_objective(objective)
         self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
 
-        self.result = solve(self.model, solver=solver_name)
+        self.result = solve(self.model, solver=solver_name, verbose=verbose)
 
         if raw_result:
             return self.result
@@ -335,22 +337,28 @@ class PyomoWrapper(Wrapper):
         if branch_dimen == 3:
             for fb, tb, ph, t in self.model.branch_phase_set * self.model.time_set:
                 i_mag = _lookup_branch_phase(currents, fb, tb, ph)
-                l_data[(tb, ph + ph, t)] = i_mag**2
+                l_data[(fb, tb, ph + ph, t)] = i_mag**2
         else:
             for _id, ph, t in self.model.branch_phase_set * self.model.time_set:
                 i_mag = currents.loc[(currents.tb == _id), ph].to_numpy()[0]
                 l_data[(_id, ph + ph, t)] = i_mag**2
 
         # Initialize cross-phase current magnitudes
-        for _id, phases, t in self.model.bus_phase_pair_set * self.model.time_set:
+        for fb, tb, phases in self.model.branch_phase_pair_set:
             ph1 = phases[0]
             ph2 = phases[1]
             if ph1 == ph2:
                 continue
-            if (_id, ph1 + ph1, t) in l_data and (_id, ph2 + ph2, t) in l_data:
-                l_data[(_id, ph1 + ph2, t)] = np.sqrt(
-                    l_data[_id, ph1 + ph1, t] * l_data[_id, ph2 + ph2, t]
-                )
+            for t in self.model.time_set:
+                if (fb, tb, ph1 + ph1, t) in l_data and (
+                    fb,
+                    tb,
+                    ph2 + ph2,
+                    t,
+                ) in l_data:
+                    l_data[(fb, tb, phases, t)] = np.sqrt(
+                        l_data[fb, tb, ph1 + ph1, t] * l_data[fb, tb, ph2 + ph2, t]
+                    )
         self.model.l_flow.set_values(l_data)
 
         # Initialize current angle differences
@@ -363,14 +371,18 @@ class PyomoWrapper(Wrapper):
         current_angles["aa"] = current_angles.a - current_angles.a
         current_angles["bb"] = current_angles.b - current_angles.b
         current_angles["cc"] = current_angles.c - current_angles.c
+        current_angles["s1s1"] = current_angles.s1 - current_angles.s1
+        current_angles["s2s2"] = current_angles.s2 - current_angles.s2
+        current_angles["s1s2"] = current_angles.s1 - current_angles.s2
+        current_angles["s2s1"] = -current_angles.s1s2
 
         angle_data = {
-            (_id, phases): float(
-                current_angles.loc[current_angles.tb == _id, phases].tolist()[0]
+            (fb, tb, phases): float(
+                current_angles.loc[current_angles.tb == tb, phases].tolist()[0]
             )
             * pi
             / 180
-            for _id, phases in self.model.bus_angle_phase_pair_set
+            for fb, tb, phases in self.model.branch_angle_phase_pair_set
         }
         for key in self.model.d:
             self.model.d[key] = angle_data[key]

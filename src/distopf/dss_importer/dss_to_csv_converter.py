@@ -1,4 +1,4 @@
-from platform import node
+
 from typing import Optional
 from functools import cache
 from pathlib import Path
@@ -88,6 +88,7 @@ class DSSToCSVConverter:
         self.v_max = v_max
         self.cvr_p = cvr_p
         self.cvr_q = cvr_q
+        self.center_taps = self._identify_center_tap_transformers()
         self.bus_names = self.get_bus_names()
         self.secondary_buses = self._build_secondary_buses()
         # get dataframes and results
@@ -127,20 +128,17 @@ class DSSToCSVConverter:
             if element_type not in ["line", "transformer", "reactor"]:
                 flag = self.dss.PDElements.Next()
                 continue
-
-            if element_type == "line" and self.dss.Lines.IsSwitch():
-                element_type = "switch"
-                switch_status = (
-                    "OPEN"
-                    if (
-                        self.dss.CktElement.IsOpen(1, 1)
-                        or self.dss.CktElement.IsOpen(2, 1)
-                    )
-                    else "CLOSED"
+            switch_status = (
+                "OPEN"
+                if (
+                    self.dss.CktElement.IsOpen(1, 1)
+                    or self.dss.CktElement.IsOpen(2, 1)
                 )
-                if switch_status == "OPEN":
-                    flag = self.dss.PDElements.Next()
-                    continue
+                else "CLOSED"
+            )
+            if switch_status == "OPEN":
+                flag = self.dss.PDElements.Next()
+                continue
             bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
             bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
             branches.append((bus1, bus2))
@@ -177,14 +175,17 @@ class DSSToCSVConverter:
             if element_type not in ["line", "transformer", "reactor"]:
                 flag = self.dss.PDElements.Next()
                 continue
-
-            if element_type == "line" and self.dss.Lines.IsSwitch():
-                is_open = self.dss.CktElement.IsOpen(
-                    1, 1
-                ) or self.dss.CktElement.IsOpen(2, 1)
-                if is_open:
-                    flag = self.dss.PDElements.Next()
-                    continue
+            switch_status = (
+                "OPEN"
+                if (
+                    self.dss.CktElement.IsOpen(1, 1)
+                    or self.dss.CktElement.IsOpen(2, 1)
+                )
+                else "CLOSED"
+            )
+            if switch_status == "OPEN":
+                flag = self.dss.PDElements.Next()
+                continue
 
             bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
             bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
@@ -493,7 +494,7 @@ class DSSToCSVConverter:
 
         return v_df
 
-    def get_currents(self, from_side=False):
+    def get_currents(self, from_side=True):
         all_names = self.dss.PDElements.AllNames()
         all_n_conductors = self.dss.PDElements.AllNumConductors()
         all_n_terminals = self.dss.PDElements.AllNumTerminals()
@@ -585,7 +586,7 @@ class DSSToCSVConverter:
                 df.loc[i, "c"] = pd.NA
         return df.loc[:, ["fb", "tb", "from_name", "to_name", "a", "b", "c"]]
 
-    def get_current_angles(self, from_side=False):
+    def get_current_angles(self, from_side=True):
         all_names = self.dss.PDElements.AllNames()
         all_n_conductors = self.dss.PDElements.AllNumConductors()
         all_n_terminals = self.dss.PDElements.AllNumTerminals()
@@ -697,6 +698,7 @@ class DSSToCSVConverter:
                 self.dss.Transformers.Name(element_name)
             if element_type == "Reactor":
                 self.dss.Reactors.Name(element_name)
+
             bus_names = self.dss.CktElement.BusNames()
             bus1 = bus_names[0].split(".")[0]
             bus2 = bus_names[1].split(".")[0]
@@ -710,6 +712,16 @@ class DSSToCSVConverter:
                 )
             pq_in = pq[:n_phases, :]
             pq_out = -pq[n_cond : n_cond + n_phases, :]
+            
+            if element_type == "Transformer" and element_name in self.center_taps:
+                # pq_in = pq[0, :]
+                # for center tap transformers we will always use the secondary side
+                # power flow to be consistent with distopf modeling.
+                pq_in = -pq[(2, 5), :]
+                pq_out = -pq[(2, 5), :]
+                active_phases = [0, 1]
+                n_phases = 2
+
             if from_side:
                 s_ = pq_in[:, 0] + 1j * pq_in[:, 1]
             else:
@@ -766,12 +778,49 @@ class DSSToCSVConverter:
         nan_cx = np.nan + 1j * np.nan
         power_df["s1"] = nan_cx
         power_df["s2"] = nan_cx
-        sec_mask = power_df["to_name"].isin(self.secondary_buses) | power_df[
-            "from_name"
+        transformer_mask = ~power_df["from_name"].isin(self.secondary_buses) & power_df[
+            "to_name"
         ].isin(self.secondary_buses)
-        power_df.loc[sec_mask, "s1"] = power_df.loc[sec_mask, "a"]
-        power_df.loc[sec_mask, "s2"] = power_df.loc[sec_mask, "b"]
-        power_df.loc[sec_mask, ["a", "b", "c"]] = nan_cx
+        secondary_only_mask = power_df["from_name"].isin(
+            self.secondary_buses
+        ) & power_df["to_name"].isin(self.secondary_buses)
+        sec_mask = power_df["from_name"].isin(self.secondary_buses) | power_df[
+            "to_name"
+        ].isin(self.secondary_buses)
+        if from_side:
+            primary_phases = {
+                _bus: _dict.get("primary_phase")
+                for _bus, _dict in self.secondary_buses.items()
+            }
+            transformer_a_mask = transformer_mask & (
+                power_df["to_name"].map(primary_phases) == "a"
+            )
+            transformer_b_mask = transformer_mask & (
+                power_df["to_name"].map(primary_phases) == "b"
+            )
+            transformer_c_mask = transformer_mask & (
+                power_df["to_name"].map(primary_phases) == "c"
+            )
+            power_df.loc[secondary_only_mask, "s1"] = power_df.loc[
+                secondary_only_mask, "a"
+            ]
+            power_df.loc[secondary_only_mask, "s2"] = power_df.loc[
+                secondary_only_mask, "b"
+            ]
+            power_df.loc[secondary_only_mask, ["a", "b", "c"]] = nan_cx
+            power_df.loc[transformer_a_mask, "a"] = power_df.loc[
+                transformer_a_mask, "a"
+            ]
+            power_df.loc[transformer_b_mask, "b"] = power_df.loc[
+                transformer_b_mask, "a"
+            ]
+            power_df.loc[transformer_c_mask, "c"] = power_df.loc[
+                transformer_c_mask, "a"
+            ]
+        else:
+            power_df.loc[sec_mask, "s1"] = power_df.loc[sec_mask, "a"]
+            power_df.loc[sec_mask, "s2"] = power_df.loc[sec_mask, "b"]
+            power_df.loc[sec_mask, ["a", "b", "c"]] = nan_cx
 
         return power_df.loc[
             :, ["fb", "tb", "from_name", "to_name", "a", "b", "c", "s1", "s2"]
@@ -985,20 +1034,20 @@ class DSSToCSVConverter:
             bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
             bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
             if bus1 in self.secondary_buses or bus2 in self.secondary_buses:
-                continue
+                continue  # Skip triplex lines — handled by append_triplex_lines
 
             r_matrix, x_matrix = self._get_line_zmatrix()
 
             if self.dss.Lines.IsSwitch():
                 element_type = "switch"
-                switch_status = (
-                    "OPEN"
-                    if (
-                        self.dss.CktElement.IsOpen(1, 1)
-                        or self.dss.CktElement.IsOpen(2, 1)
-                    )
-                    else "CLOSED"
+            switch_status = (
+                "OPEN"
+                if (
+                    self.dss.CktElement.IsOpen(1, 1)
+                    or self.dss.CktElement.IsOpen(2, 1)
                 )
+                else "CLOSED"
+            )
 
             line_data.append(
                 self._create_branch_row(
@@ -1025,16 +1074,14 @@ class DSSToCSVConverter:
 
             element_name = self.dss.Lines.Name()
 
-            switch_status = None
-            if self.dss.Lines.IsSwitch():
-                switch_status = (
-                    "OPEN"
-                    if (
-                        self.dss.CktElement.IsOpen(1, 1)
-                        or self.dss.CktElement.IsOpen(2, 1)
-                    )
-                    else "CLOSED"
+            switch_status = (
+                "OPEN"
+                if (
+                    self.dss.CktElement.IsOpen(1, 1)
+                    or self.dss.CktElement.IsOpen(2, 1)
                 )
+                else "CLOSED"
+            )
 
             # Determine bus ordering (fb < tb)
             from_name, to_name = self._orient_edge(bus1, bus2)

@@ -558,6 +558,7 @@ class Case:
                 control_capacitors=control_capacitors,
                 raw_result=raw_result,
                 duals=duals,
+                verbose=verbose,
                 **kwargs,
             )
 
@@ -1472,6 +1473,10 @@ def modify_case(
             case.gen_data.loc[:, ["p_s1"]] *= gen_mult
         if "p_s2" in case.gen_data.columns:
             case.gen_data.loc[:, ["p_s2"]] *= gen_mult
+        if "s_s1_max" in case.gen_data.columns:
+            case.gen_data.loc[:, ["s_s1_max"]] *= gen_mult
+        if "s_s2_max" in case.gen_data.columns:
+            case.gen_data.loc[:, ["s_s2_max"]] *= gen_mult
     # Modify control_variable
     if control_variable is not None and case.gen_data is not None:
         if control_variable == "":

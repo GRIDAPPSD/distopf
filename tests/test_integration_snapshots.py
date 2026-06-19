@@ -141,6 +141,40 @@ SCENARIOS = [
         "control_variable": "Q",
         "n_steps": 1,
     },
+    # ── Nonlinear branchflow (Pyomo / IPOPT) ──
+    {
+        "id": "ieee123_nlp_loss",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_loss_Q",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "control_variable": "Q",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_vdev",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "voltage_deviation",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_bat_nlp_loss",
+        "case": "ieee123_30der_bat",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
     # ── Edge cases ──
     {
         "id": "ieee123_nosched_mat_Q",
@@ -347,6 +381,7 @@ def generate_all_references():
     with open(REFERENCE_FILE, "w") as f:
         json.dump(refs, f, indent=2, sort_keys=True)
     print(f"\nWrote {len(refs)} scenario references to {REFERENCE_FILE}")
+
 
 # disable reference generation to prevent accidental overwrites
 # if __name__ == "__main__":

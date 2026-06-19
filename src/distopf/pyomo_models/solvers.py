@@ -3,13 +3,17 @@ from distopf.pyomo_models.results import PyoResult
 import pyomo.environ as pyo
 
 
-def solve(model: LindistModelProtocol, solver="ipopt", duals=True) -> PyoResult:
+def solve(model: LindistModelProtocol, solver="ipopt", duals=True, verbose=False) -> PyoResult:
     if solver is None:
         solver = "ipopt"
     if duals:
         model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
     # Solve the model
-    results = pyo.SolverFactory(solver).solve(model)
+    solver_factory = pyo.SolverFactory(solver)
+    if solver == "gurobi":
+        solver_factory.options["NonConvex"] = 2
+        solver_factory.options["FuncNonlinear"] = 1
+    results = solver_factory.solve(model, tee=verbose)
 
     if results.solver.status == pyo.SolverStatus.ok:
         print("Optimization successful!")

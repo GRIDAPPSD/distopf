@@ -597,6 +597,7 @@ def create_lindist_model(
     pyo.ConcreteModel
         Configured Pyomo model with requested MI variables
     """
+
     m = pyo.ConcreteModel()
 
     # Store configuration flags on model for constraint functions to reference
@@ -642,8 +643,12 @@ def create_lindist_model(
 
     # ===== Standard Variables =====
     m.v2 = pyo.Var(
-        m.bus_phase_set, m.time_set, domain=pyo.NonNegativeReals, initialize=1
-    )
+        m.bus_phase_set,
+        m.time_set,
+        domain=pyo.NonNegativeReals,
+        initialize=1,
+        doc="Voltage magnitude squared (v^2)",
+    )  # Voltage magnitude squared
     m.p_flow = pyo.Var(m.branch_phase_set, m.time_set)
     m.q_flow = pyo.Var(m.branch_phase_set, m.time_set, initialize=0)
     m.p_gen = pyo.Var(m.gen_phase_set, m.time_set, domain=pyo.NonNegativeReals)

@@ -50,7 +50,10 @@ class PyoResult:
 
         # Extract duals if requested and available
         if extract_duals and hasattr(model, "dual"):
-            self._populate_common_duals(model)
+            try:
+                self._populate_common_duals(model)
+            except KeyError as e:
+                print(f"Warning: Could not extract duals for some constraints: {e}")
 
     def _populate_common_duals(self, model: pyo.ConcreteModel | LindistModelProtocol):
         """Populate commonly-used dual attributes for convenience.

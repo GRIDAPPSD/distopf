@@ -1,8 +1,9 @@
+import re
 from enum import IntEnum
 from itertools import combinations_with_replacement, product
 import warnings
 import pyomo.environ as pyo  # type: ignore
-from typing import Tuple, List
+from typing import Any
 import pandas as pd
 from distopf.api import Case
 from distopf.pyomo_models.protocol import LindistModelProtocol
@@ -17,12 +18,47 @@ class ControlVariable(IntEnum):
 
 CONTROL_VARIABLE_MAP = {"": 0, "Q": 1, "P": 2, "PQ": 3}
 
+# Triplex phase names (multi-character)
+TRIPLEX_PHASES = ("s1", "s2")
 
-def _create_phase_tuples(df: pd.DataFrame, id_col: str = "id") -> List[Tuple[int, str]]:
-    """Create (id, phase) tuples from dataframe with phases column"""
-    result = []
+
+def _parse_phases(phases_str: str) -> list[str]:
+    """Parse a phases string into a list of phase names.
+
+    Handles both standard phases ('a', 'b', 'c', 'ab', 'abc') and
+    triplex phases ('s1', 's2', 's1s2').
+
+    Examples
+    --------
+    >>> _parse_phases("abc")
+    ['a', 'b', 'c']
+    >>> _parse_phases("s1s2")
+    ['s1', 's2']
+    >>> _parse_phases("s1")
+    ['s1']
+    """
+    return re.findall(r'[A-Za-z]\d|.', phases_str)
+
+
+def _create_phase_tuples(df: pd.DataFrame, id_col: str = "id") -> list[tuple[int, str]]:
+    """Create (id, phase) tuples from dataframe with phases column."""
+    result: list[tuple[int, str]] = []
     for _, row in df.iterrows():
-        result.extend([(int(row[id_col]), str(phase)) for phase in row.phases])
+        phases = _parse_phases(str(row.phases))
+        for phase in phases:
+            result.append((int(row[id_col]), phase))
+    return result
+
+
+def _create_branch_phase_tuples(
+    df: pd.DataFrame, from_col: str = "fb", to_col: str = "tb"
+) -> list[tuple[int, int, str]]:
+    """Create (fb, tb, phase) tuples from dataframe with phases column."""
+    result: list[tuple[int, int, str]] = []
+    for _, row in df.iterrows():
+        phases = _parse_phases(str(row.phases))
+        for phase in phases:
+            result.append((int(row[from_col]), int(row[to_col]), phase))
     return result
 
 
@@ -39,6 +75,20 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
         ),
         dimen=2,
     )
+    m.branch_set = pyo.Set(
+        initialize=[
+            (int(fb), int(tb))
+            for fb, tb in case.branch_data.loc[:, ["fb", "tb"]].to_numpy()
+        ],
+        dimen=2,
+    )
+    m.branch_phase_pair_set = pyo.Set(
+        initialize=[
+            (int(fb), int(tb), ph1 + ph2)
+            for fb, tb, phs in case.branch_data.loc[:, ["fb", "tb", "phases"]].to_numpy()
+            for ph1, ph2 in combinations_with_replacement(sorted(_parse_phases(phs)), 2)
+        ]
+    )
     m.bus_phase_pair_set = pyo.Set(
         initialize=[
             (i, ph1 + ph2)
@@ -48,26 +98,25 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
         ]
     )
 
-    m.bus_angle_phase_pair_set = pyo.Set(
+    m.branch_angle_phase_pair_set = pyo.Set(
         initialize=[
-            (i, ph1 + ph2)
-            for i, phs in m.phase_map.items()
-            for ph1, ph2 in product(phs, repeat=2)
-            if i not in m.swing_bus_set
+            (int(fb), int(tb), ph1 + ph2)
+            for fb, tb, phs in case.branch_data.loc[:, ["fb", "tb", "phases"]].to_numpy()
+            for ph1, ph2 in product(_parse_phases(phs), repeat=2)
+            if tb not in m.swing_bus_set
         ]
     )
-    m.branch_set = pyo.Set(
-        initialize=case.bus_data[case.bus_data.bus_type != "SWING"].id.tolist()
+    m.phase_pair_set = pyo.Set(
+        initialize=["aa", "ab", "ac", "bb", "bc", "cc", "s1s1", "s1s2", "s2s2"]
     )
-    m.phase_pair_set = pyo.Set(initialize=["aa", "ab", "ac", "bb", "bc", "cc"])
     m.bus_phase_set = pyo.Set(initialize=_create_phase_tuples(case.bus_data), dimen=2)
     m.branch_phase_set = pyo.Set(
-        initialize=_create_phase_tuples(case.branch_data, "tb"), dimen=2
+        initialize=_create_branch_phase_tuples(case.branch_data), dimen=3
     )
     m.gen_phase_set = pyo.Set(initialize=_create_phase_tuples(case.gen_data), dimen=2)
     m.cap_phase_set = pyo.Set(initialize=_create_phase_tuples(case.cap_data), dimen=2)
     m.reg_phase_set = pyo.Set(
-        initialize=_create_phase_tuples(case.reg_data, "tb"), dimen=2
+        initialize=_create_branch_phase_tuples(case.reg_data), dimen=3
     )
     m.bat_phase_set = pyo.Set(
         initialize=_create_phase_tuples(case.bat_data, "id"), dimen=2
@@ -80,12 +129,14 @@ def _create_rx_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     r_data, x_data = {}, {}
 
     for _, row in case.branch_data.iterrows():
+        fb = int(row.fb)
+        tb = int(row.tb)
         for phase_pair in m.phase_pair_set:
             r_col, x_col = f"r_{phase_pair}", f"x_{phase_pair}"
 
             if r_col in case.branch_data.columns and x_col in case.branch_data.columns:
-                r_data[(row.tb, phase_pair)] = row[r_col]
-                x_data[(row.tb, phase_pair)] = row[x_col]
+                r_data[(fb, tb, phase_pair)] = row[r_col]
+                x_data[(fb, tb, phase_pair)] = row[x_col]
 
     m.r = pyo.Param(m.branch_set, m.phase_pair_set, initialize=r_data, default=0.0)
     m.x = pyo.Param(m.branch_set, m.phase_pair_set, initialize=x_data, default=0.0)
@@ -96,7 +147,8 @@ def _create_load_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     cvr_p_data, cvr_q_data = {}, {}
 
     for _, row in case.bus_data.iterrows():
-        for phase in row.phases:
+        phases = _parse_phases(str(row.phases))
+        for phase in phases:
             if (row.id, phase) not in m.bus_phase_set:
                 continue
 
@@ -108,6 +160,12 @@ def _create_load_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             # Active and reactive loads
             p_load = getattr(row, f"pl_{phase}", 0.0)
             q_load = getattr(row, f"ql_{phase}", 0.0)
+            # For triplex buses, split s1s2 (240V) loads equally across legs
+            if phase in TRIPLEX_PHASES:
+                p_s1s2 = getattr(row, "pl_s1s2", 0.0)
+                q_s1s2 = getattr(row, "ql_s1s2", 0.0)
+                p_load += p_s1s2 / 2
+                q_load += q_s1s2 / 2
             load_mult_p = load_mult_q = 1.0
             load_shape = getattr(row, "load_shape", "default")
             for t in m.time_set:
@@ -152,7 +210,17 @@ def _get_gen_schedule_mult(gen_shape: str, t: int, schedules: pd.DataFrame) -> f
     if not gen_shape or pd.isna(gen_shape):
         return 1.0
     if gen_shape in schedules.columns:
-        return float(schedules.at[t, gen_shape])
+        value: Any = schedules.at[t, gen_shape]
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            warnings.warn(
+                f"gen_shape='{gen_shape}' schedule value at t={t} is non-numeric "
+                f"({value!r}). Using multiplier=1.0.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return 1.0
     if gen_shape != "PV":
         warnings.warn(
             f"gen_shape='{gen_shape}' not found in schedules columns "
@@ -169,14 +237,18 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     gen_control_data = {}
 
     for _, row in case.gen_data.iterrows():
-        for phase in row.phases:
+        phases = _parse_phases(str(row.phases))
+        for phase in phases:
             if (row.id, phase) not in m.gen_phase_set:
                 continue
 
-            # Generation limits
+            # Generation limits and nominal values
             s_rated = getattr(row, f"s_{phase}_max", 1000.0)
             q_max = getattr(row, f"q_{phase}_max", s_rated)
             q_min = getattr(row, f"q_{phase}_min", -s_rated)
+            p_gen = getattr(row, f"p_{phase}", 0.0)
+            q_gen = getattr(row, f"q_{phase}", 0.0)
+
             s_rated_data[(row.id, phase)] = s_rated
             q_gen_min_data[(row.id, phase)] = q_min
             q_gen_max_data[(row.id, phase)] = q_max
@@ -187,8 +259,6 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 
             # Nominal generation values, scaled by schedule
             gen_shape = getattr(row, "gen_shape", "PV")
-            p_gen = getattr(row, f"p_{phase}", 0.0)
-            q_gen = getattr(row, f"q_{phase}", 0.0)
             for t in m.time_set:
                 gen_mult = _get_gen_schedule_mult(gen_shape, t, case.schedules)
                 p_gen_data[(row.id, phase, t)] = p_gen * gen_mult
@@ -237,7 +307,7 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 def _create_capacitor_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     q_cap_data = {}
     for _, row in case.cap_data.iterrows():
-        for phase in row.phases:
+        for phase in _parse_phases(str(row.phases)):
             q_cap = getattr(row, f"q_{phase}", 0.0)
             q_cap_data[(row.id, phase)] = q_cap
 
@@ -252,8 +322,10 @@ def _create_capacitor_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 def _create_regulator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     ratio_data = {}
     for _, row in case.reg_data.iterrows():
-        for phase in row.phases:
-            ratio_data[(row.tb, phase)] = getattr(row, f"ratio_{phase}", 1.0)
+        fb = int(row.fb)
+        tb = int(row.tb)
+        for phase in _parse_phases(str(row.phases)):
+            ratio_data[(fb, tb, phase)] = getattr(row, f"ratio_{phase}", 1.0)
 
     m.reg_ratio = pyo.Param(
         m.reg_phase_set,
@@ -270,19 +342,21 @@ def _create_v_swing_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
 
     for _, row in swing_buses.iterrows():
-        for phase in row.phases:
+        for phase in _parse_phases(str(row.phases)):
             if (row.id, phase) not in m.bus_phase_set:
                 continue
             v_swing = getattr(row, f"v_{phase}", 1.0)
             for t in m.time_set:
                 v_swing_data[(row.id, phase, t)] = v_swing
 
+    # NOTE: v_swing stores *voltage magnitude* (per-unit), not squared voltage.
+    # Constraints (see add_swing_bus_constraints) apply the square when fixing v2.
     m.v_swing = pyo.Param(
         m.swing_phase_set,
         m.time_set,
         initialize=v_swing_data,
         default=1.0,
-        doc="Swing bus voltage magnitude squared",
+        doc="Swing bus voltage magnitude (p.u.)",
     )
 
 
@@ -290,7 +364,7 @@ def _create_v_limit_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     v_min_data, v_max_data = {}, {}
 
     for _, row in case.bus_data.iterrows():
-        for phase in row.phases:
+        for phase in _parse_phases(str(row.phases)):
             if (row.id, phase) in m.bus_phase_set:
                 v_min_data[(row.id, phase)] = getattr(row, "v_min", 0.95)
                 v_max_data[(row.id, phase)] = getattr(row, "v_max", 1.05)
@@ -460,8 +534,52 @@ def _create_battery_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     )
 
 
+def _create_branch_thermal_parameters(m: pyo.ConcreteModel, case: Case) -> None:
+    """Create branch thermal limit parameters."""
+    s_max_data = {}
+    thermal_col_by_phase = {
+        "a": ("s_a_max",),
+        "b": ("s_b_max",),
+        "c": ("s_c_max",),
+        "s1": ("s_s1_max", "s1_max"),
+        "s2": ("s_s2_max", "s2_max"),
+    }
+    has_thermal_limits = (
+        "s_a_max" in case.branch_data.columns
+        or "s_b_max" in case.branch_data.columns
+        or "s_c_max" in case.branch_data.columns
+        or "s_s1_max" in case.branch_data.columns
+        or "s_s2_max" in case.branch_data.columns
+        or "s1_max" in case.branch_data.columns
+        or "s2_max" in case.branch_data.columns
+    )
+
+    if not has_thermal_limits:
+        return
+
+    for _, row in case.branch_data.iterrows():
+        fb = int(row.fb)
+        tb = int(row.tb)
+        phases = _parse_phases(str(row.phases))
+        for phase in phases:
+            for col in thermal_col_by_phase.get(phase, ()):  # pragma: no branch
+                if col in case.branch_data.columns:
+                    val = getattr(row, col, None)
+                    if val is not None and not pd.isna(val):
+                        s_max_data[(fb, tb, phase)] = val
+                        break
+
+    if s_max_data:
+        m.s_branch_max = pyo.Param(
+            m.branch_phase_set,
+            initialize=s_max_data,
+            default=None,
+            doc="Branch apparent power thermal limit",
+        )
+
+
 def _create_angle_parameters(m: pyo.ConcreteModel, case: Case) -> None:
-    m.d = pyo.Param(m.bus_angle_phase_pair_set, initialize=0, mutable=True)
+    m.d = pyo.Param(m.branch_angle_phase_pair_set, initialize=0, mutable=True, domain=pyo.Any)
 
 
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
@@ -477,10 +595,15 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_v_swing_parameters(m, case)
     _create_v_limit_parameters(m, case)
     _create_battery_parameters(m, case)
+    _create_branch_thermal_parameters(m, case)
     _create_angle_parameters(m, case)
 
 
-def create_nl_branchflow_model(case: Case) -> LindistModelProtocol:
+def create_nl_branchflow_model(
+    case: Case,
+    control_capacitors: bool = False,
+    control_regulators: bool = False,
+) -> LindistModelProtocol:
     """
     Factory function to create a Pyomo ConcreteModel for multiperiod linear distribution system optimization.
 
@@ -488,21 +611,48 @@ def create_nl_branchflow_model(case: Case) -> LindistModelProtocol:
     ----------
     case : Case
         Dataclass containing network data frames
+    cap_mi : bool, optional
+        If True, add mixed-integer capacitor switching variables (default: False)
+    reg_mi : bool, optional
+        If True, add mixed-integer regulator tap variables (default: False)
 
     Returns
     -------
     pyo.ConcreteModel
-        Configured Pyomo model with sets, variables, and parameters
+        Configured Pyomo model with requested MI variables
     """
 
     m = pyo.ConcreteModel()
+
+    # Store configuration flags on model for constraint functions to reference
+    m.cap_mi_enabled = control_capacitors
+    m.reg_mi_enabled = control_regulators
+
+    # Maps
+    # Map secondary branch (by to-bus id) to the primary phase of its center-tap xfmr.
+    # Only applies at the primary→secondary boundary (center-tap transformer),
+    # NOT for secondary→secondary (triplex line) branches.
+    m.primary_phase_map = {}
+    if "primary_phase" in case.branch_data.columns:
+        bus_phases = dict(zip(case.bus_data.id, case.bus_data.phases))
+        for _, row in case.branch_data.iterrows():
+            pp = getattr(row, "primary_phase", "")
+            if pp and not pd.isna(pp):
+                from_phases = str(bus_phases.get(int(row.fb), ""))
+                # Only mark as center-tap xfmr if from_bus has primary phases
+                if "s1" not in from_phases and "s2" not in from_phases:
+                    m.primary_phase_map[(int(row.fb), int(row.tb))] = str(pp)
+
     m.from_bus_map = {
         int(tb): int(fb) for fb, tb in case.branch_data.loc[:, ["fb", "tb"]].to_numpy()
     }
     m.to_bus_map = {
-        int(bus_id): case.branch_data.loc[
-            case.branch_data.fb == int(bus_id), "tb"
-        ].to_list()
+        int(bus_id): [
+            (int(fb), int(tb))
+            for fb, tb in case.branch_data.loc[
+                case.branch_data.fb == int(bus_id), ["fb", "tb"]
+            ].to_numpy()
+        ]
         for bus_id in case.bus_data.id.to_numpy()
     }
     m.name_map = {
@@ -510,22 +660,28 @@ def create_nl_branchflow_model(case: Case) -> LindistModelProtocol:
         for _id, name in case.bus_data.loc[:, ["id", "name"]].to_numpy()
     }
     m.phase_map = {
-        int(_id): str(phase)
-        for _id, phase in case.bus_data.loc[:, ["id", "phases"]].to_numpy()
+        int(_id): _parse_phases(str(phases))
+        for _id, phases in case.bus_data.loc[:, ["id", "phases"]].to_numpy()
     }
     m.delta_t = pyo.Param(initialize=case.delta_t)
     m.start_step = pyo.Param(initialize=case.start_step)
     m.n_steps = pyo.Param(initialize=case.n_steps)
+
+    # Create all standard sets and parameters
     _create_sets(m, case)
     _create_parameters(m, case)
 
     # Time-indexed variables
     m.v2 = pyo.Var(
-        m.bus_phase_set, m.time_set, domain=pyo.NonNegativeReals, initialize=1
+        m.bus_phase_set,
+        m.time_set,
+        domain=pyo.NonNegativeReals,
+        initialize=1,
+        doc="Voltage magnitude squared (v^2)",
     )  # Voltage magnitude squared
     m.p_flow = pyo.Var(m.branch_phase_set, m.time_set)
     m.q_flow = pyo.Var(m.branch_phase_set, m.time_set, initialize=0)
-    m.l_flow = pyo.Var(m.bus_phase_pair_set, m.time_set)
+    m.l_flow = pyo.Var(m.branch_phase_pair_set, m.time_set)
     m.p_gen = pyo.Var(m.gen_phase_set, m.time_set, domain=pyo.NonNegativeReals)
     m.q_gen = pyo.Var(m.gen_phase_set, m.time_set, initialize=0)
     m.q_cap = pyo.Var(m.cap_phase_set, m.time_set)
@@ -535,51 +691,56 @@ def create_nl_branchflow_model(case: Case) -> LindistModelProtocol:
     m.p_load = pyo.Var(m.bus_phase_set, m.time_set)
     m.q_load = pyo.Var(m.bus_phase_set, m.time_set)
 
-    # create battery variables
+    # Battery variables
     m.p_charge = pyo.Var(m.bat_set, m.time_set, initialize=0)
     m.p_discharge = pyo.Var(m.bat_set, m.time_set, initialize=0)
     m.p_bat = pyo.Var(m.bat_phase_set, m.time_set, initialize=0)
     m.q_bat = pyo.Var(m.bat_phase_set, m.time_set, initialize=0)
     m.soc = pyo.Var(m.bat_set, m.time_set, initialize=0.5)
 
-    # Discrete control variables (created but only used if control flags are True)
-    # Regulator tap selection: u_reg[id, phase, tap_position, time]
-    m.tap_set = pyo.RangeSet(0, 32)  # 33 tap positions (0.9 to 1.1 p.u.)
-    tap_ratios = [0.9 + k * 0.00625 for k in range(33)]
-    m.tap_ratio = pyo.Param(
-        m.tap_set,
-        initialize={k: tap_ratios[k] for k in range(33)},
-        doc="Voltage ratio for each tap position",
-    )
-    m.tap_ratio_squared = pyo.Param(
-        m.tap_set,
-        initialize={k: tap_ratios[k] ** 2 for k in range(33)},
-        doc="Squared voltage ratio for each tap position",
-    )
-    m.u_reg = pyo.Var(
-        m.reg_phase_set,
-        m.tap_set,
-        m.time_set,
-        domain=pyo.Binary,
-        doc="Binary tap selection variable for regulators",
-    )
-    m.reg_big_m = pyo.Param(
-        initialize=10.0, doc="Big-M constant for regulator constraints"
-    )
+    # ===== Capacitor MI Variables (conditional) =====
+    if control_capacitors:
+        m.u_cap = pyo.Var(
+            m.cap_phase_set,
+            m.time_set,
+            domain=pyo.Binary,
+            initialize=1,
+            doc="Capacitor switching status (1=on, 0=off)",
+        )
+        m.z_cap = pyo.Var(
+            m.cap_phase_set,
+            m.time_set,
+            domain=pyo.NonNegativeReals,
+            initialize=1,
+            doc="Auxiliary variable for McCormick linearization (z = u_cap * v2)",
+        )
 
-    # Capacitor switching: u_cap[id, phase, time]
-    m.u_cap = pyo.Var(
-        m.cap_phase_set,
-        m.time_set,
-        domain=pyo.Binary,
-        doc="Binary capacitor switching variable",
-    )
-    m.z_cap = pyo.Var(
-        m.cap_phase_set,
-        m.time_set,
-        domain=pyo.NonNegativeReals,
-        doc="Auxiliary variable for McCormick linearization (z = u_cap * v2)",
-    )
+    # ===== Regulator MI Variables (conditional) =====
+    if control_regulators:
+        # Tap positions: 33 taps from 0.9 to 1.1 (step 0.00625)
+        tap_ratios = [0.9 + k * 0.00625 for k in range(33)]
+        m.tap_set = pyo.RangeSet(0, 32)  # 0 through 32 inclusive ie set(range(33))
+        m.tap_ratio = pyo.Param(
+            m.tap_set,
+            initialize={k: tap_ratios[k] for k in range(33)},
+            doc="Voltage ratio for each tap position",
+        )
+        m.tap_ratio_squared = pyo.Param(
+            m.tap_set,
+            initialize={k: tap_ratios[k] ** 2 for k in range(33)},
+            doc="Squared voltage ratio for each tap position",
+        )
+        m.reg_big_m = pyo.Param(
+            initialize=1e3, doc="Big-M value for regulator tap constraints"
+        )
+        m.u_reg = pyo.Var(
+            m.reg_phase_set,
+            m.tap_set,
+            m.time_set,
+            domain=pyo.Binary,
+            initialize=lambda m, fb, tb, ph, k, t: 1 if k == 16 else 0,
+            doc="Binary tap selection (1 if tap k is selected)",
+        )
 
     model: LindistModelProtocol = m
     return model

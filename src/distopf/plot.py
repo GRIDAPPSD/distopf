@@ -614,6 +614,7 @@ def plot_voltage_vs_distance(
     v_data,
     title="Voltage vs Distance from Source",
     color_by="algorithm",
+    include_secondary_phases=False,
 ):
     """
     Plot voltage on y-axis vs nodal distance from source bus on x-axis.
@@ -629,6 +630,8 @@ def plot_voltage_vs_distance(
         Plot title
     color_by : str
         Column name to use for color grouping (e.g., "algorithm")
+    include_secondary_phases : bool, optional
+        If True, include secondary phases (s1, s2) in the plot. Default is False.
 
     Returns
     -------
@@ -644,10 +647,12 @@ def plot_voltage_vs_distance(
 
     # Create subplots for each phase
     phases = ["a", "b", "c"]
+    if include_secondary_phases:
+        phases.extend(["s1", "s2"])
 
     fig = make_subplots(
         rows=1,
-        cols=3,
+        cols=len(phases),
         subplot_titles=[f"Phase {p.upper()}" for p in phases],
         shared_yaxes=True,
     )
@@ -710,9 +715,8 @@ def plot_voltage_vs_distance(
                         col=col_idx,
                     )
 
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=1)
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=2)
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=3)
+    for col_idx in range(1, len(phases) + 1):
+        fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=col_idx)
     fig.update_yaxes(title_text="Voltage (pu)", row=1, col=1)
     fig.update_layout(title_text=title, hovermode="closest")
 
@@ -725,6 +729,7 @@ def plot_line_flow_vs_distance(
     flow_name="Power Flow",
     title="Line Flow vs Distance from Source",
     color_by="algorithm",
+    include_secondary_phases=False,
 ):
     """
     Plot line flow on y-axis vs nodal distance from source bus on x-axis.
@@ -743,6 +748,8 @@ def plot_line_flow_vs_distance(
         Plot title
     color_by : str
         Column name to use for color grouping (e.g., "algorithm", "phase", or any other column)
+    include_secondary_phases : bool, optional
+        If True, include secondary phases (s1, s2) in the plot. Default is False.
     Returns
     -------
     plotly.graph_objects.Figure
@@ -758,10 +765,12 @@ def plot_line_flow_vs_distance(
 
     # Create subplots for each phase
     phases = ["a", "b", "c"]
+    if include_secondary_phases:
+        phases.extend(["s1", "s2"])
 
     fig = make_subplots(
         rows=1,
-        cols=3,
+        cols=len(phases),
         subplot_titles=[f"Phase {p.upper()}" for p in phases],
         shared_yaxes=True,
     )
@@ -896,9 +905,8 @@ def plot_line_flow_vs_distance(
                         col=col_idx,
                     )
 
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=1)
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=2)
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=3)
+    for col_idx in range(1, len(phases) + 1):
+        fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=col_idx)
     fig.update_yaxes(
         title_text=f"{flow_name} (kW)" if "Power" in flow_name else f"{flow_name}",
         row=1,
