@@ -57,7 +57,11 @@ class TestNlpModelCreation:
 
     def test_add_nlp_constraints_with_discrete_controls(self, small_case):
         """Test that discrete control constraints can be added."""
-        model = create_nl_branchflow_model(small_case)
+        model = create_nl_branchflow_model(
+            small_case,
+            control_capacitors=True,
+            control_regulators=True,
+        )
         add_nlp_constraints(
             model,
             circular_constraints=True,
@@ -68,9 +72,9 @@ class TestNlpModelCreation:
         assert hasattr(model, "reg_tap_sos1")
         assert hasattr(model, "reg_tap_upper")
         assert hasattr(model, "reg_tap_lower")
-        assert hasattr(model, "cap_mccormick_upper")
-        assert hasattr(model, "cap_mccormick_lower_1")
-        assert hasattr(model, "cap_mccormick_lower_2")
+        assert hasattr(model, "cap_mccormick_u1")
+        assert hasattr(model, "cap_mccormick_l1")
+        assert hasattr(model, "cap_mccormick_l2")
 
     def test_nlp_wrapper_instantiation(self, small_case):
         """Test that PyomoWrapper can be instantiated for branchflow."""

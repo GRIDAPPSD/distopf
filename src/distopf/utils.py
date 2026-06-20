@@ -4,6 +4,73 @@ import pandas as pd
 from typing import Optional
 
 
+GEN_COLUMN_RENAMES = {
+    "pa": "p_a",
+    "pb": "p_b",
+    "pc": "p_c",
+    "qa": "q_a",
+    "qb": "q_b",
+    "qc": "q_c",
+    "sa_max": "s_a_max",
+    "sb_max": "s_b_max",
+    "sc_max": "s_c_max",
+    "qa_max": "q_a_max",
+    "qb_max": "q_b_max",
+    "qc_max": "q_c_max",
+    "qa_min": "q_a_min",
+    "qb_min": "q_b_min",
+    "qc_min": "q_c_min",
+    "ps1": "p_s1",
+    "ps2": "p_s2",
+    "ps1s2": "p_s1s2",
+    "qs1": "q_s1",
+    "qs2": "q_s2",
+    "qs1s2": "q_s1s2",
+    "ss1_max": "s_s1_max",
+    "ss2_max": "s_s2_max",
+    "ss1s2_max": "s_s1s2_max",
+    "qs1_max": "q_s1_max",
+    "qs2_max": "q_s2_max",
+    "qs1s2_max": "q_s1s2_max",
+    "qs1_min": "q_s1_min",
+    "qs2_min": "q_s2_min",
+    "qs1s2_min": "q_s1s2_min",
+}
+
+CAP_COLUMN_RENAMES = {
+    "qa": "q_a",
+    "qb": "q_b",
+    "qc": "q_c",
+}
+
+BRANCH_COLUMN_RENAMES = {
+    "raa": "r_aa",
+    "rab": "r_ab",
+    "rac": "r_ac",
+    "rbb": "r_bb",
+    "rbc": "r_bc",
+    "rcc": "r_cc",
+    "xaa": "x_aa",
+    "xab": "x_ab",
+    "xac": "x_ac",
+    "xbb": "x_bb",
+    "xbc": "x_bc",
+    "xcc": "x_cc",
+    "sa_max": "s_a_max",
+    "sb_max": "s_b_max",
+    "sc_max": "s_c_max",
+}
+
+
+def _rename_known_columns(df: pd.DataFrame, rename_map: dict[str, str]) -> pd.DataFrame:
+    available = {
+        k: v for k, v in rename_map.items() if k in df.columns and v not in df.columns
+    }
+    if available:
+        return df.rename(columns=available)
+    return df
+
+
 def get(s: pd.Series, i, default=None):
     """
     Get value at index i from a Series. Return default if it does not exist.
@@ -29,26 +96,27 @@ def handle_gen_input(gen_data: Optional[pd.DataFrame]) -> pd.DataFrame:
             columns=[
                 "id",
                 "name",
-                "pa",
-                "pb",
-                "pc",
-                "qa",
-                "qb",
-                "qc",
-                "sa_max",
-                "sb_max",
-                "sc_max",
+                "p_a",
+                "p_b",
+                "p_c",
+                "q_a",
+                "q_b",
+                "q_c",
+                "s_a_max",
+                "s_b_max",
+                "s_c_max",
                 "phases",
-                "qa_max",
-                "qb_max",
-                "qc_max",
-                "qa_min",
-                "qb_min",
-                "qc_min",
+                "q_a_max",
+                "q_b_max",
+                "q_c_max",
+                "q_a_min",
+                "q_b_min",
+                "q_c_min",
                 "control_variable",
                 "gen_shape",
             ]
         )
+    gen_data = _rename_known_columns(gen_data, GEN_COLUMN_RENAMES)
     if "control_variable" not in gen_data.columns:
         gen_data["control_variable"] = ""
     else:
@@ -73,12 +141,13 @@ def handle_cap_input(cap_data: Optional[pd.DataFrame]) -> pd.DataFrame:
             columns=[
                 "id",
                 "name",
-                "qa",
-                "qb",
-                "qc",
+                "q_a",
+                "q_b",
+                "q_c",
                 "phases",
             ]
         )
+    cap_data = _rename_known_columns(cap_data, CAP_COLUMN_RENAMES)
     cap = cap_data.sort_values(by="id", ignore_index=True)
     cap.index = cap.id.to_numpy() - 1
     return cap
@@ -119,6 +188,7 @@ def handle_reg_input(reg_data: Optional[pd.DataFrame]) -> pd.DataFrame:
 def handle_branch_input(branch_data: Optional[pd.DataFrame]) -> pd.DataFrame:
     if branch_data is None:
         raise ValueError("Branch data must be provided.")
+    branch_data = _rename_known_columns(branch_data, BRANCH_COLUMN_RENAMES)
     branch = branch_data.sort_values(by="tb", ignore_index=True)
     branch = pd.DataFrame(branch.loc[branch.status != "OPEN", :])
     return branch

@@ -241,7 +241,7 @@ class LinDistModelCapMI_MP(LinDistBaseMP):
 
         q_cap_nom = 0
         if self.cap is not None:
-            q_cap_nom = get(self.cap[f"q{a}"], j, 0)
+            q_cap_nom = get(self.cap[f"q_{a}"], j, 0)
 
         # Get variable indices
         qij = self.idx("qij", j, a, t=t)

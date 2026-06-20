@@ -51,7 +51,7 @@ class LinDistModelPGen(LinDistBase):
         for a in "abc":
             if not self.phase_exists(a):
                 continue
-            p_out = self.gen[f"p{a}"]
+            p_out = self.gen[f"p_{a}"]
             for j in self.gen_buses[a]:
                 pg = self.idx("pg", j, a)
                 x_lim_lower[pg] = 0
@@ -70,7 +70,7 @@ class LinDistModelPGen(LinDistBase):
             return get(self.v_map[phase], node_j, [])
         if var in ["pg", "p_gen"]:  # active power generation at node
             return get(self.pg_map[phase], node_j, [])
-        if var in ["qc", "q_cap"]:  # reactive power injection by capacitor
+        if var in ["q_c", "q_cap"]:  # reactive power injection by capacitor
             return get(self.qc_map[phase], node_j, [])
         if var in ["vx"]:
             return self.vx_map[phase].get(node_j, [])
@@ -89,7 +89,7 @@ class LinDistModelPGen(LinDistBase):
         vj = self.idx("v", j, phase)
         q_gen_nom = 0
         if self.gen is not None:
-            q_gen_nom = get(self.gen[f"q{phase}"], j, 0)
+            q_gen_nom = get(self.gen[f"q_{phase}"], j, 0)
         p_load_nom, q_load_nom = 0, 0
         if self.bus.bus_type[j] == opf.PQ_BUS:
             p_load_nom = self.bus[f"pl_{phase}"][j]
@@ -119,7 +119,7 @@ class LinDistModelPGen(LinDistBase):
     def add_capacitor_model(self, a_eq, b_eq, j, phase):
         q_cap_nom = 0
         if self.cap is not None:
-            q_cap_nom = get(self.cap[f"q{phase}"], j, 0)
+            q_cap_nom = get(self.cap[f"q_{phase}"], j, 0)
         # equation indexes
         vj = self.idx("v", j, phase)
         qc = self.idx("q_cap", j, phase)
@@ -153,9 +153,9 @@ class LinDistModelPGen(LinDistBase):
 
     def get_q_gens(self, x):
         df = self.get_device_variables(x, self.pg_map)
-        df.a = self.gen_data.qa.to_numpy()
-        df.b = self.gen_data.qb.to_numpy()
-        df.c = self.gen_data.qc.to_numpy()
+        df.a = self.gen_data.q_a.to_numpy()
+        df.b = self.gen_data.q_b.to_numpy()
+        df.c = self.gen_data.q_c.to_numpy()
         return df
 
     def get_apparent_power_flows(self, x):

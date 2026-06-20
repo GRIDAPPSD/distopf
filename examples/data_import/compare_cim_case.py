@@ -77,13 +77,13 @@ print(f"CIM case generators: {len(case_cim.gen_data)}")
 
 if len(case_csv.gen_data) > 0:
     print("\nCSV Generators:")
-    print(case_csv.gen_data[["name", "pa", "pb", "pc"]])
+    print(case_csv.gen_data[["name", "p_a", "p_b", "p_c"]])
 else:
     print("\nCSV: No generators")
 
 if len(case_cim.gen_data) > 0:
     print("\nCIM Generators:")
-    print(case_cim.gen_data[["name", "pa", "pb", "pc"]])
+    print(case_cim.gen_data[["name", "p_a", "p_b", "p_c"]])
 else:
     print("\nCIM: No generators")
 

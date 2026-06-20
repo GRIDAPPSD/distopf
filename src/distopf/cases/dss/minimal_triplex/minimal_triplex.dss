@@ -1,0 +1,36 @@
+! tests/data/dss/minimal_triplex/minimal_triplex.dss
+Clear
+
+New Circuit.minimal_triplex basekv=7.2 pu=1.0 phases=1 bus1=sourcebus
+~ MVAsc3=20000 MVAsc1=21000
+
+! --- Primary: single-phase lateral on phase A ---
+New Linecode.pri_1ph nphases=1 basefreq=60 r1=0.3 x1=0.6 units=mi
+New Line.pri1 bus1=sourcebus.1 bus2=pribus.1 linecode=pri_1ph length=0.1 units=mi
+
+! --- Center-tap (split-phase) service transformer ---
+! Winding 1: 7.2 kV primary, phase A to neutral
+! Windings 2 & 3: two 120 V half-windings, series-connected at the neutral
+New Transformer.xfm1 phases=1 windings=3 xhl=2.04 xht=2.04 xlt=1.36
+~ wdg=1 bus=pribus.1.0      conn=wye kv=7.2  kva=25 %r=0.6
+~ wdg=2 bus=secbus.1.0      conn=wye kv=0.12 kva=25 %r=1.2
+~ wdg=3 bus=secbus.0.2      conn=wye kv=0.12 kva=25 %r=1.2
+
+! --- Triplex service drop (two-phase: s1 and s2) ---
+New Linecode.tpx nphases=2 basefreq=60
+~ rmatrix=[0.77  | 0.15  0.77]
+~ xmatrix=[0.38  | 0.22  0.38]
+~ units=kft
+New Line.drop1 bus1=secbus.1.2 bus2=loadbus.1.2 linecode=tpx length=0.05 units=kft
+
+! --- Loads ---
+! 120 V leg-to-neutral load on s1
+New Load.L1 bus1=loadbus.1.0 phases=1 kv=0.12 kw=2.0 kvar=0.5 model=1
+! 120 V leg-to-neutral load on s2
+New Load.L2 bus1=loadbus.2.0 phases=1 kv=0.12 kw=1.5 kvar=0.3 model=1
+! 240 V line-to-line load across s1-s2
+New Load.L12 bus1=loadbus.1.2 phases=1 kv=0.24 kw=3.0 kvar=0.7 model=1
+
+Set voltagebases=[7.2, 0.24]
+Calcvoltagebases
+Solve

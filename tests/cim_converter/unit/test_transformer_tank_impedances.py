@@ -34,8 +34,8 @@ def test_transformer_tank_frommeshimpedance_used_for_impedance():
     z_base = v_ln_base**2 / tp.s_base
     expected_r = float(mesh_imp.r) / z_base
     expected_x = float(mesh_imp.x) / z_base
-    assert pytest.approx(data["raa"], rel=1e-9) == expected_r
-    assert pytest.approx(data["xaa"], rel=1e-9) == expected_x
+    assert pytest.approx(data["r_aa"], rel=1e-9) == expected_r
+    assert pytest.approx(data["x_aa"], rel=1e-9) == expected_x
     assert data["phases"]
 
 
@@ -56,8 +56,8 @@ def test_transformer_tank_starimpedance_used_for_impedance():
     z_base = v_ln**2 / tp.s_base
     expected_r = float(star_imp.r) / z_base
     expected_x = float(star_imp.x) / z_base
-    assert pytest.approx(data["raa"], rel=1e-9) == expected_r
-    assert pytest.approx(data["xaa"], rel=1e-9) == expected_x
+    assert pytest.approx(data["r_aa"], rel=1e-9) == expected_r
+    assert pytest.approx(data["x_aa"], rel=1e-9) == expected_x
 
 
 def test_transformer_tank_direct_attributes_and_default_fallback():
@@ -78,8 +78,8 @@ def test_transformer_tank_direct_attributes_and_default_fallback():
     z_base = (v_base / (3**0.5)) ** 2 / tp.s_base
     expected_r = float(tank_end.r) / z_base
     expected_x = float(tank_end.x) / z_base
-    assert pytest.approx(data["raa"], rel=1e-9) == expected_r
-    assert pytest.approx(data["xaa"], rel=1e-9) == expected_x
+    assert pytest.approx(data["r_aa"], rel=1e-9) == expected_r
+    assert pytest.approx(data["x_aa"], rel=1e-9) == expected_x
 
     # Now fallback default when no impedance found
     empty_tank_end = cim.TransformerTankEnd()
@@ -92,5 +92,5 @@ def test_transformer_tank_direct_attributes_and_default_fallback():
     xfmr_empty = cim.PowerTransformer(TransformerTanks=[empty_tank])
     data2 = {}
     tp._process_transformer_tank_impedance(xfmr_empty, data2)
-    assert pytest.approx(data2["raa"], rel=1e-12) == 0.01
-    assert pytest.approx(data2["xaa"], rel=1e-12) == 0.05
+    assert pytest.approx(data2["r_aa"], rel=1e-12) == 0.01
+    assert pytest.approx(data2["x_aa"], rel=1e-12) == 0.05

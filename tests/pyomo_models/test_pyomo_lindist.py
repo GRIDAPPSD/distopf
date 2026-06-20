@@ -25,18 +25,18 @@ def simple_case_data():
         {
             "fb": [1, 2],
             "tb": [2, 3],
-            "raa": [0.01, 0.02],
-            "rab": [0.0, 0.0],
-            "rac": [0.0, 0.0],
-            "rbb": [0.01, 0.02],
-            "rbc": [0.0, 0.0],
-            "rcc": [0.01, 0.02],
-            "xaa": [0.02, 0.04],
-            "xab": [0.0, 0.0],
-            "xac": [0.0, 0.0],
-            "xbb": [0.02, 0.04],
-            "xbc": [0.0, 0.0],
-            "xcc": [0.02, 0.04],
+            "r_aa": [0.01, 0.02],
+            "r_ab": [0.0, 0.0],
+            "r_ac": [0.0, 0.0],
+            "r_bb": [0.01, 0.02],
+            "r_bc": [0.0, 0.0],
+            "r_cc": [0.01, 0.02],
+            "x_aa": [0.02, 0.04],
+            "x_ab": [0.0, 0.0],
+            "x_ac": [0.0, 0.0],
+            "x_bb": [0.02, 0.04],
+            "x_bc": [0.0, 0.0],
+            "x_cc": [0.02, 0.04],
             "phases": ["abc", "abc"],
             "status": ["", ""],
         }
@@ -57,23 +57,24 @@ def simple_case_data():
         {
             "id": [2],
             "name": ["gen1"],
-            "pa": [0.5],
-            "pb": [0.4],
-            "pc": [0.3],
-            "qa": [0.1],
-            "qb": [0.1],
-            "qc": [0.1],
-            "sa_max": [1.0],
-            "sb_max": [1.0],
-            "sc_max": [1.0],
-            "qa_max": [0.8],
-            "qb_max": [0.8],
-            "qc_max": [0.8],
-            "qa_min": [-0.8],
-            "qb_min": [-0.8],
-            "qc_min": [-0.8],
+            "p_a": [0.5],
+            "p_b": [0.4],
+            "p_c": [0.3],
+            "q_a": [0.1],
+            "q_b": [0.1],
+            "q_c": [0.1],
+            "s_a_max": [1.0],
+            "s_b_max": [1.0],
+            "s_c_max": [1.0],
+            "q_a_max": [0.8],
+            "q_b_max": [0.8],
+            "q_c_max": [0.8],
+            "q_a_min": [-0.8],
+            "q_b_min": [-0.8],
+            "q_c_min": [-0.8],
             "control_variable": ["PQ"],
             "phases": ["abc"],
+            "gen_shape": ["PV"],
         }
     )
 
@@ -81,9 +82,9 @@ def simple_case_data():
         {
             "id": [3],
             "name": ["cap1"],
-            "qa": [0.2],
-            "qb": [0.2],
-            "qc": [0.2],
+            "q_a": [0.2],
+            "q_b": [0.2],
+            "q_c": [0.2],
             "phases": ["abc"],
         }
     )
@@ -268,11 +269,11 @@ class TestSets:
 
         branch_phase_list = list(model.branch_phase_set)
 
-        # Check specific branch-phase combinations (branches identified by to_bus)
-        assert (2, "a") in branch_phase_list  # branch to bus 2 has abc phases
-        assert (7, "b") in branch_phase_list  # branch to bus 7 has cb phases
-        assert (7, "c") in branch_phase_list
-        assert (7, "a") not in branch_phase_list  # branch to bus 7 doesn't have a phase
+        # Check specific branch-phase combinations (branches identified by (fb, tb, phase))
+        assert any(tb == 2 and ph == "a" for _, tb, ph in branch_phase_list)
+        assert any(tb == 7 and ph == "b" for _, tb, ph in branch_phase_list)
+        assert any(tb == 7 and ph == "c" for _, tb, ph in branch_phase_list)
+        assert not any(tb == 7 and ph == "a" for _, tb, ph in branch_phase_list)
 
     def test_gen_phase_set_empty(self, ieee13_case):
         """Test generator phase set when no generators exist"""
@@ -327,16 +328,16 @@ class TestParameters:
 
         # Check that parameters exist and have expected values
         # From CSV: branch 1->2 has raa=0.0008786982248520712
-        assert pyo.value(model.r[2, "aa"]) == pytest.approx(
+        assert pyo.value(model.r[1, 2, "aa"]) == pytest.approx(
             0.0008786982248520712, rel=1e-10
         )
-        assert pyo.value(model.x[2, "aa"]) == pytest.approx(
+        assert pyo.value(model.x[1, 2, "aa"]) == pytest.approx(
             0.0015976331360946748, rel=1e-10
         )
 
         # Check off-diagonal terms
-        assert pyo.value(model.r[2, "ab"]) == 0.0
-        assert pyo.value(model.x[2, "ab"]) == 0.0
+        assert pyo.value(model.r[1, 2, "ab"]) == 0.0
+        assert pyo.value(model.x[1, 2, "ab"]) == 0.0
 
 
 class TestModelIntegrity:

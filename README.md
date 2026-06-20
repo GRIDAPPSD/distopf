@@ -85,7 +85,7 @@ result.plot_network().show(renderer="browser")
 DistOPF supports multiple optimization wrappers for solving OPF problems:
 
 ### Pyomo Wrapper — LinDistFlow (default)
-The default Pyomo wrapper uses the LinDistFlow model (`model_type="lindist"`).
+The default Pyomo wrapper uses the LinDistFlow model (`formulation="lindist"`).
 - **Model**: Linear approximation of power flow equations
 - **Solver**: Pyomo with linear solvers
 - **Speed**: Fast, suitable for real-time applications
@@ -94,12 +94,12 @@ The default Pyomo wrapper uses the LinDistFlow model (`model_type="lindist"`).
 ```python
 import distopf as opf
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-result = case.run_opf(wrapper="pyomo", objective="loss")  # model_type="lindist" is the default
+result = case.run_opf(wrapper="pyomo", objective="loss")  # formulation="lindist" is the default
 ```
 
 ### Pyomo Wrapper — BranchFlow
 The BranchFlow model type uses nonlinear power flow equations with IPOPT or MINLP solvers for higher accuracy.
-Use `model_type="branchflow"`.
+Use `formulation="branchflow"`.
 - **Model**: Nonlinear power flow equations (exact)
 - **Solver**: IPOPT (continuous) or MINLP using Gurobi if installed (discrete controls)
 - **Speed**: Slower than linear, but more accurate
@@ -112,7 +112,7 @@ For continuous optimization without discrete controls:
 import distopf as opf
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 result = case.run_opf(
-    model_type="branchflow",
+    formulation="branchflow",
     objective="loss",
     solver="ipopt",
 )
@@ -126,7 +126,7 @@ import distopf as opf
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
 result = case.run_opf(
     wrapper="pyomo",
-    model_type="branchflow",
+    formulation="branchflow",
     objective="loss",
     control_regulators=True,      # Enable regulator tap control
     control_capacitors=True,       # Enable capacitor switching
@@ -137,11 +137,10 @@ result = case.run_opf(
 
 ### Matrix BESS Wrapper (Multi-Period with Batteries)
 The `matrix_bess` wrapper supports multi-period (time-series) optimization with battery energy storage.
-The shorthand `wrapper="matrix_bess"` also works as an alias.
 
 ```python
 import distopf as opf
-case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der_batt")
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der_bat")
 result = case.run_opf(wrapper="matrix_bess", objective="loss")
 ```
 
@@ -226,18 +225,28 @@ case = opf.Case(
 
 ```
 
+> **Phase naming convention:** Three-phase buses and lines use phases `a`, `b`, `c`.
+> Triplex (North American split-phase residential secondary) buses and lines use phases
+> `s1` and `s2`, which are the two 120 V legs of a center-tapped single-phase
+> transformer. `s1s2` refers to the 240 V line-to-line connection across both legs.
+
 ### branch_data.csv
 
 - fb: From bus id number
 - tb: To bus id number
-- r: resistance in p.u.
-- x: reactance in p.u.
-- type: overhead_line, switch, transformer, etc.
+- r_aa, r_ab, r_ac, r_bb, r_bc, r_cc: upper-diagonal resistance matrix elements (p.u.) for 3-phase lines
+- x_aa, x_ab, x_ac, x_bb, x_bc, x_cc: upper-diagonal reactance matrix elements (p.u.) for 3-phase lines
+- r_s1s1, r_s1s2, r_s2s2: resistance matrix elements (p.u.) for triplex (split-phase) lines
+- x_s1s1, x_s1s2, x_s2s2: reactance matrix elements (p.u.) for triplex (split-phase) lines
+- primary_phase: primary-side phase for center-tap transformer branches (e.g. "a", "b", "c")
+- s_a_max, s_b_max, s_c_max: per-phase apparent power limits (VA)
+- type: overhead_line, switch, transformer, center_tap_xfmr, etc.
 - name: other name of line
 - status: (for switches) OPEN or CLOSED
 - s_base: base VA
 - v_ln_base: base line-to-neutral voltage
 - z_base: base impedance
+- phases: phases present on the line (e.g. "abc", "s1s2", "a")
 
 ### bus_data.csv
 
@@ -251,19 +260,24 @@ case = opf.Case(
 - v_min, v_max: voltage magnitude limits (p.u.)
 - cvr_p, cvr_q: conservation voltage reduction parameters; alternative to ZIP model for voltage dependant loads. (set to
   0 for no voltage dependence)
-- phases: phases at bus (e.g. "abc", "a", "ab", etc.)
+- pl_s1, ql_s1, pl_s2, ql_s2, pl_s1s2, ql_s1s2: active and reactive loads for triplex (split-phase) buses (p.u.)
+- primary_phase: primary-side phase for triplex buses (e.g. "a", "b", "c")
+- phases: phases at bus (e.g. "abc", "a", "ab", "s1s2", etc.)
 
 ### gen_data.csv
 
 - id: bus id
 - name: generator name
-- pa, pb, pc: active power output (p.u.)
-- qa, qb, qc: reactive power output (p.u.)
+- p_a, p_b, p_c: active power output (p.u.)
+- q_a, q_b, q_c: reactive power output (p.u.)
 - s_base: base power (VA)
-- sa_max, sb_max, sc_max: rated maximum apparent power output (VA)
-- phases: generator phases (abc string) (this IS implemented)
-- qa_max, qb_max, qc_max: (not implemented) maximum reactive power output (p.u.)
-- qa_min, qb_min, qc_min: (not implemented) minimum reactive power output (p.u.)
+- s_a_max, s_b_max, s_c_max: rated maximum apparent power output per 3-phase (VA)
+- p_s1, p_s2: active power output for triplex (split-phase) generators (p.u.)
+- q_s1, q_s2: reactive power output for triplex generators (p.u.)
+- s_s1_max, s_s2_max: rated maximum apparent power for triplex phases (VA)
+- phases: generator phases (e.g. "abc", "s1s2") (this IS implemented)
+- q_a_max, q_b_max, q_c_max: (not implemented) maximum reactive power output (p.u.)
+- q_a_min, q_b_min, q_c_min: (not implemented) minimum reactive power output (p.u.)
 
 ### cap_data.csv
 
@@ -279,73 +293,36 @@ case = opf.Case(
 - name: regulator name 
 - tap_a, tap_b, tap_c: tap position (p.u.) -16 to +16; 0 is no tap change
 
-## Case Options
-```
-    Use `Case` or `create_case()` to create and run a case. Call `run_pf()` or `run_opf()` to obtain a `PowerFlowResult`.
-    Parameters
-    ----------
-    config: str or dict
-        Path to JSON config or dictionary with parameters to create case. Alternative to using **config.
-    data_path: str or pathlib.Path
-        Path to the directory containing the data CSVs or path to OpenDSS model. Will also accept names of
-        cases include in package e.g. "ieee13", "ieee34", "ieee123".
-    output_dir: str or pathlib.Path
-        (default: "output") Directory to save results.
-    branch_data : pd.DataFrame or None
-        DataFrame containing branch data (r and x values, limits). Overrides data found from data_path.
-    bus_data : pd.DataFrame or None
-        DataFrame containing bus data (loads, voltages, limits). Overrides data found from data_path.
-    gen_data : pd.DataFrame or None
-        DataFrame containing generator/DER data. Overrides data found from data_path.
-    cap_data : pd.DataFrame or None
-        DataFrame containing capacitor data. Overrides data found from data_path.
-    reg_data : pd.DataFrame or None
-        DataFrame containing regulator data. Overrides data found from data_path.
-    v_swing: Number or size-3 array
-        Override substation voltage. Scalar or 3-phase array. Per Unit.
-    v_min: Number
-        Override all voltage minimum limits. Per Unit.
-    v_max: Number
-        Override all voltage maximum limits. Per Unit.
-    gen_mult: Number
-        Scale all generator outputs and ratings. Per Unit.
-    load_mult:
-        Scale all loads.
-    cvr_p:
-        CVR factor for voltage dependent loads. Active power component. cvr_p = (dP/P)/(dV/V)
-        To convert from ZIP parameters, kz, ki, kp: cvr_p = 2kz + 1ki
-    cvr_q:
-        CVR factor for voltage dependent loads. Reactive power component.cvr_q = (dQ/Q)/(dV/V)
-        To convert from ZIP parameters, kz, ki, kp: cvr_q = 2kz + 1ki
-    control_variable: str
-        Control variable for optimization. Options (case-insensitive):
-            None: Power flow only with no optimization. `objective_function` options will be ignored.
-            "P": Active power injections from generators. Active power outputs set in gen_data.csv will be ignored
-                 and reactive power outputs set in gen_data static.
-            "Q": Reactive power injections from generators.
-                 Active power outputs set in gen_data.csv are constant and reactive power outputs set in
-                 gen_data.csv will be ignored.
-    objective_function: str or Callable
-        Objective function for optimization. Options (case-insensitive):
-            "gen_max": Maximize output of generators. Uses scipy.optimize.linprog.
-            "load_min": Minimize total substation active power load. Uses scipy.optimize.linprog.
-            "loss_min": Minimize total line active power losses. Quadratic. Uses CVXPY.
-            "curtail_min": Minimize DER/Generator curtailment. Quadratic. Uses CVXPY.
-            "target_p_3ph": Substation load tracks active power target on each phase. Quadratic. Uses CVXPY.
-            "target_q_3ph": Substation load tracks reactive power target on each phase. Quadratic. Uses CVXPY.
-            "target_p_total": Substation load tracks total active power. Quadratic. Uses CVXPY.
-            "target_q_total": Substation load tracks total reactive power. Quadratic. Uses CVXPY.
-    show_plots: bool
-        (default False) If true, renders plots in browser
-    save_results: bool
-        (default False) If true, saves result data to CSVs in output_dir
-    save_plots: bool
-        (default False) If true, saves interactive plots as html to output folder
-    save_inputs: bool
-        (default False) If true, saves model CSV and other input parameters.
-        NOTE CSVs include any modifications made by other parameters such as gen_mult, load_mult, v_max, v_min, or
-        v_swing.
-```
+## Case and run_opf Options
+
+### `create_case()` / `Case.__init__()` parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `data_path` | required | Path to CSV directory, `.dss` file, or `.xml` CIM file |
+| `start_step` | `0` | Starting time step for multi-period analysis |
+| `n_steps` | `1` | Number of time steps (`1` = single-period) |
+| `delta_t` | `1.0` | Hours per time step (for battery energy calculations) |
+| `ignore_schedule` | `False` | If True, ignore schedule data; use multiplier 1.0 everywhere |
+| `ignore_gen` | `False` | If True, remove all generators |
+| `ignore_bat` | `False` | If True, remove all batteries |
+| `ignore_cap` | `False` | If True, remove all capacitors |
+| `ignore_reg` | `False` | If True, remove all regulators |
+
+When constructing `Case` directly, pass DataFrames instead of `data_path`:
+`branch_data`, `bus_data`, `gen_data`, `cap_data`, `reg_data`, `bat_data`, `schedules`.
+
+### `case.modify()` parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `v_swing` | Override substation voltage (scalar or 3-element array, p.u.) |
+| `v_min` | Override all bus voltage lower limits (p.u.) |
+| `v_max` | Override all bus voltage upper limits (p.u.) |
+| `gen_mult` | Scale all generator outputs and ratings |
+| `load_mult` | Scale all loads |
+| `cvr_p` | CVR factor for active power: `cvr_p = (dP/P)/(dV/V)`. ZIP equivalent: `2kz + ki` |
+| `cvr_q` | CVR factor for reactive power: `cvr_q = (dQ/Q)/(dV/V)`. ZIP equivalent: `2kz + ki` |
 
 # OpenDSS Interface
 You may also run using an OpenDSS model file as input.
