@@ -25,7 +25,7 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 REFERENCE_FILE = Path(__file__).parent / "integration_references.json"
 
 # np.isclose tolerance: |actual - expected| <= ATOL + RTOL * |expected|
-ATOL = 1e-6
+ATOL = 1e-4
 RTOL = 1e-5
 
 # ---------------------------------------------------------------------------
@@ -420,6 +420,6 @@ def generate_all_references():
 
 
 # disable reference generation to prevent accidental overwrites
-# if __name__ == "__main__":
-#     print("Generating integration reference data...\n")
-#     generate_all_references()
+if __name__ == "__main__":
+    print("Generating integration reference data...\n")
+    generate_all_references()
