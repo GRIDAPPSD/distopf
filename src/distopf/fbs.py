@@ -2,7 +2,7 @@ import re
 import numpy as np
 import pandas as pd
 from distopf.api import Case
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 from distopf.utils import get
 from distopf.results import PowerFlowResult
 
@@ -868,7 +868,6 @@ class FBS:
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
 
             # Get connected phases for the branch
-            fb_phases = self.phase_connections.get(fb, [0, 1, 2])
             tb_phases = self.phase_connections.get(tb, [0, 1, 2])
             # branch_phases = list(set(fb_phases) & set(tb_phases))
             branch_phases = tb_phases
@@ -917,7 +916,6 @@ class FBS:
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
 
             # Get connected phases for the branch
-            fb_phases = self.phase_connections.get(fb, [0, 1, 2])
             tb_phases = self.phase_connections.get(tb, [0, 1, 2])
             # branch_phases = list(set(fb_phases) & set(tb_phases))
             branch_phases = tb_phases

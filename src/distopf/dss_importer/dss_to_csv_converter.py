@@ -815,7 +815,6 @@ class DSSToCSVConverter:
         """
         n_phases = self.dss.Lines.Phases()
         bus1_name = self.dss.Lines.Bus1()
-        bus2_name = self.dss.Lines.Bus2()
         if n_phases > 3:
             pass
         if (len(bus1_name.split(".")) == 4) or (len(bus1_name.split(".")) == 1):
@@ -1338,8 +1337,6 @@ class DSSToCSVConverter:
         s_base = self.s_base
         v_min = self.v_min
         v_max = self.v_max
-        cvr_p = self.cvr_p
-        cvr_q = self.cvr_q
         all_buses_names = self.dss.Circuit.AllBusNames()
         # all_loads = self.get_loads()
         load_df = self._get_loads()

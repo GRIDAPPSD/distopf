@@ -102,7 +102,6 @@ class PyomoWrapper(Wrapper):
             create_penalized_objective,
             set_objective,
         )
-        from distopf.results import PowerFlowResult
         import pyomo.environ as pyo  # type: ignore[import-untyped]
 
         circular_constraints = kwargs.pop("circular_constraints", False)

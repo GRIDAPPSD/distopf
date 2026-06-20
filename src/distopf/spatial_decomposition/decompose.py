@@ -4,7 +4,7 @@ from typing import Any
 import networkx as nx
 import pandas as pd
 
-from distopf.api import Case, create_case
+from distopf.api import Case
 
 
 def insert_branch_bus_names(df, name_map):
