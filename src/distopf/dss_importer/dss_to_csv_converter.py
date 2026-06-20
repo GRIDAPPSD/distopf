@@ -778,49 +778,13 @@ class DSSToCSVConverter:
         nan_cx = np.nan + 1j * np.nan
         power_df["s1"] = nan_cx
         power_df["s2"] = nan_cx
-        transformer_mask = ~power_df["from_name"].isin(self.secondary_buses) & power_df[
-            "to_name"
-        ].isin(self.secondary_buses)
-        secondary_only_mask = power_df["from_name"].isin(
-            self.secondary_buses
-        ) & power_df["to_name"].isin(self.secondary_buses)
         sec_mask = power_df["from_name"].isin(self.secondary_buses) | power_df[
             "to_name"
         ].isin(self.secondary_buses)
-        if from_side:
-            primary_phases = {
-                _bus: _dict.get("primary_phase")
-                for _bus, _dict in self.secondary_buses.items()
-            }
-            transformer_a_mask = transformer_mask & (
-                power_df["to_name"].map(primary_phases) == "a"
-            )
-            transformer_b_mask = transformer_mask & (
-                power_df["to_name"].map(primary_phases) == "b"
-            )
-            transformer_c_mask = transformer_mask & (
-                power_df["to_name"].map(primary_phases) == "c"
-            )
-            power_df.loc[secondary_only_mask, "s1"] = power_df.loc[
-                secondary_only_mask, "a"
-            ]
-            power_df.loc[secondary_only_mask, "s2"] = power_df.loc[
-                secondary_only_mask, "b"
-            ]
-            power_df.loc[secondary_only_mask, ["a", "b", "c"]] = nan_cx
-            power_df.loc[transformer_a_mask, "a"] = power_df.loc[
-                transformer_a_mask, "a"
-            ]
-            power_df.loc[transformer_b_mask, "b"] = power_df.loc[
-                transformer_b_mask, "a"
-            ]
-            power_df.loc[transformer_c_mask, "c"] = power_df.loc[
-                transformer_c_mask, "a"
-            ]
-        else:
-            power_df.loc[sec_mask, "s1"] = power_df.loc[sec_mask, "a"]
-            power_df.loc[sec_mask, "s2"] = power_df.loc[sec_mask, "b"]
-            power_df.loc[sec_mask, ["a", "b", "c"]] = nan_cx
+
+        power_df.loc[sec_mask, "s1"] = power_df.loc[sec_mask, "a"]
+        power_df.loc[sec_mask, "s2"] = power_df.loc[sec_mask, "b"]
+        power_df.loc[sec_mask, ["a", "b", "c"]] = nan_cx
 
         return power_df.loc[
             :, ["fb", "tb", "from_name", "to_name", "a", "b", "c", "s1", "s2"]

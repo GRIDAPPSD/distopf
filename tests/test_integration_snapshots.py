@@ -34,9 +34,13 @@ RTOL = 1e-5
 
 SCENARIOS = [
     # ── Power flow (run_pf → matrix-based unconstrained PF) ──
+    {"id": "minimal_triplex_pf", "case": "minimal_triplex", "method": "pf"},
+    {"id": "triplex_pv_pf", "case": "triplex_pv", "method": "pf"},
     {"id": "ieee13_pf", "case": "ieee13", "method": "pf"},
     {"id": "ieee123_pf", "case": "ieee123_30der", "method": "pf"},
     # ── Forward-backward sweep ──
+    {"id": "minimal_triplex_fbs", "case": "minimal_triplex", "method": "fbs"},
+    {"id": "triplex_pv_fbs", "case": "triplex_pv", "method": "fbs"},
     {"id": "ieee13_fbs", "case": "ieee13", "method": "fbs"},
     {"id": "ieee123_fbs", "case": "ieee123_30der", "method": "fbs"},
     # ── Matrix wrapper (CVXPY / CLARABEL) ──
@@ -88,6 +92,22 @@ SCENARIOS = [
         "control_capacitors": True,
     },
     # ── Pyomo wrapper (IPOPT) ──
+    {
+        "id": "minimal_triplex_pyo_loss",
+        "case": "minimal_triplex",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "pyomo",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "triplex_pv_pyo_loss",
+        "case": "triplex_pv",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "pyomo",
+        "requires_ipopt": True,
+    },
     {
         "id": "ieee13_pyo_loss",
         "case": "ieee13",
@@ -142,6 +162,22 @@ SCENARIOS = [
         "n_steps": 1,
     },
     # ── Nonlinear branchflow (Pyomo / IPOPT) ──
+    # {
+    #     "id": "minimal_triplex_nlp_loss",
+    #     "case": "minimal_triplex",
+    #     "method": "opf",
+    #     "objective": "loss_min",
+    #     "formulation": "branchflow",
+    #     "requires_ipopt": True,
+    # },
+    {
+        "id": "triplex_pv_nlp_loss",
+        "case": "triplex_pv",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
     {
         "id": "ieee123_nlp_loss",
         "case": "ieee123_30der",

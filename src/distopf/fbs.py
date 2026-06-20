@@ -744,24 +744,22 @@ class FBS:
             fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb}"
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb}"
 
-            # if fb in self.voltages:
-            bus = tb
-            a_t = np.eye(5, dtype=complex)
-            branch_phases = tb_phases
-            if from_side:
-                bus = fb
-                a_t = self._get_tap_ratio_matrix(tb)
-                branch_phases = fb_phases
+            bus = fb
+            a_t = self._get_tap_ratio_matrix(tb)
+            if not from_side:
+                bus = tb
+                a_t = np.eye(5, dtype=complex)
+            voltages = self.voltages[bus].copy()
+            
+            branch_phases = list(set(fb_phases) & set(tb_phases)) 
             if self._is_triplex_transformer(fb, tb):
+                branch_phases = tb_phases
                 primary_phase = self._get_primary_phase(tb)
-                current[primary_phase] = current[3] - current[4]
-            a_t[4, 4] = -a_t[4, 4]
-            s = a_t @ self.voltages[bus] * np.conj(current)
-
-            # fb_phases = self.phase_connections.get(fb, [0, 1, 2])
-            # tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-            # branch_phases = list(set(fb_phases) & set(tb_phases))
-            # branch_phases = tb_phases
+                voltages = np.zeros_like(self.voltages[bus])
+                voltages[3:] = self.voltages[bus][primary_phase]
+ 
+            a_t[4, 4] = -a_t[4, 4]  # s2 current is referenced pointing downstream however current on the minus reference for the voltage, so flip the sign to get correct power flow direction
+            s = a_t @ voltages * np.conj(current)
 
             flow_data.append(
                 {
@@ -808,18 +806,22 @@ class FBS:
             fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb_id}"
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
 
-            bus = tb
-            a_t = np.eye(5, dtype=complex)
-            branch_phases = tb_phases
-            if from_side:
-                bus = fb
-                branch_phases = fb_phases
-                a_t = self._get_tap_ratio_matrix(tb)
+            bus = fb
+            a_t = self._get_tap_ratio_matrix(tb)
+            if not from_side:
+                bus = tb
+                a_t = np.eye(5, dtype=complex)
+            voltages = self.voltages[bus].copy()
+            
+            branch_phases = list(set(fb_phases) & set(tb_phases)) 
             if self._is_triplex_transformer(fb, tb):
+                branch_phases = tb_phases
                 primary_phase = self._get_primary_phase(tb)
-                current[primary_phase] = current[3] - current[4]
-            a_t[4, 4] = -a_t[4, 4]
-            s = a_t @ self.voltages[bus] * np.conj(current)
+                voltages = np.zeros_like(self.voltages[bus])
+                voltages[3:] = self.voltages[bus][primary_phase]
+ 
+            a_t[4, 4] = -a_t[4, 4]  # s2 current is referenced pointing downstream however current on the minus reference for the voltage, so flip the sign to get correct power flow direction
+            s = a_t @ voltages * np.conj(current)
 
             # branch_phases = list(set(fb_phases) & set(tb_phases))
 

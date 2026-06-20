@@ -226,18 +226,28 @@ case = opf.Case(
 
 ```
 
+> **Phase naming convention:** Three-phase buses and lines use phases `a`, `b`, `c`.
+> Triplex (North American split-phase residential secondary) buses and lines use phases
+> `s1` and `s2`, which are the two 120 V legs of a center-tapped single-phase
+> transformer. `s1s2` refers to the 240 V line-to-line connection across both legs.
+
 ### branch_data.csv
 
 - fb: From bus id number
 - tb: To bus id number
-- r: resistance in p.u.
-- x: reactance in p.u.
-- type: overhead_line, switch, transformer, etc.
+- r_aa, r_ab, r_ac, r_bb, r_bc, r_cc: upper-diagonal resistance matrix elements (p.u.) for 3-phase lines
+- x_aa, x_ab, x_ac, x_bb, x_bc, x_cc: upper-diagonal reactance matrix elements (p.u.) for 3-phase lines
+- r_s1s1, r_s1s2, r_s2s2: resistance matrix elements (p.u.) for triplex (split-phase) lines
+- x_s1s1, x_s1s2, x_s2s2: reactance matrix elements (p.u.) for triplex (split-phase) lines
+- primary_phase: primary-side phase for center-tap transformer branches (e.g. "a", "b", "c")
+- s_a_max, s_b_max, s_c_max: per-phase apparent power limits (VA)
+- type: overhead_line, switch, transformer, center_tap_xfmr, etc.
 - name: other name of line
 - status: (for switches) OPEN or CLOSED
 - s_base: base VA
 - v_ln_base: base line-to-neutral voltage
 - z_base: base impedance
+- phases: phases present on the line (e.g. "abc", "s1s2", "a")
 
 ### bus_data.csv
 
@@ -251,7 +261,9 @@ case = opf.Case(
 - v_min, v_max: voltage magnitude limits (p.u.)
 - cvr_p, cvr_q: conservation voltage reduction parameters; alternative to ZIP model for voltage dependant loads. (set to
   0 for no voltage dependence)
-- phases: phases at bus (e.g. "abc", "a", "ab", etc.)
+- pl_s1, ql_s1, pl_s2, ql_s2, pl_s1s2, ql_s1s2: active and reactive loads for triplex (split-phase) buses (p.u.)
+- primary_phase: primary-side phase for triplex buses (e.g. "a", "b", "c")
+- phases: phases at bus (e.g. "abc", "a", "ab", "s1s2", etc.)
 
 ### gen_data.csv
 
@@ -260,10 +272,13 @@ case = opf.Case(
 - p_a, p_b, p_c: active power output (p.u.)
 - q_a, q_b, q_c: reactive power output (p.u.)
 - s_base: base power (VA)
-- sa_max, sb_max, sc_max: rated maximum apparent power output (VA)
-- phases: generator phases (abc string) (this IS implemented)
-- qa_max, qb_max, qc_max: (not implemented) maximum reactive power output (p.u.)
-- qa_min, qb_min, qc_min: (not implemented) minimum reactive power output (p.u.)
+- s_a_max, s_b_max, s_c_max: rated maximum apparent power output per 3-phase (VA)
+- p_s1, p_s2: active power output for triplex (split-phase) generators (p.u.)
+- q_s1, q_s2: reactive power output for triplex generators (p.u.)
+- s_s1_max, s_s2_max: rated maximum apparent power for triplex phases (VA)
+- phases: generator phases (e.g. "abc", "s1s2") (this IS implemented)
+- q_a_max, q_b_max, q_c_max: (not implemented) maximum reactive power output (p.u.)
+- q_a_min, q_b_min, q_c_min: (not implemented) minimum reactive power output (p.u.)
 
 ### cap_data.csv
 
