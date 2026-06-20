@@ -83,7 +83,7 @@ class TestTransformerFunctionality:
         assert transformer_converter is not None
         assert transformer_converter.s_base == 1e6
         logger.info("\n%s", transformer_converter.branch_data.head())
-        assert transformer_converter.branch_data.loc[0, "xaa"] == x_pu_sys
+        assert transformer_converter.branch_data.loc[0, "x_aa"] == x_pu_sys
 
 
 if __name__ == "__main__":
@@ -96,6 +96,6 @@ if __name__ == "__main__":
     print("\n", converter.branch_data.head())
     print(f"Expected transformer reactance (pu): {x_pu_sys}")
     print(
-        f"Calculated transformer reactance (pu): {converter.branch_data.loc[0, 'xaa']}"
+        f"Calculated transformer reactance (pu): {converter.branch_data.loc[0, 'x_aa']}"
     )
     temp_path.unlink(missing_ok=True)

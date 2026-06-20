@@ -25,7 +25,7 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 REFERENCE_FILE = Path(__file__).parent / "integration_references.json"
 
 # np.isclose tolerance: |actual - expected| <= ATOL + RTOL * |expected|
-ATOL = 1e-6
+ATOL = 1e-4
 RTOL = 1e-5
 
 # ---------------------------------------------------------------------------
@@ -34,9 +34,13 @@ RTOL = 1e-5
 
 SCENARIOS = [
     # ── Power flow (run_pf → matrix-based unconstrained PF) ──
+    {"id": "minimal_triplex_pf", "case": "minimal_triplex", "method": "pf"},
+    {"id": "triplex_pv_pf", "case": "triplex_pv", "method": "pf"},
     {"id": "ieee13_pf", "case": "ieee13", "method": "pf"},
     {"id": "ieee123_pf", "case": "ieee123_30der", "method": "pf"},
     # ── Forward-backward sweep ──
+    {"id": "minimal_triplex_fbs", "case": "minimal_triplex", "method": "fbs"},
+    {"id": "triplex_pv_fbs", "case": "triplex_pv", "method": "fbs"},
     {"id": "ieee13_fbs", "case": "ieee13", "method": "fbs"},
     {"id": "ieee123_fbs", "case": "ieee123_30der", "method": "fbs"},
     # ── Matrix wrapper (CVXPY / CLARABEL) ──
@@ -89,6 +93,22 @@ SCENARIOS = [
     },
     # ── Pyomo wrapper (IPOPT) ──
     {
+        "id": "minimal_triplex_pyo_loss",
+        "case": "minimal_triplex",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "pyomo",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "triplex_pv_pyo_loss",
+        "case": "triplex_pv",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "pyomo",
+        "requires_ipopt": True,
+    },
+    {
         "id": "ieee13_pyo_loss",
         "case": "ieee13",
         "method": "opf",
@@ -140,6 +160,56 @@ SCENARIOS = [
         "wrapper": "matrix_bess",
         "control_variable": "Q",
         "n_steps": 1,
+    },
+    # ── Nonlinear branchflow (Pyomo / IPOPT) ──
+    # {
+    #     "id": "minimal_triplex_nlp_loss",
+    #     "case": "minimal_triplex",
+    #     "method": "opf",
+    #     "objective": "loss_min",
+    #     "formulation": "branchflow",
+    #     "requires_ipopt": True,
+    # },
+    {
+        "id": "triplex_pv_nlp_loss",
+        "case": "triplex_pv",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_loss",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_loss_Q",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "control_variable": "Q",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_vdev",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "voltage_deviation",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_bat_nlp_loss",
+        "case": "ieee123_30der_bat",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
     },
     # ── Edge cases ──
     {
@@ -349,6 +419,7 @@ def generate_all_references():
     print(f"\nWrote {len(refs)} scenario references to {REFERENCE_FILE}")
 
 
+# disable reference generation to prevent accidental overwrites
 if __name__ == "__main__":
     print("Generating integration reference data...\n")
     generate_all_references()

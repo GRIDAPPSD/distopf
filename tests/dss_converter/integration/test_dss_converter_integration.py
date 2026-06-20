@@ -92,18 +92,18 @@ class TestDSSConverterWith2BusSystem:
             "tb",
             "from_name",
             "to_name",
-            "raa",
-            "rab",
-            "rac",
-            "rbb",
-            "rbc",
-            "rcc",
-            "xaa",
-            "xab",
-            "xac",
-            "xbb",
-            "xbc",
-            "xcc",
+            "r_aa",
+            "r_ab",
+            "r_ac",
+            "r_bb",
+            "r_bc",
+            "r_cc",
+            "x_aa",
+            "x_ab",
+            "x_ac",
+            "x_bb",
+            "x_bc",
+            "x_cc",
         }
         assert expected_columns.issubset(set(branch_data.columns))
 
@@ -113,9 +113,9 @@ class TestDSSConverterWith2BusSystem:
 
         if len(branch_data) > 0:
             # Diagonal elements should be non-negative
-            for col in ["raa", "rbb", "rcc"]:
+            for col in ["r_aa", "r_bb", "r_cc"]:
                 assert (branch_data[col] >= 0).all(), f"{col} has negative values"
-            for col in ["xaa", "xbb", "xcc"]:
+            for col in ["x_aa", "x_bb", "x_cc"]:
                 assert (branch_data[col] >= 0).all(), f"{col} has negative values"
 
     def test_gen_data_dataframe_structure(self, converter):
@@ -128,15 +128,15 @@ class TestDSSConverterWith2BusSystem:
             expected_columns = {
                 "id",
                 "name",
-                "pa",
-                "pb",
-                "pc",
-                "qa",
-                "qb",
-                "qc",
-                "sa_max",
-                "sb_max",
-                "sc_max",
+                "p_a",
+                "p_b",
+                "p_c",
+                "q_a",
+                "q_b",
+                "q_c",
+                "s_a_max",
+                "s_b_max",
+                "s_c_max",
                 "phases",
             }
             assert expected_columns.issubset(set(gen_data.columns))
@@ -148,7 +148,7 @@ class TestDSSConverterWith2BusSystem:
         assert isinstance(cap_data, pd.DataFrame)
 
         if len(cap_data) > 0:
-            expected_columns = {"id", "name", "qa", "qb", "qc", "phases"}
+            expected_columns = {"id", "name", "q_a", "q_b", "q_c", "phases"}
             assert expected_columns.issubset(set(cap_data.columns))
 
     def test_reg_data_dataframe_structure(self, converter):
@@ -392,8 +392,8 @@ class TestDSSConverterMultipleCustomS_Base:
                 ratio = converter2.s_base / converter1.s_base
 
                 # Check that power values are approximately inversely proportional
-                gen1_power = converter1.gen_data[["pa", "pb", "pc"]].sum().sum()
-                gen2_power = converter2.gen_data[["pa", "pb", "pc"]].sum().sum()
+                gen1_power = converter1.gen_data[["p_a", "p_b", "p_c"]].sum().sum()
+                gen2_power = converter2.gen_data[["p_a", "p_b", "p_c"]].sum().sum()
 
                 if gen1_power != 0 and gen2_power != 0:
                     power_ratio = gen2_power / gen1_power

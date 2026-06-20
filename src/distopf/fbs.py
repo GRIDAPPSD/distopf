@@ -1,9 +1,30 @@
+import re
 import numpy as np
 import pandas as pd
 from distopf.api import Case
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 from distopf.utils import get
 from distopf.results import PowerFlowResult
+
+PHASE_IDX_MAP = {"a": 0, "b": 1, "c": 2, "s1": 3, "s2": 4}
+
+
+def _parse_phases(phases_str: str) -> list[str]:
+    """Parse a phases string into a list of phase names.
+
+    Handles both standard phases ('a', 'b', 'c', 'ab', 'abc') and
+    triplex phases ('s1', 's2', 's1s2').
+
+    Examples
+    --------
+    >>> _parse_phases("abc")
+    ['a', 'b', 'c']
+    >>> _parse_phases("s1s2")
+    ['s1', 's2']
+    >>> _parse_phases("s1")
+    ['s1']
+    """
+    return re.findall(r"[A-Za-z]\d|.", phases_str)
 
 
 class FBS:
@@ -48,6 +69,24 @@ class FBS:
         self.converged = False
         self.iterations = 0
 
+    def _is_secondary_node(self, node):
+        return 3 in self.phase_connections[node] or 4 in self.phase_connections[node]
+
+    def _is_triplex_transformer(self, fb, tb):
+        secondary_transformer = (
+            0 in self.phase_connections[fb]
+            or 1 in self.phase_connections[fb]
+            or 2 in self.phase_connections[fb]
+        ) and self._is_secondary_node(tb)
+        return secondary_transformer
+
+    def _get_primary_phase(self, _id):
+        primary_phase = self.bus_data.loc[
+            self.bus_data.id == _id, "primary_phase"
+        ].to_numpy()[0]
+        primary_phase = PHASE_IDX_MAP[primary_phase]
+        return primary_phase
+
     def _build_topology(self) -> dict:
         """Build network topology from branch data."""
         topology = {"nodes": set(), "children": {}, "parent": {}}
@@ -76,8 +115,9 @@ class FBS:
         for idx, bus in self.bus_data.iterrows():
             node_id = int(bus["id"])
             phases_str = get(bus, "phases", "abc").lower()
+            phases_list = _parse_phases(phases_str)
             # Convert phase string to phase indices
-            phase_connections[node_id] = ["abc".index(p) for p in phases_str]
+            phase_connections[node_id] = [PHASE_IDX_MAP[p] for p in phases_list]
 
         return phase_connections
 
@@ -89,23 +129,29 @@ class FBS:
             tb = int(branch["tb"])
 
             # Build 3x3 impedance matrix from branch data
-            z = np.zeros((3, 3), dtype=complex)
+            z = np.zeros((5, 5), dtype=complex)
 
             # Diagonal elements
-            z[0, 0] = complex(get(branch, "raa", 0), get(branch, "xaa", 0))
-            z[1, 1] = complex(get(branch, "rbb", 0), get(branch, "xbb", 0))
-            z[2, 2] = complex(get(branch, "rcc", 0), get(branch, "xcc", 0))
+            z[0, 0] = complex(get(branch, "r_aa", 0), get(branch, "x_aa", 0))
+            z[1, 1] = complex(get(branch, "r_bb", 0), get(branch, "x_bb", 0))
+            z[2, 2] = complex(get(branch, "r_cc", 0), get(branch, "x_cc", 0))
+            z[3, 3] = complex(get(branch, "r_s1s1", 0), get(branch, "x_s1s1", 0))
+            z[4, 4] = -complex(get(branch, "r_s2s2", 0), get(branch, "x_s2s2", 0))
 
             # Off-diagonal elements (mutual impedances)
             z[0, 1] = z[1, 0] = complex(
-                get(branch, "rab", 0), get(branch, "xab", 0)
+                get(branch, "r_ab", 0), get(branch, "x_ab", 0)
             )  # A-B
             z[0, 2] = z[2, 0] = complex(
-                get(branch, "rac", 0), get(branch, "xac", 0)
+                get(branch, "r_ac", 0), get(branch, "x_ac", 0)
             )  # A-C
             z[1, 2] = z[2, 1] = complex(
-                get(branch, "rbc", 0), get(branch, "xbc", 0)
+                get(branch, "r_bc", 0), get(branch, "x_bc", 0)
             )  # B-C
+            z[4, 3] = complex(
+                get(branch, "r_s1s2", 0), get(branch, "x_s1s2", 0)
+            )  # S1-S2
+            z[3, 4] = -z[3, 4]
 
             impedances[tb] = z
 
@@ -126,6 +172,12 @@ class FBS:
                 + get(bus, "ql_b", 0)
                 + get(bus, "pl_c", 0)
                 + get(bus, "ql_c", 0)
+                + get(bus, "pl_s1", 0)
+                + get(bus, "ql_s1", 0)
+                + get(bus, "pl_s2", 0)
+                + get(bus, "ql_s2", 0)
+                + get(bus, "pl_s1s2", 0)
+                + get(bus, "ql_s1s2", 0)
             )
 
             if abs(total_load) > 1e-10:
@@ -135,6 +187,15 @@ class FBS:
                         complex(get(bus, "pl_a", 0), get(bus, "ql_a", 0)),
                         complex(get(bus, "pl_b", 0), get(bus, "ql_b", 0)),
                         complex(get(bus, "pl_c", 0), get(bus, "ql_c", 0)),
+                        complex(
+                            get(bus, "pl_s1", 0),  # + get(bus, "pl_s1s2", 0) / 2,
+                            get(bus, "ql_s1", 0),  # + get(bus, "ql_s1s2", 0) / 2,
+                        ),
+                        complex(
+                            get(bus, "pl_s2", 0),  # + get(bus, "pl_s1s2", 0) / 2,
+                            get(bus, "ql_s2", 0),  # + get(bus, "ql_s1s2", 0) / 2,
+                        ),
+                        complex(get(bus, "pl_s1s2", 0), get(bus, "ql_s1s2", 0)),
                     ]
                 )
 
@@ -152,9 +213,11 @@ class FBS:
                 # Build complex power array [S_a, S_b, S_c]
                 S_gen = np.array(
                     [
-                        complex(get(gen, "pa", 0), get(gen, "qa", 0)),
-                        complex(get(gen, "pb", 0), get(gen, "qb", 0)),
-                        complex(get(gen, "pc", 0), get(gen, "qc", 0)),
+                        complex(get(gen, "p_a", 0), get(gen, "q_a", 0)),
+                        complex(get(gen, "p_b", 0), get(gen, "q_b", 0)),
+                        complex(get(gen, "p_c", 0), get(gen, "q_c", 0)),
+                        complex(get(gen, "p_s1", 0), get(gen, "q_s1", 0)),
+                        complex(get(gen, "p_s2", 0), get(gen, "q_s2", 0)),
                     ]
                 )
                 generations[node_id] = S_gen
@@ -167,7 +230,7 @@ class FBS:
             for idx, cap in self.cap_data.iterrows():
                 node_id = int(cap["id"])
                 Q_cap = np.array(
-                    [get(cap, "qa", 0), get(cap, "qb", 0), get(cap, "qc", 0)]
+                    [get(cap, "q_a", 0), get(cap, "q_b", 0), get(cap, "q_c", 0)]
                 )
                 capacitors[node_id] = Q_cap
         return capacitors
@@ -188,6 +251,8 @@ class FBS:
                 v_a_mag * np.exp(1j * 0),  # Phase A: 0°
                 v_b_mag * np.exp(1j * (-2 * np.pi / 3)),  # Phase B: -120°
                 v_c_mag * np.exp(1j * (2 * np.pi / 3)),  # Phase C: +120°
+                0,  # s1
+                0,  # s2
             ]
         )
 
@@ -205,6 +270,8 @@ class FBS:
                     v[0] + 0j,
                     v[1] * np.exp(1j * (-2 * np.pi / 3)),
                     v[2] * np.exp(1j * (2 * np.pi / 3)),
+                    0,  # s1
+                    0,  # s2
                 ]
             )
         return v_nodes
@@ -213,7 +280,7 @@ class FBS:
         self, node: int, v_node: np.ndarray
     ) -> np.ndarray:
         """Calculate total injection current at a node (loads + generation + capacitors)."""
-        I_injection = np.zeros(3, dtype=complex)
+        I_injection = np.zeros(5, dtype=complex)
 
         # Get phases connected to this node
         connected_phases = self.phase_connections.get(node, [0, 1, 2])
@@ -248,6 +315,32 @@ class FBS:
                     I_injection[ph] -= np.conj(S_cap / v_node[ph])
         return I_injection
 
+    def _calculate_triplex_node_injection_current(self, node: int, v_node: np.ndarray):
+        I_injection = np.zeros(5, dtype=complex)
+
+        # Load current
+        if node in self.node_loads:
+            cvr_p = self.bus_data.loc[self.bus_data.id == node, "cvr_p"].tolist()[0]
+            cvr_q = self.bus_data.loc[self.bus_data.id == node, "cvr_q"].tolist()[0]
+            s_load_nom = self.node_loads[node][3:]
+            v_load = np.array([v_node[3], v_node[4], v_node[3] + v_node[4]])
+            p_nom = s_load_nom.real
+            q_nom = s_load_nom.imag
+            p_load = p_nom + cvr_p * p_nom / 2 * (abs(v_load) ** 2 - 1)
+            q_load = q_nom + cvr_q * q_nom / 2 * (abs(v_load) ** 2 - 1)
+            s_load = p_load + 1j * q_load
+            if all(abs(v_load) > 1e-10):
+                I_load = np.conj(s_load / v_load)
+                I_injection[3:] += -np.array([[1, 0, 1], [0, -1, -1]]) @ I_load
+
+        # Generation current
+        if node in self.node_generations:
+            s_gen = self.node_generations[node][3:]
+            if all(abs(v_node[3:]) > 1e-10):
+                I_injection[3:] += np.conj(s_gen / v_node[3:])
+
+        return I_injection
+
     # def _apply_voltage_regulator(self, v_sending: np.ndarray, tb: int) -> np.ndarray:
     #     """Apply voltage regulator transformation."""
     #     if tb in self.reg_data.tb.array:
@@ -266,7 +359,7 @@ class FBS:
 
     def _get_tap_ratio_matrix(self, tb: int) -> np.ndarray:
         """Get tap ratio matrix for a given branch."""
-        a_t = np.eye(3, dtype=complex)
+        a_t = np.eye(5, dtype=complex)
 
         if tb in self.reg_data.tb.array:
             reg_index = self.reg_data.loc[self.reg_data.tb == tb].index[0]
@@ -281,7 +374,7 @@ class FBS:
 
     def _get_tap_current_ratio_matrix(self, tb: int) -> np.ndarray:
         """Get tap current ratio matrix for a given branch."""
-        d_t = np.eye(3, dtype=complex)
+        d_t = np.eye(5, dtype=complex)
 
         if tb in self.reg_data.tb.array:
             reg_index = self.reg_data.loc[self.reg_data.tb == tb].index[0]
@@ -305,23 +398,46 @@ class FBS:
             if node == self.swing_bus:
                 continue
 
+            secondary = (
+                3 in self.phase_connections[node] or 4 in self.phase_connections[node]
+            )
+
             # Calculate injection current at this node
-            I_injection = self._calculate_node_injection_current(node, v_nodes[node])
+            if secondary:
+                I_injection = self._calculate_triplex_node_injection_current(
+                    node, v_nodes[node]
+                )
+            else:
+                I_injection = self._calculate_node_injection_current(
+                    node, v_nodes[node]
+                )
 
             # Add currents from downstream branches
             I_total = -I_injection.copy()
-            if node in self.topology["children"]:
-                for child in self.topology["children"][node]:
-                    if child in I_branches:
-                        child_current = I_branches[child].copy()
+            for child in self.topology["children"].get(node, {}):
+                if child not in I_branches:
+                    continue
 
-                        # Transform child current through regulator/transformer
-                        # Current is inverse-transformed by tap ratio (opposite of voltage)
-                        if child in self.reg_data.tb.array:
-                            d_t = self._get_tap_ratio_matrix(child)
-                            child_current = d_t @ child_current
+                secondary_transformer = self._is_triplex_transformer(node, child)
+                child_current = I_branches[child].copy()
+                if secondary_transformer:
+                    primary_phase = self.bus_data.loc[
+                        self.bus_data.id == child, "primary_phase"
+                    ].to_numpy()[0]
+                    primary_phase = PHASE_IDX_MAP[primary_phase]
+                    child_current_sending = np.zeros(5, dtype=complex)
+                    child_current_sending[primary_phase] = (
+                        child_current[3] - child_current[4]
+                    )
+                # Transform child current through regulator/transformer
+                # Current is inverse-transformed by tap ratio (opposite of voltage)
+                elif child in self.reg_data.tb.array:
+                    d_t = self._get_tap_ratio_matrix(child)
+                    child_current_sending = d_t @ child_current
+                else:
+                    child_current_sending = child_current
 
-                        I_total += child_current
+                I_total += child_current_sending
 
             # Store current in upstream branch
             parent = self.topology["parent"].get(node)
@@ -349,21 +465,35 @@ class FBS:
             parent = self.topology["parent"][node]
             branch_key = node
 
-            if branch_key in I_branches and branch_key in self.line_impedances:
-                B_t = self.line_impedances[branch_key]
-                i_branch = I_branches[branch_key]
-
-                # Voltage drop calculation: v_node = v_parent - Z * I
-                A_t = self._get_tap_ratio_matrix(branch_key)
-                # if branch_key in self.reg_data.tb.array:
-                #     B_t = np.zeros((3,3), dtype=complex)
-                v_nodes[node] = A_t @ v_nodes[parent] - B_t @ i_branch
-
-                # Apply voltage regulator if present
-                # v_nodes[node] = self._apply_voltage_regulator(v_before_reg, branch_key)
-            else:
+            valid_key = branch_key in I_branches and branch_key in self.line_impedances
+            secondary_transformer = self._is_triplex_transformer(parent, node)
+            if not valid_key:
                 # If no current calculated, maintain parent voltage
                 v_nodes[node] = v_nodes[parent].copy()
+                continue
+
+            A_t = self._get_tap_ratio_matrix(branch_key)
+            B_t = self.line_impedances[branch_key]
+            i_branch = I_branches[branch_key]
+            v_parent = v_nodes[parent]
+            if secondary_transformer:
+                A_t = A_t[3:, 3:]
+                B_t = B_t[3:, 3:]
+                i12 = i_branch[3:]
+                primary_phase = self.bus_data.loc[
+                    self.bus_data.id == node, "primary_phase"
+                ].to_numpy()[0]
+                primary_phase = PHASE_IDX_MAP[primary_phase]
+                vss = np.array([v_parent[primary_phase], v_parent[primary_phase]])
+                if node not in v_nodes:
+                    v_nodes[node] = np.zeros(5, dtype=complex)
+                v_nodes[node][3:] = A_t @ vss - B_t @ i12
+                continue
+            # Voltage drop calculation: v_node = v_parent - Z * I
+            v_nodes[node] = A_t @ v_parent - B_t @ i_branch
+
+            # Apply voltage regulator if present
+            # v_nodes[node] = self._apply_voltage_regulator(v_before_reg, branch_key)
 
         return v_nodes
 
@@ -531,6 +661,8 @@ class FBS:
                     "a": abs(v[0]) if 0 in connected_phases else np.nan,
                     "b": abs(v[1]) if 1 in connected_phases else np.nan,
                     "c": abs(v[2]) if 2 in connected_phases else np.nan,
+                    "s1": abs(v[3]) if 3 in connected_phases else np.nan,
+                    "s2": abs(v[4]) if 4 in connected_phases else np.nan,
                 }
             )
 
@@ -573,6 +705,12 @@ class FBS:
                     "c": np.angle(v[2]) * 180 / np.pi
                     if 2 in connected_phases
                     else np.nan,
+                    "s1": np.angle(v[3]) * 180 / np.pi
+                    if 3 in connected_phases
+                    else np.nan,
+                    "s2": np.angle(v[4]) * 180 / np.pi
+                    if 4 in connected_phases
+                    else np.nan,
                 }
             )
 
@@ -595,26 +733,33 @@ class FBS:
             fb = self.topology["parent"].get(tb)
             fb_id = fb
             tb_id = tb
-
-            # Get bus names from bus_data
-            fb_row = self.bus_data[self.bus_data.id == fb_id]
-            tb_row = self.bus_data[self.bus_data.id == tb_id]
-
-            fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb_id}"
-            tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
-
-            # if fb in self.voltages:
-            bus = tb
-            a_t = np.eye(3, dtype=complex)
-            if from_side:
-                bus = fb
-                a_t = self._get_tap_ratio_matrix(tb)
-            s = a_t @ self.voltages[bus] * np.conj(current)
-
             # Get connected phases for the branch
             fb_phases = self.phase_connections.get(fb, [0, 1, 2])
             tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-            branch_phases = list(set(fb_phases) & set(tb_phases))
+
+            # Get bus names from bus_data
+            fb_row = self.bus_data[self.bus_data.id == fb]
+            tb_row = self.bus_data[self.bus_data.id == tb]
+
+            fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb}"
+            tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb}"
+
+            bus = fb
+            a_t = self._get_tap_ratio_matrix(tb)
+            if not from_side:
+                bus = tb
+                a_t = np.eye(5, dtype=complex)
+            voltages = self.voltages[bus].copy()
+            
+            branch_phases = list(set(fb_phases) & set(tb_phases)) 
+            if self._is_triplex_transformer(fb, tb):
+                branch_phases = tb_phases
+                primary_phase = self._get_primary_phase(tb)
+                voltages = np.zeros_like(self.voltages[bus])
+                voltages[3:] = self.voltages[bus][primary_phase]
+ 
+            a_t[4, 4] = -a_t[4, 4]  # s2 current is referenced pointing downstream however current on the minus reference for the voltage, so flip the sign to get correct power flow direction
+            s = a_t @ voltages * np.conj(current)
 
             flow_data.append(
                 {
@@ -626,6 +771,8 @@ class FBS:
                     "a": s[0].real if 0 in branch_phases else np.nan,
                     "b": s[1].real if 1 in branch_phases else np.nan,
                     "c": s[2].real if 2 in branch_phases else np.nan,
+                    "s1": s[3].real if 3 in branch_phases else np.nan,
+                    "s2": s[4].real if 4 in branch_phases else np.nan,
                 }
             )
 
@@ -648,6 +795,9 @@ class FBS:
             fb = self.topology["parent"].get(tb)
             fb_id = fb
             tb_id = tb
+            # Get connected phases for the branch
+            fb_phases = self.phase_connections.get(fb, [0, 1, 2])
+            tb_phases = self.phase_connections.get(tb, [0, 1, 2])
 
             # Get bus names from bus_data
             fb_row = self.bus_data[self.bus_data.id == fb_id]
@@ -656,17 +806,24 @@ class FBS:
             fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb_id}"
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
 
-            bus = tb
-            a_t = np.eye(3, dtype=complex)
-            if from_side:
-                bus = fb
-                a_t = self._get_tap_ratio_matrix(tb)
-            s = a_t @ self.voltages[bus] * np.conj(current)
+            bus = fb
+            a_t = self._get_tap_ratio_matrix(tb)
+            if not from_side:
+                bus = tb
+                a_t = np.eye(5, dtype=complex)
+            voltages = self.voltages[bus].copy()
+            
+            branch_phases = list(set(fb_phases) & set(tb_phases)) 
+            if self._is_triplex_transformer(fb, tb):
+                branch_phases = tb_phases
+                primary_phase = self._get_primary_phase(tb)
+                voltages = np.zeros_like(self.voltages[bus])
+                voltages[3:] = self.voltages[bus][primary_phase]
+ 
+            a_t[4, 4] = -a_t[4, 4]  # s2 current is referenced pointing downstream however current on the minus reference for the voltage, so flip the sign to get correct power flow direction
+            s = a_t @ voltages * np.conj(current)
 
-            # Get connected phases for the branch
-            fb_phases = self.phase_connections.get(fb, [0, 1, 2])
-            tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-            branch_phases = list(set(fb_phases) & set(tb_phases))
+            # branch_phases = list(set(fb_phases) & set(tb_phases))
 
             flow_data.append(
                 {
@@ -678,6 +835,8 @@ class FBS:
                     "a": s[0].imag if 0 in branch_phases else np.nan,
                     "b": s[1].imag if 1 in branch_phases else np.nan,
                     "c": s[2].imag if 2 in branch_phases else np.nan,
+                    "s1": s[3].imag if 3 in branch_phases else np.nan,
+                    "s2": s[4].imag if 4 in branch_phases else np.nan,
                 }
             )
 
@@ -709,10 +868,9 @@ class FBS:
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
 
             # Get connected phases for the branch
-            fb_phases = self.phase_connections.get(fb, [0, 1, 2])
             tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-            branch_phases = list(set(fb_phases) & set(tb_phases))
-
+            # branch_phases = list(set(fb_phases) & set(tb_phases))
+            branch_phases = tb_phases
             current_data.append(
                 {
                     "fb": fb_id,
@@ -723,6 +881,8 @@ class FBS:
                     "a": abs(current[0]) if 0 in branch_phases else np.nan,
                     "b": abs(current[1]) if 1 in branch_phases else np.nan,
                     "c": abs(current[2]) if 2 in branch_phases else np.nan,
+                    "s1": abs(current[3]) if 3 in branch_phases else np.nan,
+                    "s2": abs(current[4]) if 4 in branch_phases else np.nan,
                 }
             )
 
@@ -756,9 +916,9 @@ class FBS:
             tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
 
             # Get connected phases for the branch
-            fb_phases = self.phase_connections.get(fb, [0, 1, 2])
             tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-            branch_phases = list(set(fb_phases) & set(tb_phases))
+            # branch_phases = list(set(fb_phases) & set(tb_phases))
+            branch_phases = tb_phases
 
             angle_data.append(
                 {
@@ -776,6 +936,12 @@ class FBS:
                     "c": np.angle(current[2]) * 180 / np.pi % 360
                     if 2 in branch_phases
                     else np.nan,
+                    "s1": np.angle(current[3]) * 180 / np.pi % 360
+                    if 3 in branch_phases
+                    else np.nan,
+                    "s2": np.angle(current[4]) * 180 / np.pi % 360
+                    if 4 in branch_phases
+                    else np.nan,
                 }
             )
 
@@ -787,11 +953,13 @@ class FBS:
         if self.gen_data is not None and len(self.gen_data) > 0:
             gen_df = self.gen_data.copy()
             # Map pa/pb/pc -> a/b/c and qa/qb/qc -> a/b/c with a time column t=0
-            p_cols = {"pa": "a", "pb": "b", "pc": "c"}
-            q_cols = {"qa": "a", "qb": "b", "qc": "c"}
+            p_cols = {"p_a": "a", "p_b": "b", "p_c": "c", "p_s1": "s1", "p_s2": "s2"}
+            q_cols = {"q_a": "a", "q_b": "b", "q_c": "c", "q_s1": "s1", "q_s2": "s2"}
 
             # p_gens
-            p_present = [c for c in ["pa", "pb", "pc"] if c in gen_df.columns]
+            p_present = [
+                c for c in ["p_a", "p_b", "p_c", "p_s1", "p_s2"] if c in gen_df.columns
+            ]
             if p_present:
                 p_gens_df = gen_df[
                     ["id"] + (["name"] if "name" in gen_df.columns else []) + p_present
@@ -800,10 +968,14 @@ class FBS:
                 p_gens_df.insert(2, "t", 0)
             else:
                 # Create empty DataFrame with proper structure
-                p_gens_df = pd.DataFrame(columns=["id", "name", "t", "a", "b", "c"])
+                p_gens_df = pd.DataFrame(
+                    columns=["id", "name", "t", "a", "b", "c", "s1", "s2"]
+                )
 
             # q_gens
-            q_present = [c for c in ["qa", "qb", "qc"] if c in gen_df.columns]
+            q_present = [
+                c for c in ["q_a", "q_b", "q_c", "q_s1", "q_s2"] if c in gen_df.columns
+            ]
             if q_present:
                 q_gens_df = gen_df[
                     ["id"] + (["name"] if "name" in gen_df.columns else []) + q_present
@@ -811,21 +983,43 @@ class FBS:
                 q_gens_df.insert(2, "t", 0)
             else:
                 # Create empty DataFrame with proper structure
-                q_gens_df = pd.DataFrame(columns=["id", "name", "t", "a", "b", "c"])
+                q_gens_df = pd.DataFrame(
+                    columns=["id", "name", "t", "a", "b", "c", "s1", "s2"]
+                )
         else:
             # Create empty DataFrames with proper structure when no gen_data
-            p_gens_df = pd.DataFrame(columns=["id", "name", "t", "a", "b", "c"])
-            q_gens_df = pd.DataFrame(columns=["id", "name", "t", "a", "b", "c"])
+            p_gens_df = pd.DataFrame(
+                columns=["id", "name", "t", "a", "b", "c", "s1", "s2"]
+            )
+            q_gens_df = pd.DataFrame(
+                columns=["id", "name", "t", "a", "b", "c", "s1", "s2"]
+            )
         p_load_df = None
         q_load_df = None
         if self.bus_data is not None and len(self.bus_data) > 0:
             bus_df = self.bus_data.copy()
             # Map pa/pb/pc -> a/b/c and qa/qb/qc -> a/b/c with a time column t=0
-            p_cols = {"pl_a": "a", "pl_b": "b", "pl_c": "c"}
-            q_cols = {"ql_a": "a", "ql_b": "b", "ql_c": "c"}
+            p_cols = {
+                "pl_a": "a",
+                "pl_b": "b",
+                "pl_c": "c",
+                "pl_s1": "s1",
+                "pl_s2": "s2",
+            }
+            q_cols = {
+                "ql_a": "a",
+                "ql_b": "b",
+                "ql_c": "c",
+                "ql_s1": "s1",
+                "ql_s2": "s2",
+            }
 
             # p_gens
-            p_present = [c for c in ["pl_a", "pl_b", "pl_c"] if c in bus_df.columns]
+            p_present = [
+                c
+                for c in ["pl_a", "pl_b", "pl_c", "pl_s1", "pl_s2"]
+                if c in bus_df.columns
+            ]
             if p_present:
                 p_load_df = bus_df[
                     ["id"] + (["name"] if "name" in bus_df.columns else []) + p_present
@@ -834,7 +1028,11 @@ class FBS:
                 p_load_df.insert(2, "t", 0)
 
             # q_gens
-            q_present = [c for c in ["ql_a", "ql_b", "ql_c"] if c in bus_df.columns]
+            q_present = [
+                c
+                for c in ["ql_a", "ql_b", "ql_c", "ql_s1", "ql_s2"]
+                if c in bus_df.columns
+            ]
             if q_present:
                 q_load_df = bus_df[
                     ["id"] + (["name"] if "name" in bus_df.columns else []) + q_present
@@ -1296,8 +1494,8 @@ def _apply_gen_setpoints_to_case(
     if p_gens is not None:
         if "t" in p_gens.columns:
             p_gens = p_gens[p_gens["t"] == p_gens["t"].min()]
-        p_col_map = {"a": "pa", "b": "pb", "c": "pc"}
-        p_phases = [c for c in ["a", "b", "c"] if c in p_gens.columns]
+        p_col_map = {"a": "p_a", "b": "p_b", "c": "p_c", "s1": "p_s1", "s2": "p_s2"}
+        p_phases = [c for c in ["a", "b", "c", "s1", "s2"] if c in p_gens.columns]
         if p_phases:
             p_update = (
                 p_gens[["id"] + p_phases].rename(columns=p_col_map).set_index("id")
@@ -1308,8 +1506,8 @@ def _apply_gen_setpoints_to_case(
     if q_gens is not None:
         if "t" in q_gens.columns:
             q_gens = q_gens[q_gens["t"] == q_gens["t"].min()]
-        q_col_map = {"a": "qa", "b": "qb", "c": "qc"}
-        q_phases = [c for c in ["a", "b", "c"] if c in q_gens.columns]
+        q_col_map = {"a": "q_a", "b": "q_b", "c": "q_c", "s1": "q_s1", "s2": "q_s2"}
+        q_phases = [c for c in ["a", "b", "c", "s1", "s2"] if c in q_gens.columns]
         if q_phases:
             q_update = (
                 q_gens[["id"] + q_phases].rename(columns=q_col_map).set_index("id")

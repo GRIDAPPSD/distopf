@@ -614,6 +614,7 @@ def plot_voltage_vs_distance(
     v_data,
     title="Voltage vs Distance from Source",
     color_by="algorithm",
+    include_secondary_phases=False,
 ):
     """
     Plot voltage on y-axis vs nodal distance from source bus on x-axis.
@@ -629,6 +630,8 @@ def plot_voltage_vs_distance(
         Plot title
     color_by : str
         Column name to use for color grouping (e.g., "algorithm")
+    include_secondary_phases : bool, optional
+        If True, include secondary phases (s1, s2) in the plot. Default is False.
 
     Returns
     -------
@@ -644,10 +647,12 @@ def plot_voltage_vs_distance(
 
     # Create subplots for each phase
     phases = ["a", "b", "c"]
+    if include_secondary_phases:
+        phases.extend(["s1", "s2"])
 
     fig = make_subplots(
         rows=1,
-        cols=3,
+        cols=len(phases),
         subplot_titles=[f"Phase {p.upper()}" for p in phases],
         shared_yaxes=True,
     )
@@ -710,9 +715,8 @@ def plot_voltage_vs_distance(
                         col=col_idx,
                     )
 
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=1)
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=2)
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=3)
+    for col_idx in range(1, len(phases) + 1):
+        fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=col_idx)
     fig.update_yaxes(title_text="Voltage (pu)", row=1, col=1)
     fig.update_layout(title_text=title, hovermode="closest")
 
@@ -725,6 +729,7 @@ def plot_line_flow_vs_distance(
     flow_name="Power Flow",
     title="Line Flow vs Distance from Source",
     color_by="algorithm",
+    include_secondary_phases=False,
 ):
     """
     Plot line flow on y-axis vs nodal distance from source bus on x-axis.
@@ -743,6 +748,8 @@ def plot_line_flow_vs_distance(
         Plot title
     color_by : str
         Column name to use for color grouping (e.g., "algorithm", "phase", or any other column)
+    include_secondary_phases : bool, optional
+        If True, include secondary phases (s1, s2) in the plot. Default is False.
     Returns
     -------
     plotly.graph_objects.Figure
@@ -758,10 +765,12 @@ def plot_line_flow_vs_distance(
 
     # Create subplots for each phase
     phases = ["a", "b", "c"]
+    if include_secondary_phases:
+        phases.extend(["s1", "s2"])
 
     fig = make_subplots(
         rows=1,
-        cols=3,
+        cols=len(phases),
         subplot_titles=[f"Phase {p.upper()}" for p in phases],
         shared_yaxes=True,
     )
@@ -896,9 +905,8 @@ def plot_line_flow_vs_distance(
                         col=col_idx,
                     )
 
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=1)
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=2)
-    fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=3)
+    for col_idx in range(1, len(phases) + 1):
+        fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=col_idx)
     fig.update_yaxes(
         title_text=f"{flow_name} (kW)" if "Power" in flow_name else f"{flow_name}",
         row=1,
@@ -1115,14 +1123,14 @@ def _process_gen_data(gen_data, p_gen, q_gen):
     q_gen = _latest_abc(q_gen)
 
     if p_gen is not None:
-        gen_data["pa"] = p_gen["a"].to_numpy()
-        gen_data["pb"] = p_gen["b"].to_numpy()
-        gen_data["pc"] = p_gen["c"].to_numpy()
+        gen_data["p_a"] = p_gen["a"].to_numpy()
+        gen_data["p_b"] = p_gen["b"].to_numpy()
+        gen_data["p_c"] = p_gen["c"].to_numpy()
 
     if q_gen is not None:
-        gen_data["qa"] = q_gen["a"].to_numpy()
-        gen_data["qb"] = q_gen["b"].to_numpy()
-        gen_data["qc"] = q_gen["c"].to_numpy()
+        gen_data["q_a"] = q_gen["a"].to_numpy()
+        gen_data["q_b"] = q_gen["b"].to_numpy()
+        gen_data["q_c"] = q_gen["c"].to_numpy()
 
     return gen_data
 
@@ -1236,7 +1244,7 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
         # Capacitor data (if present)
         if cap_data is not None and bus_row.id in cap_data.id.to_numpy():
             q_cap = cap_data.loc[
-                cap_data.id == bus_row.id, ["qa", "qb", "qc"]
+                cap_data.id == bus_row.id, ["q_a", "q_b", "q_c"]
             ].to_numpy()[0]
             qcap_a_str = format_phase_value(q_cap[0], "a")
             qcap_b_str = format_phase_value(q_cap[1], "b")
@@ -1246,10 +1254,10 @@ def _make_hover_text(branch_data, bus_data, cap_data, gen_data):
         # Generator data (if present)
         if bus_row.id in gen_data.id.to_numpy():
             p_gen = gen_data.loc[
-                gen_data.id == bus_row.id, ["pa", "pb", "pc"]
+                gen_data.id == bus_row.id, ["p_a", "p_b", "p_c"]
             ].to_numpy()[0]
             q_gen = gen_data.loc[
-                gen_data.id == bus_row.id, ["qa", "qb", "qc"]
+                gen_data.id == bus_row.id, ["q_a", "q_b", "q_c"]
             ].to_numpy()[0]
             pgen_a_str = format_phase_value(p_gen[0], "a")
             pgen_b_str = format_phase_value(p_gen[1], "b")

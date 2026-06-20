@@ -135,6 +135,6 @@ def test_regulator_and_capacitor_output_consistency(tmp_path):
         for required in ("id", "name", "phases"):
             assert required in cap_df.columns
         # qa/qb/qc numeric and non-negative (capacitors stored as reactive support)
-        for qcol in ("qa", "qb", "qc"):
+        for qcol in ("q_a", "q_b", "q_c"):
             if qcol in cap_df.columns and cap_df[qcol].notna().any():
                 assert (cap_df.loc[cap_df[qcol].notna(), qcol].astype(float) >= 0).all()

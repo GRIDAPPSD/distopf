@@ -49,6 +49,9 @@ dev = [
     "types-openpyxl>=3.1.5.20250822",
     "types-python-dateutil>=2.9.0.20250822",
 ]
+gurobi = [
+    "gurobipy>=13.0.2",
+]
 
 
 [tool.mypy]

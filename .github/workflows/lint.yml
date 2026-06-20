@@ -31,11 +31,13 @@ jobs:
         auto-activate-base: false
         channels: conda-forge
         channel-priority: strict
+        add-pip-as-python-dependency: true
     - name: Install IPOPT
       run: |
         conda install -y ipopt
     - name: Install dependencies
       run: |
+        conda install -y pip
         python -m pip install uv 
         uv pip install . ruff pytest mypy --system
     - name: Lint with ruff

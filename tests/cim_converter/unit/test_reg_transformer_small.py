@@ -96,8 +96,8 @@ def test_transformer_2winding_from_mesh_impedance():
     z_base = v_ln_expected**2 / tp.s_base
     expected_r = float(primary_end.FromMeshImpedance[0].r) / z_base
     expected_x = float(primary_end.FromMeshImpedance[0].x) / z_base
-    assert pytest.approx(data["raa"], rel=1e-9) == expected_r
-    assert pytest.approx(data["xaa"], rel=1e-9) == expected_x
+    assert pytest.approx(data["r_aa"], rel=1e-9) == expected_r
+    assert pytest.approx(data["x_aa"], rel=1e-9) == expected_x
     assert data["type"] == "transformer"
     assert data["from_name"] == "busA"
     assert data["to_name"] == "busB"
@@ -127,8 +127,8 @@ def test_transformer_3winding_mesh_impedance_pairing():
     z_base = v_ln_expected**2 / tp.s_base
     expected_r = float(primary_end.FromMeshImpedance[0].r) / z_base
     expected_x = float(primary_end.FromMeshImpedance[0].x) / z_base
-    assert pytest.approx(data12["raa"], rel=1e-9) == expected_r
-    assert pytest.approx(data12["xaa"], rel=1e-9) == expected_x
+    assert pytest.approx(data12["r_aa"], rel=1e-9) == expected_r
+    assert pytest.approx(data12["x_aa"], rel=1e-9) == expected_x
     assert data12["from_name"] == "bus1"
     assert data12["to_name"] == "bus2"
 
@@ -148,5 +148,5 @@ def test_transformer_default_impedance_when_none_found():
     tp = TransformerProcessor(1e6)
     data = tp._process_2winding_transformer(xfmr, ["b1", "b2"])
     # default values expected
-    assert pytest.approx(data["raa"], rel=1e-12) == 0.01
-    assert pytest.approx(data["xaa"], rel=1e-12) == 0.05
+    assert pytest.approx(data["r_aa"], rel=1e-12) == 0.01
+    assert pytest.approx(data["x_aa"], rel=1e-12) == 0.05

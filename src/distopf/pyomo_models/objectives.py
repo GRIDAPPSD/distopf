@@ -31,10 +31,10 @@ def loss_objective_rule(model: LindistModelProtocol):
     Pyomo expression for total losses
     """
     total_loss = 0
-    for _id, ph in model.branch_phase_set:
+    for fb, tb, ph in model.branch_phase_set:
         for t in model.time_set:
-            total_loss += (model.p_flow[_id, ph, t] ** 2) * model.r[_id, ph + ph]
-            total_loss += (model.q_flow[_id, ph, t] ** 2) * model.r[_id, ph + ph]
+            total_loss += (model.p_flow[fb, tb, ph, t] ** 2) * model.r[fb, tb, ph + ph]
+            total_loss += (model.q_flow[fb, tb, ph, t] ** 2) * model.r[fb, tb, ph + ph]
     return total_loss
 
 
@@ -55,10 +55,10 @@ def substation_power_objective_rule(model: LindistModelProtocol):
     Pyomo expression for total substation power
     """
     total_power = 0
-    for _id, ph in model.branch_phase_set:
+    for fb, tb, ph in model.branch_phase_set:
         for t in model.time_set:
-            if model.from_bus_map[_id] in model.swing_bus_set:
-                total_power += model.p_flow[_id, ph, t]
+            if fb in model.swing_bus_set:
+                total_power += model.p_flow[fb, tb, ph, t]
     return total_power
 
 
@@ -228,16 +228,16 @@ def thermal_violation_penalty(model: LindistModelProtocol, weight: float = 1e3):
         return 0
 
     penalty = 0
-    for _id, ph in model.branch_phase_set:
-        if (_id, ph) not in model.s_branch_max:
+    for fb, tb, ph in model.branch_phase_set:
+        if (fb, tb, ph) not in model.s_branch_max:
             continue
-        s_max_val = pyo.value(model.s_branch_max[_id, ph])
+        s_max_val = pyo.value(model.s_branch_max[fb, tb, ph])
         if s_max_val is None or s_max_val <= 0:
             continue
         s_max_sq = s_max_val**2
         for t in model.time_set:
             # Apparent power squared
-            s_sq = model.p_flow[_id, ph, t] ** 2 + model.q_flow[_id, ph, t] ** 2
+            s_sq = model.p_flow[fb, tb, ph, t] ** 2 + model.q_flow[fb, tb, ph, t] ** 2
             # Violation (positive when over limit)
             violation = s_sq - s_max_sq
             # Smooth max(0, x) approximation: (x + sqrt(x^2 + eps)) / 2

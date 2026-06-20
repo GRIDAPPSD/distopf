@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, Optional, Union, Callable
 from distopf.wrappers.base import Wrapper
 
 from distopf.matrix_models.base import LinDistBase
-from distopf.cases import CASES_DIR
 from distopf.matrix_models.lindist_capacitor_mi import LinDistModelCapMI
 from distopf.matrix_models.lindist_capacitor_regulator_mi import (
     LinDistModelCapacitorRegulatorMI,

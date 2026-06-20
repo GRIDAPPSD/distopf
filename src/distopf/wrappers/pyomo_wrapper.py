@@ -102,7 +102,6 @@ class PyomoWrapper(Wrapper):
             create_penalized_objective,
             set_objective,
         )
-        from distopf.results import PowerFlowResult
         import pyomo.environ as pyo  # type: ignore[import-untyped]
 
         circular_constraints = kwargs.pop("circular_constraints", False)
@@ -110,6 +109,7 @@ class PyomoWrapper(Wrapper):
         equality_only = kwargs.pop("equality_only", False)
         reg_tap_change_limit = kwargs.pop("reg_tap_change_limit", None)
         duals = kwargs.pop("duals", False)
+        verbose = kwargs.pop("verbose", False)
 
         voltage_weight = kwargs.pop("voltage_weight", None)
         thermal_weight = kwargs.pop("thermal_weight", None)
@@ -148,7 +148,7 @@ class PyomoWrapper(Wrapper):
         else:
             self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
 
-        self.result = solve(self.model, solver=solver, duals=duals)
+        self.result = solve(self.model, solver=solver, duals=duals, verbose=verbose)
 
         if raw_result:
             return self.result
@@ -173,6 +173,7 @@ class PyomoWrapper(Wrapper):
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         initialize = kwargs.pop("initialize", "fbs")
         solver_name = kwargs.pop("solver", "ipopt")
+        verbose = kwargs.pop("verbose", False)
 
         if (control_regulators or control_capacitors) and solver_name == "ipopt":
             raise ValueError(
@@ -196,7 +197,7 @@ class PyomoWrapper(Wrapper):
         obj_rule = self._resolve_objective(objective)
         self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
 
-        self.result = solve(self.model, solver=solver_name)
+        self.result = solve(self.model, solver=solver_name, verbose=verbose)
 
         if raw_result:
             return self.result
@@ -268,87 +269,119 @@ class PyomoWrapper(Wrapper):
         from math import pi
 
         fbs_results = fbs_solve(self.case)
+        assert fbs_results.voltages is not None
+        assert fbs_results.active_power_flows is not None
+        assert fbs_results.reactive_power_flows is not None
+        assert fbs_results.currents is not None
+        assert fbs_results.current_angles is not None
+        branch_dimen = int(self.model.branch_phase_set.dimen)
+        reg_dimen = int(self.model.reg_phase_set.dimen)
+
+        voltages = fbs_results.voltages
+        active_power_flows = fbs_results.active_power_flows
+        reactive_power_flows = fbs_results.reactive_power_flows
+        currents = fbs_results.currents
+        current_angles = fbs_results.current_angles
+
+        def _lookup_branch_phase(df, fb, tb, ph):
+            mask = df.tb == tb
+            if "fb" in df.columns:
+                mask = mask & (df.fb == fb)
+            vals = df.loc[mask, ph].to_numpy()
+            if len(vals) == 0:
+                return 0.0
+            return vals[0]
 
         # Initialize voltages
-        v_data = {}
-        v_reg_data = {}
+        v_data: dict[tuple[Any, ...], float] = {}
+        v_reg_data: dict[tuple[Any, ...], float] = {}
         for _id, ph, t in self.model.bus_phase_set * self.model.time_set:
-            v_mag = fbs_results.voltages.loc[
-                (fbs_results.voltages.id == _id), ph
-            ].to_numpy()[0]
+            v_mag = voltages.loc[(voltages.id == _id), ph].to_numpy()[0]
             v_data[(_id, ph, t)] = v_mag**2
-            if (_id, ph) in self.model.reg_phase_set:
+        if reg_dimen == 3:
+            for fb, tb, ph, t in self.model.reg_phase_set * self.model.time_set:
+                v_mag = voltages.loc[(voltages.id == tb), ph].to_numpy()[0]
+                v_reg_data[(fb, tb, ph, t)] = v_mag**2
+        else:
+            for _id, ph, t in self.model.reg_phase_set * self.model.time_set:
+                v_mag = voltages.loc[(voltages.id == _id), ph].to_numpy()[0]
                 v_reg_data[(_id, ph, t)] = v_mag**2
         self.model.v2.set_values(v_data)
         self.model.v2_reg.set_values(v_reg_data)
 
         # Initialize power flows
-        p_data = {}
-        q_data = {}
-        for _id, ph, t in self.model.branch_phase_set * self.model.time_set:
-            p_flow = fbs_results.active_power_flows.loc[
-                (fbs_results.active_power_flows.tb == _id), ph
-            ].to_numpy()[0]
-            q_flow = fbs_results.reactive_power_flows.loc[
-                (fbs_results.reactive_power_flows.tb == _id), ph
-            ].to_numpy()[0]
-            p_data[(_id, ph, t)] = p_flow
-            q_data[(_id, ph, t)] = q_flow
+        p_data: dict[tuple[Any, ...], float] = {}
+        q_data: dict[tuple[Any, ...], float] = {}
+        if branch_dimen == 3:
+            for fb, tb, ph, t in self.model.branch_phase_set * self.model.time_set:
+                p_flow = _lookup_branch_phase(active_power_flows, fb, tb, ph)
+                q_flow = _lookup_branch_phase(reactive_power_flows, fb, tb, ph)
+                p_data[(fb, tb, ph, t)] = p_flow
+                q_data[(fb, tb, ph, t)] = q_flow
+        else:
+            for _id, ph, t in self.model.branch_phase_set * self.model.time_set:
+                p_flow = active_power_flows.loc[
+                    (active_power_flows.tb == _id), ph
+                ].to_numpy()[0]
+                q_flow = reactive_power_flows.loc[
+                    (reactive_power_flows.tb == _id), ph
+                ].to_numpy()[0]
+                p_data[(_id, ph, t)] = p_flow
+                q_data[(_id, ph, t)] = q_flow
         self.model.p_flow.set_values(p_data)
         self.model.q_flow.set_values(q_data)
 
         # Initialize current magnitudes (squared)
-        l_data = {}
-        for _id, ph, t in self.model.branch_phase_set * self.model.time_set:
-            i_mag = fbs_results.currents.loc[
-                (fbs_results.currents.tb == _id), ph
-            ].to_numpy()[0]
-            l_data[(_id, ph + ph, t)] = i_mag**2
+        l_data: dict[tuple[Any, ...], float] = {}
+        if branch_dimen == 3:
+            for fb, tb, ph, t in self.model.branch_phase_set * self.model.time_set:
+                i_mag = _lookup_branch_phase(currents, fb, tb, ph)
+                l_data[(fb, tb, ph + ph, t)] = i_mag**2
+        else:
+            for _id, ph, t in self.model.branch_phase_set * self.model.time_set:
+                i_mag = currents.loc[(currents.tb == _id), ph].to_numpy()[0]
+                l_data[(_id, ph + ph, t)] = i_mag**2
 
         # Initialize cross-phase current magnitudes
-        for _id, phases, t in self.model.bus_phase_pair_set * self.model.time_set:
+        for fb, tb, phases in self.model.branch_phase_pair_set:
             ph1 = phases[0]
             ph2 = phases[1]
             if ph1 == ph2:
                 continue
-            if (_id, ph1 + ph1, t) in l_data and (_id, ph2 + ph2, t) in l_data:
-                l_data[(_id, ph1 + ph2, t)] = np.sqrt(
-                    l_data[_id, ph1 + ph1, t] * l_data[_id, ph2 + ph2, t]
-                )
+            for t in self.model.time_set:
+                if (fb, tb, ph1 + ph1, t) in l_data and (
+                    fb,
+                    tb,
+                    ph2 + ph2,
+                    t,
+                ) in l_data:
+                    l_data[(fb, tb, phases, t)] = np.sqrt(
+                        l_data[fb, tb, ph1 + ph1, t] * l_data[fb, tb, ph2 + ph2, t]
+                    )
         self.model.l_flow.set_values(l_data)
 
         # Initialize current angle differences
-        fbs_results.current_angles["ab"] = (
-            fbs_results.current_angles.a - fbs_results.current_angles.b
-        ) % 360
-        fbs_results.current_angles["bc"] = (
-            fbs_results.current_angles.b - fbs_results.current_angles.c
-        ) % 360
-        fbs_results.current_angles["ca"] = (
-            fbs_results.current_angles.c - fbs_results.current_angles.a
-        ) % 360
-        fbs_results.current_angles["ba"] = -fbs_results.current_angles.ab
-        fbs_results.current_angles["cb"] = -fbs_results.current_angles.bc
-        fbs_results.current_angles["ac"] = -fbs_results.current_angles.ca
-        fbs_results.current_angles["aa"] = (
-            fbs_results.current_angles.a - fbs_results.current_angles.a
-        )
-        fbs_results.current_angles["bb"] = (
-            fbs_results.current_angles.b - fbs_results.current_angles.b
-        )
-        fbs_results.current_angles["cc"] = (
-            fbs_results.current_angles.c - fbs_results.current_angles.c
-        )
+        current_angles["ab"] = (current_angles.a - current_angles.b) % 360
+        current_angles["bc"] = (current_angles.b - current_angles.c) % 360
+        current_angles["ca"] = (current_angles.c - current_angles.a) % 360
+        current_angles["ba"] = -current_angles.ab
+        current_angles["cb"] = -current_angles.bc
+        current_angles["ac"] = -current_angles.ca
+        current_angles["aa"] = current_angles.a - current_angles.a
+        current_angles["bb"] = current_angles.b - current_angles.b
+        current_angles["cc"] = current_angles.c - current_angles.c
+        current_angles["s1s1"] = current_angles.s1 - current_angles.s1
+        current_angles["s2s2"] = current_angles.s2 - current_angles.s2
+        current_angles["s1s2"] = current_angles.s1 - current_angles.s2
+        current_angles["s2s1"] = -current_angles.s1s2
 
         angle_data = {
-            (_id, phases): float(
-                fbs_results.current_angles.loc[
-                    fbs_results.current_angles.tb == _id, phases
-                ].tolist()[0]
+            (fb, tb, phases): float(
+                current_angles.loc[current_angles.tb == tb, phases].tolist()[0]
             )
             * pi
             / 180
-            for _id, phases in self.model.bus_angle_phase_pair_set
+            for fb, tb, phases in self.model.branch_angle_phase_pair_set
         }
         for key in self.model.d:
             self.model.d[key] = angle_data[key]
