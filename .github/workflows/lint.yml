@@ -36,6 +36,7 @@ jobs:
         conda install -y ipopt
     - name: Install dependencies
       run: |
+        conda install -y pip
         python -m pip install uv 
         uv pip install . ruff pytest mypy --system
     - name: Lint with ruff
