@@ -3,7 +3,6 @@ describe/metadata, ignore flags, verbose logging, and backward compatibility."""
 
 import json
 import logging
-import warnings
 
 import numpy as np
 import pytest
@@ -81,14 +80,6 @@ class TestCaseValidation:
         with pytest.raises(ValueError, match="v_min"):
             case._validate_case()
 
-    def test_unusual_voltage_limits_warns(self):
-        """Unusual voltage limits should warn."""
-        case = create_case(CASES_DIR / "csv" / "ieee13")
-        case.bus_data.loc[0, "v_min"] = 0.5
-
-        with pytest.warns(UserWarning, match="outside typical range"):
-            case._validate_case()
-
     def test_invalid_control_variable_raises(self):
         """Invalid control variable should raise."""
         case = create_case(CASES_DIR / "csv" / "ieee123_30der")
@@ -116,9 +107,9 @@ class TestCaseValidation:
         """Negative generator ratings should raise."""
         case = create_case(CASES_DIR / "csv" / "ieee123_30der")
         if case.gen_data is not None and len(case.gen_data) > 0:
-            case.gen_data.loc[case.gen_data.index[0], "sa_max"] = -100
+            case.gen_data.loc[case.gen_data.index[0], "s_a_max"] = -100
 
-            with pytest.raises(ValueError, match="negative sa_max"):
+            with pytest.raises(ValueError, match="negative s_a_max"):
                 case._validate_case()
 
     def test_multiple_errors_reported(self):
@@ -138,15 +129,6 @@ class TestCaseValidation:
 class TestCaseValidatorDetailed:
     """Test CaseValidator edge cases."""
 
-    def test_voltage_limits_warning(self):
-        """Unusual voltage limits should produce warnings."""
-        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        case.bus_data.loc[:, "v_min"] = 0.5
-        case.bus_data.loc[:, "v_max"] = 1.5
-        validator = CaseValidator(case)
-        is_valid, errors, warns = validator.validate_all()
-        assert any("outside typical range" in w for w in warns)
-
     def test_inverted_voltage_limits_error(self):
         """v_min >= v_max should produce error."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
@@ -165,6 +147,17 @@ class TestCaseValidatorDetailed:
         assert is_valid
         assert len(errors) == 0
 
+    def test_nan_generator_control_variable_is_treated_as_empty(self):
+        """NaN control_variable values from CSV parsing should not fail validation."""
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
+        case.gen_data.loc[:, "control_variable"] = float("nan")
+
+        validator = CaseValidator(case)
+        is_valid, errors, warns = validator.validate_all()
+
+        assert is_valid
+        assert not any("invalid control_variable" in error for error in errors)
+
 
 # ---------------------------------------------------------------------------
 # Case methods (run_pf, run_fbs, run_opf, to_model, copy, etc.)
@@ -181,18 +174,18 @@ class TestCaseMethods:
 
         assert isinstance(result, opf.PowerFlowResult)
         assert result.voltages is not None
-        assert result.p_flows is not None
-        assert result.q_flows is not None
+        assert result.active_power_flows is not None
+        assert result.reactive_power_flows is not None
         assert len(result.voltages) > 0
-        assert len(result.p_flows) > 0
-        assert len(result.q_flows) > 0
+        assert len(result.active_power_flows) > 0
+        assert len(result.reactive_power_flows) > 0
 
-        assert result.p_gens is not None
-        assert "t" in result.p_gens.columns
-        assert result.q_gens is not None
-        assert "t" in result.q_gens.columns
-        assert result.p_flows is not None
-        assert result.q_flows is not None
+        assert result.active_power_generation is not None
+        assert "t" in result.active_power_generation.columns
+        assert result.reactive_power_generation is not None
+        assert "t" in result.reactive_power_generation.columns
+        assert result.active_power_flows is not None
+        assert result.reactive_power_flows is not None
 
     def test_case_run_pf_returns_results(self):
         """Test that Case.run_pf() returns a PowerFlowResult and Case has no result attrs."""
@@ -201,15 +194,15 @@ class TestCaseMethods:
 
         assert isinstance(res, PowerFlowResult)
         assert res.voltages is not None
-        assert res.p_flows is not None
-        assert res.q_flows is not None
-        assert res.p_gens is not None
-        assert res.q_gens is not None
+        assert res.active_power_flows is not None
+        assert res.reactive_power_flows is not None
+        assert res.active_power_generation is not None
+        assert res.reactive_power_generation is not None
 
         # Case should NOT expose result properties
         assert not hasattr(case, "voltages")
-        assert not hasattr(case, "p_flows")
-        assert not hasattr(case, "p_gens")
+        assert not hasattr(case, "active_power_flows")
+        assert not hasattr(case, "active_power_generation")
 
     def test_case_run_fbs(self):
         """Test Case.run_fbs() method."""
@@ -219,8 +212,8 @@ class TestCaseMethods:
         assert isinstance(result, opf.PowerFlowResult)
         assert result.voltages is not None
         assert result.voltage_angles is not None
-        assert result.p_flows is not None
-        assert result.q_flows is not None
+        assert result.active_power_flows is not None
+        assert result.reactive_power_flows is not None
         assert result.currents is not None
         assert result.current_angles is not None
         assert result.solver == "fbs"
@@ -232,8 +225,8 @@ class TestCaseMethods:
         results_dict = result.to_dict()
         assert "voltages" in results_dict
         assert "voltage_angles" in results_dict
-        assert "p_flows" in results_dict
-        assert "q_flows" in results_dict
+        assert "active_power_flows" in results_dict
+        assert "reactive_power_flows" in results_dict
         assert "currents" in results_dict
         assert "current_angles" in results_dict
 
@@ -245,15 +238,15 @@ class TestCaseMethods:
         assert isinstance(res, PowerFlowResult)
         assert res.voltages is not None
         assert res.voltage_angles is not None
-        assert res.p_flows is not None
-        assert res.q_flows is not None
+        assert res.active_power_flows is not None
+        assert res.reactive_power_flows is not None
         assert res.currents is not None
         assert res.current_angles is not None
 
         # Case should NOT expose result properties
         assert not hasattr(case, "voltages")
         assert not hasattr(case, "voltage_angles")
-        assert not hasattr(case, "p_flows")
+        assert not hasattr(case, "active_power_flows")
         assert not hasattr(case, "currents")
 
     def test_case_run_opf(self):
@@ -335,9 +328,9 @@ class TestCaseModify:
     def test_modify_gen_mult(self):
         """gen_mult should scale generator outputs."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-        original_pa = case.gen_data["pa"].sum()
+        original_pa = case.gen_data["p_a"].sum()
         case.modify(gen_mult=2.0)
-        assert abs(case.gen_data["pa"].sum() - 2.0 * original_pa) < 1e-9
+        assert abs(case.gen_data["p_a"].sum() - 2.0 * original_pa) < 1e-9
 
     def test_modify_v_swing(self):
         """v_swing should set swing bus voltage."""
@@ -384,58 +377,6 @@ class TestCaseCreationEdgeCases:
         """Case with custom delta_t."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13", delta_t=0.5)
         assert case.delta_t == 0.5
-
-
-# ---------------------------------------------------------------------------
-# DistOPFCase backward compatibility
-# ---------------------------------------------------------------------------
-
-
-class TestDistOPFCaseCompat:
-    """Test DistOPFCase backward compatibility."""
-
-    def test_distopfcase_creation(self):
-        """DistOPFCase should work with deprecation warning."""
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            case = opf.DistOPFCase(data_path=opf.CASES_DIR / "csv" / "ieee13")
-            dep = [x for x in w if issubclass(x.category, DeprecationWarning)]
-            assert len(dep) >= 1
-        assert case.branch_data is not None
-
-    def test_distopfcase_run_pf(self):
-        """DistOPFCase.run_pf() should work."""
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            case = opf.DistOPFCase(data_path=opf.CASES_DIR / "csv" / "ieee13")
-        v, p, q = case.run_pf()
-        assert v is not None
-        assert len(v) > 0
-
-    def test_distopfcase_run(self):
-        """DistOPFCase.run() should work with loss_min."""
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            case = opf.DistOPFCase(
-                data_path=opf.CASES_DIR / "csv" / "ieee13",
-                objective_function="loss_min",
-            )
-        v, p, q, pg, qg = case.run()
-        assert v is not None
-        assert pg is not None
-
-    def test_distopfcase_with_config_params(self):
-        """DistOPFCase should accept config parameters."""
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            case = opf.DistOPFCase(
-                data_path=opf.CASES_DIR / "csv" / "ieee13",
-                v_min=0.9,
-                v_max=1.1,
-                load_mult=1.1,
-            )
-        assert case.v_min == 0.9
-        assert case.load_mult == 1.1
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +431,7 @@ class TestIgnoreSchedule:
         case = opf.create_case(
             opf.CASES_DIR / "csv" / "ieee123_30der", ignore_schedule=True
         )
-        r = case.run_opf("loss", control_variable="Q", backend="pyomo")
+        r = case.run_opf("loss", control_variable="Q", wrapper="pyomo")
         assert r is not None
         assert r.converged
 
@@ -580,7 +521,7 @@ class TestIgnoreData:
             ignore_gen=True,
             ignore_schedule=True,
         )
-        r = case.run_opf("loss", backend="pyomo")
+        r = case.run_opf("loss", wrapper="pyomo")
         assert r is not None
 
 
@@ -739,7 +680,7 @@ class TestVerboseLogging:
     def test_run_opf_verbose_produces_output(self, capsys):
         """run_opf(verbose=True) should print diagnostic info to stderr."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        case.run_opf("loss", backend="matrix", verbose=True)
+        case.run_opf("loss", wrapper="matrix", verbose=True)
         captured = capsys.readouterr()
         assert "Running OPF" in captured.err
         assert "Schedules" in captured.err
@@ -748,7 +689,7 @@ class TestVerboseLogging:
     def test_run_opf_verbose_false_no_output(self, capsys):
         """run_opf(verbose=False) should not print diagnostic info."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        case.run_opf("loss", backend="matrix", verbose=False)
+        case.run_opf("loss", wrapper="matrix", verbose=False)
         captured = capsys.readouterr()
         assert "Running OPF" not in captured.err
 
@@ -766,7 +707,7 @@ class TestVerboseLogging:
         handlers_before = len(logger.handlers)
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        case.run_opf("loss", backend="matrix", verbose=True)
+        case.run_opf("loss", wrapper="matrix", verbose=True)
 
         assert len(logger.handlers) == handlers_before
 
@@ -777,7 +718,7 @@ class TestVerboseLogging:
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         try:
-            case.run_opf("loss", backend="invalid_backend", verbose=True)
+            case.run_opf("loss", wrapper="invalid_wrapper", verbose=True)
         except ValueError:
             pass
 

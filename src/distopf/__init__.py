@@ -82,7 +82,7 @@ from distopf.plot import (
     plot_batteries,
 )
 
-from distopf.distOPF import DistOPFCase, create_model, auto_solve
+from distopf.wrappers.matrix_wrapper import create_model, auto_solve
 from distopf.fbs import fbs_solve, FBS
 
 from distopf.utils import (
@@ -175,7 +175,6 @@ __all__ = [
     "plot_pq",
     "plot_batteries",
     "CASES_DIR",
-    "DistOPFCase",
     "create_model",
     "auto_solve",
     "get",

@@ -26,7 +26,7 @@ def test_run_pf_returns_powerflowresult_and_unpacking():
 def test_run_opf_returns_powerflowresult_and_unpacking_matrix():
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 
-    res = case.run_opf("loss", backend="matrix")
+    res = case.run_opf("loss", wrapper="matrix")
     assert isinstance(res, PowerFlowResult)
     assert hasattr(res, "objective_value")
 
@@ -35,14 +35,14 @@ def test_run_opf_returns_powerflowresult_and_unpacking_matrix():
 def test_run_opf_returns_powerflowresult_and_unpacking_pyomo():
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 
-    res = case.run_opf("loss", backend="pyomo")
+    res = case.run_opf("loss", wrapper="pyomo")
     assert isinstance(res, PowerFlowResult)
     assert res.voltages is not None
 
 
 def test_result_save_and_summary(tmp_path):
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-    res = case.run_opf("loss", backend="matrix")
+    res = case.run_opf("loss", wrapper="matrix")
 
     # summary
     s = res.summary()
@@ -70,8 +70,8 @@ class TestPowerFlowResultMethods:
         d = result.to_dict()
         assert isinstance(d, dict)
         assert "voltages" in d
-        assert "p_flows" in d
-        assert "q_flows" in d
+        assert "active_power_flows" in d
+        assert "reactive_power_flows" in d
         assert "converged" in d
         assert "solver" in d
         assert "objective_value" in d
@@ -123,8 +123,8 @@ class TestPowerFlowResultMethods:
 
         assert (tmp_path / "results" / "metadata.csv").exists()
         assert (tmp_path / "results" / "voltages.csv").exists()
-        assert (tmp_path / "results" / "p_flows.csv").exists()
-        assert (tmp_path / "results" / "q_flows.csv").exists()
+        assert (tmp_path / "results" / "active_power_flows.csv").exists()
+        assert (tmp_path / "results" / "reactive_power_flows.csv").exists()
 
     def test_save_empty_result_creates_metadata_only(self, tmp_path):
         """save() on empty result should still create metadata."""
@@ -145,8 +145,10 @@ class TestPowerFlowResultMethods:
             result.plot_power_flows()
 
     def test_plot_power_flows_raises_missing_q(self):
-        """plot_power_flows() raises when only p_flows present."""
-        result = PowerFlowResult(p_flows=pd.DataFrame({"a": [1], "b": [1], "c": [1]}))
+        """plot_power_flows() raises when only active_power_flows present."""
+        result = PowerFlowResult(
+            active_power_flows=pd.DataFrame({"a": [1], "b": [1], "c": [1]})
+        )
         with pytest.raises(RuntimeError, match="No results available"):
             result.plot_power_flows()
 

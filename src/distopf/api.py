@@ -23,6 +23,154 @@ from distopf.utils import (
 )
 
 
+# =============================================================================
+# Wrapper registry — simple dict replaces BackendSelector class
+# =============================================================================
+
+# Lazy-populated on first use to avoid circular/heavy imports at module load
+_WRAPPER_REGISTRY: dict | None = None
+
+
+def _get_wrapper_registry() -> dict:
+    """Lazy-load wrapper registry on first use."""
+    global _WRAPPER_REGISTRY
+    if _WRAPPER_REGISTRY is None:
+        from distopf.wrappers import (
+            MatrixWrapper,
+            MatrixBessWrapper,
+            PyomoWrapper,
+        )
+
+        _WRAPPER_REGISTRY = {
+            "matrix": MatrixWrapper,
+            "matrix_bess": MatrixBessWrapper,
+            "pyomo": PyomoWrapper,
+        }
+    return _WRAPPER_REGISTRY
+
+
+# Maps formulation name → (default_wrapper, model_type, compatible_wrappers)
+# This is the public API for selecting a specific math formulation.
+_FORMULATION_REGISTRY: dict[str, dict] = {
+    # Pyomo BranchFlow (nonlinear, IPOPT/MINLP)
+    "branchflow": {
+        "default_wrapper": "pyomo",
+        "model_type": "branchflow",
+        "compatible_wrappers": ["pyomo"],
+    },
+    # LinDistFlow — supported by both pyomo (default) and matrix
+    "lindist": {
+        "default_wrapper": "pyomo",
+        "model_type": "lindist",
+        "compatible_wrappers": ["pyomo", "matrix"],
+    },
+    # Matrix single-step formulations
+    "lindist_cap_mi": {
+        "default_wrapper": "matrix",
+        "model_type": "lindist_cap_mi",
+        "compatible_wrappers": ["matrix"],
+    },
+    "lindist_reg_mi": {
+        "default_wrapper": "matrix",
+        "model_type": "lindist_reg_mi",
+        "compatible_wrappers": ["matrix"],
+    },
+    "lindist_cap_reg_mi": {
+        "default_wrapper": "matrix",
+        "model_type": "lindist_cap_reg_mi",
+        "compatible_wrappers": ["matrix"],
+    },
+    "lindist_loads": {
+        "default_wrapper": "matrix",
+        "model_type": "lindist_loads",
+        "compatible_wrappers": ["matrix"],
+    },
+    # Multi-period BESS formulations (matrix_bess only)
+    "lindist_mp": {
+        "default_wrapper": "matrix_bess",
+        "model_type": "lindist_mp",
+        "compatible_wrappers": ["matrix_bess"],
+    },
+    "lindist_mpl": {
+        "default_wrapper": "matrix_bess",
+        "model_type": "lindist_mpl",
+        "compatible_wrappers": ["matrix_bess"],
+    },
+    "lindist_cap_mi_mp": {
+        "default_wrapper": "matrix_bess",
+        "model_type": "lindist_cap_mi_mp",
+        "compatible_wrappers": ["matrix_bess"],
+    },
+}
+
+
+def _resolve_wrapper(wrapper: Optional[str], formulation: Optional[str]) -> tuple:
+    """Resolve wrapper + formulation to (wrapper_class, extra_kwargs).
+
+    Parameters
+    ----------
+    wrapper : str or None
+        Wrapper name: "pyomo", "matrix", or "matrix_bess". If None, the wrapper
+        is auto-selected from the formulation (or defaults to "pyomo").
+    formulation : str or None
+        Formulation name (e.g., "lindist", "branchflow", "lindist_cap_mi").
+        When provided, injects the appropriate ``model_type`` kwarg for the
+        selected wrapper and auto-selects the default wrapper if ``wrapper``
+        is None.
+
+    Returns
+    -------
+    tuple
+        (wrapper_class, extra_kwargs) where extra_kwargs is merged into the
+        kwargs forwarded to ``wrapper.solve()``.
+
+    Raises
+    ------
+    ValueError
+        If wrapper or formulation name is not recognized, or if the wrapper
+        and formulation are incompatible.
+    """
+    registry = _get_wrapper_registry()
+
+    # Neither specified → default to pyomo with no extra kwargs
+    if wrapper is None and formulation is None:
+        return registry["pyomo"], {}
+
+    # Validate wrapper name if provided
+    if wrapper is not None:
+        wrapper = wrapper.lower().strip()
+        if wrapper not in registry:
+            supported = sorted(registry)
+            raise ValueError(
+                f"Unknown wrapper: '{wrapper}'. Supported: {', '.join(supported)}"
+            )
+
+    # Validate formulation name if provided
+    extra_kwargs: dict = {}
+    if formulation is not None:
+        formulation = formulation.lower().strip()
+        if formulation not in _FORMULATION_REGISTRY:
+            supported = sorted(_FORMULATION_REGISTRY)
+            raise ValueError(
+                f"Unknown formulation: '{formulation}'. "
+                f"Supported: {', '.join(supported)}"
+            )
+        form_info = _FORMULATION_REGISTRY[formulation]
+        extra_kwargs["model_type"] = form_info["model_type"]
+        if wrapper is None:
+            # Auto-select the default wrapper for this formulation
+            wrapper = form_info["default_wrapper"]
+        elif wrapper not in form_info["compatible_wrappers"]:
+            compatible = ", ".join(f"'{w}'" for w in form_info["compatible_wrappers"])
+            raise ValueError(
+                f"Formulation '{formulation}' is not compatible with "
+                f"wrapper '{wrapper}'. "
+                f"Compatible wrappers: {compatible}"
+            )
+
+    return registry[wrapper], extra_kwargs
+
+
 class Case:
     """
     Primary data container and workflow class for DistOPF.
@@ -227,7 +375,7 @@ class Case:
         Returns
         -------
         PowerFlowResult or FBS result
-            If raw_result=False: PowerFlowResult with voltages, p_flows, q_flows, etc.
+            If raw_result=False: PowerFlowResult with voltages, active_power_flows, reactive_power_flows, etc.
             If raw_result=True: FBS result object
 
         Examples
@@ -269,8 +417,8 @@ class Case:
             Result object with all power flow outputs:
             - voltages: Bus voltage magnitudes (p.u.)
             - voltage_angles: Bus voltage angles (degrees)
-            - p_flows: Branch active power flows (p.u.)
-            - q_flows: Branch reactive power flows (p.u.)
+            - active_power_flows: Branch active power flows (p.u.)
+            - reactive_power_flows: Branch reactive power flows (p.u.)
             - currents: Branch currents (p.u.)
             - current_angles: Branch current angles (degrees)
 
@@ -307,7 +455,8 @@ class Case:
         control_variable: Optional[str] = None,
         control_regulators: bool = False,
         control_capacitors: bool = False,
-        backend: Optional[str] = None,
+        wrapper: Optional[str] = None,
+        formulation: Optional[str] = None,
         raw_result: bool = False,
         duals: bool = False,
         verbose: bool = False,
@@ -335,91 +484,91 @@ class Case:
             - "Q": Control reactive power
             - "PQ": Control both
         control_regulators : bool, default False
-            Enable mixed-integer regulator tap optimization (matrix backend only)
+            Enable mixed-integer regulator tap optimization
         control_capacitors : bool, default False
-            Enable mixed-integer capacitor switching optimization (matrix backend only)
-        backend : str, optional
-            Optimization backend to use:
+            Enable mixed-integer capacitor switching optimization
+        wrapper : str, optional
+            Solver wrapper to use:
             - "matrix": CVXPY/CLARABEL (fast, convex problems only)
-            - "multiperiod": Multi-period matrix model (supports batteries, schedules)
-            - "pyomo": Pyomo/IPOPT (NLP, LinDistFlow model)
-            - "nlp": Pyomo/IPOPT or MINLP (nonlinear BranchFlow model)
-            - None: Auto-detect based on n_steps and bat_data
+            - "matrix_bess": Multi-period matrix model (supports batteries, schedules)
+            - "pyomo": Pyomo/IPOPT (NLP-capable, supports lindist and branchflow)
+            - None: Auto-selected from ``formulation``, or defaults to "pyomo"
+        formulation : str, optional
+            Math formulation to use. Auto-selects the appropriate wrapper when
+            ``wrapper`` is not specified. Options:
+            - "lindist": Linear DistFlow (pyomo default; also in matrix)
+            - "branchflow": Nonlinear BranchFlow (pyomo + IPOPT/MINLP)
+            - "lindist_cap_mi": LinDist + capacitor MILP (matrix)
+            - "lindist_reg_mi": LinDist + regulator MILP (matrix)
+            - "lindist_cap_reg_mi": LinDist + capacitor+regulator MILP (matrix)
+            - "lindist_loads": LinDist loads variant (matrix)
+            - "lindist_mp": Multi-period LinDist (matrix_bess)
+            - "lindist_mpl": Multi-period LinDist loads (matrix_bess, default)
+            - "lindist_cap_mi_mp": Multi-period + capacitor MILP (matrix_bess)
         raw_result : bool, default False
             If True, return raw result object instead of DataFrames
         duals : bool, default False
-            If True (Pyomo backend only), extract dual variables from constraints.
-            Duals are stored on result.raw_result as dual_power_balance_p, etc.
+            If True (pyomo wrapper only), extract dual variables from constraints.
+            Duals are stored directly on the result as dual_power_balance_p, etc.
         verbose : bool, default False
-            If True, print diagnostic information about the solve: backend
+            If True, print diagnostic information about the solve: wrapper
             selection, schedule multiplier summaries, and timing.
         **kwargs
             Additional arguments passed to solver (e.g., target, error_percent, solver)
 
         Returns
         -------
-        tuple or result object
-            If raw_result=False: (voltages_df, power_flows_df, p_gens_df, q_gens_df)
-            If raw_result=True: backend-specific result object
+        PowerFlowResult
+            Result object containing voltages, power flows, and generation data.
+            If raw_result=True, returns the wrapper-specific raw result instead.
 
         """
-        from distopf.backend_selector import BackendSelector
-
         handler = self._enable_verbose() if verbose else None
         try:
             # Resolve objective alias at entry point (single point of resolution)
             if isinstance(objective, str):
-                from distopf.distOPF import resolve_objective_alias
+                from distopf.wrappers.matrix_wrapper import resolve_objective_alias
 
                 objective = resolve_objective_alias(objective)
 
             logger.info(
-                "Running OPF: objective=%s, control_variable=%s, backend=%s, "
-                "n_steps=%d, start_step=%d",
+                "Running OPF: objective=%s, control_variable=%s, "
+                "wrapper=%s, formulation=%s, n_steps=%d, start_step=%d",
                 objective,
                 control_variable,
-                backend,
+                wrapper,
+                formulation,
                 self.n_steps,
                 self.start_step,
             )
             self._log_schedule_summary()
 
-            # Route to appropriate backend using BackendSelector
-            selector = BackendSelector(self)
-            result = selector.solve(
+            wrapper_cls, extra_kwargs = _resolve_wrapper(wrapper, formulation)
+            kwargs.update(extra_kwargs)
+
+            wrapper_obj = wrapper_cls(self)
+
+            # Set control variable if specified (updates gen_data)
+            if control_variable is not None:
+                wrapper_obj.set_control_variable(control_variable)
+
+            result = wrapper_obj.solve(
                 objective=objective,
-                control_variable=control_variable,
                 control_regulators=control_regulators,
                 control_capacitors=control_capacitors,
-                backend=backend,
                 raw_result=raw_result,
                 duals=duals,
+                verbose=verbose,
                 **kwargs,
             )
 
-            logger.info("OPF completed (backend=%s)", backend or "auto")
+            logger.info(
+                "OPF completed (wrapper=%s, formulation=%s)", wrapper, formulation
+            )
             return result
         finally:
             if handler:
                 self._disable_verbose(handler)
-
-    def _select_backend(
-        self, control_regulators=False, control_capacitors=False
-    ) -> str:
-        """
-        Convenience wrapper to determine the best backend for this Case.
-
-        Returns
-        -------
-        str
-            Selected backend name as determined by :class:`BackendSelector`.
-        """
-        from distopf.backend_selector import BackendSelector
-
-        selector = BackendSelector(self)
-        return selector.select(
-            control_regulators=control_regulators, control_capacitors=control_capacitors
-        )
 
     # -------------------------------------------------------------------------
     # Model Creation Methods (for advanced users)
@@ -467,15 +616,15 @@ class Case:
         >>> # Multi-period model with batteries
         >>> case = create_case(CASES_DIR / "csv" / "ieee13_bat", n_steps=24)
         >>> model = case.to_matrix_model(multiperiod=True)
-        >>> from distopf.matrix_models.multiperiod import cvxpy_solve, cp_obj_loss
+        >>> from distopf.matrix_models.matrix_bess import cvxpy_solve, cp_obj_loss
         >>> result = cvxpy_solve(model, cp_obj_loss)
         """
         # Auto-detect multiperiod
         if multiperiod is None:
-            multiperiod = self._select_backend() == "multiperiod"
+            multiperiod = False
 
         if multiperiod:
-            from distopf.matrix_models.multiperiod import LinDistMPL
+            from distopf.matrix_models.matrix_bess import LinDistMPL
 
             # Update gen_data control variable if specified
             gen_data = self.gen_data
@@ -496,7 +645,7 @@ class Case:
                 delta_t=self.delta_t,
             )
         else:
-            from distopf.distOPF import create_model
+            from distopf.wrappers.matrix_wrapper import create_model
 
             return create_model(
                 control_variable=control_variable,
@@ -690,11 +839,11 @@ class Case:
             q_max = s_rated
         if q_min is None:
             q_min = -s_rated
-        gen.loc[i, ["qa_max", "qb_max", "qc_max"]] = q_max  # unlimited
-        gen.loc[i, ["qa_min", "qb_min", "qc_min"]] = q_min  # unlimited
+        gen.loc[i, ["q_a_max", "q_b_max", "q_c_max"]] = q_max  # unlimited
+        gen.loc[i, ["q_a_min", "q_b_min", "q_c_min"]] = q_min  # unlimited
 
-        gen.loc[:, ["pa", "pb", "pc", "qa", "qb", "qc"]] = (
-            gen.loc[:, ["pa", "pb", "pc", "qa", "qb", "qc"]].astype(float).fillna(0.0)
+        gen.loc[:, ["p_a", "p_b", "p_c", "q_a", "q_b", "q_c"]] = (
+            gen.loc[:, ["p_a", "p_b", "p_c", "q_a", "q_b", "q_c"]].astype(float).fillna(0.0)
         )
         gen.loc[:, [f"s{a}_max" for a in "abc"]] = (
             gen.loc[:, [f"s{a}_max" for a in "abc"]].astype(float).fillna(0.0)
@@ -1255,7 +1404,13 @@ def create_case_from_cim(
     try:
         # Lazy import to avoid loading cimgraph at module load time
         from distopf.cim_importer import CIMToCSVConverter
+    except ImportError as e:
+        raise ImportError(
+            "CIM file support requires optional dependencies. "
+            "Install them with: pip install distopf[cim]"
+        ) from e
 
+    try:
         cim_parser = CIMToCSVConverter(data_path)
         data = cim_parser.convert()
 
@@ -1297,11 +1452,31 @@ def modify_case(
         case.bus_data.loc[:, ["pl_a", "ql_a", "pl_b", "ql_b", "pl_c", "ql_c"]] *= (
             load_mult
         )
+        if "pl_s1" in case.bus_data.columns:
+            case.bus_data.loc[:, ["pl_s1"]] *= load_mult
+        if "pl_s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["pl_s2"]] *= load_mult
+        if "pl_s1s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["pl_s1s2"]] *= load_mult
+        if "ql_s1" in case.bus_data.columns:
+            case.bus_data.loc[:, ["ql_s1"]] *= load_mult
+        if "ql_s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["ql_s2"]] *= load_mult
+        if "ql_s1s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["ql_s1s2"]] *= load_mult
     # Modify generation multiplier
     if gen_mult is not None and case.gen_data is not None:
-        case.gen_data.loc[:, ["pa", "pb", "pc"]] *= gen_mult
-        case.gen_data.loc[:, ["qa", "qb", "qc"]] *= gen_mult
-        case.gen_data.loc[:, ["sa_max", "sb_max", "sc_max"]] *= gen_mult
+        case.gen_data.loc[:, ["p_a", "p_b", "p_c"]] *= gen_mult
+        case.gen_data.loc[:, ["q_a", "q_b", "q_c"]] *= gen_mult
+        case.gen_data.loc[:, ["s_a_max", "s_b_max", "s_c_max"]] *= gen_mult
+        if "p_s1" in case.gen_data.columns:
+            case.gen_data.loc[:, ["p_s1"]] *= gen_mult
+        if "p_s2" in case.gen_data.columns:
+            case.gen_data.loc[:, ["p_s2"]] *= gen_mult
+        if "s_s1_max" in case.gen_data.columns:
+            case.gen_data.loc[:, ["s_s1_max"]] *= gen_mult
+        if "s_s2_max" in case.gen_data.columns:
+            case.gen_data.loc[:, ["s_s2_max"]] *= gen_mult
     # Modify control_variable
     if control_variable is not None and case.gen_data is not None:
         if control_variable == "":

@@ -1,18 +1,8 @@
 """Unified result dataclasses for power flow and OPF analysis.
 
 This module provides standard result containers that work across all solver
-backends (matrix, pyomo, multiperiod, FBS). The goal is to provide a consistent
+backends (matrix, pyomo, matrix_bess, FBS). The goal is to provide a consistent
 API regardless of which solver was used.
-
-# TODO: Rename user-facing variable names to be more user-friendly:
-#   - p_flows -> active_power_flows or branch_p
-#   - q_flows -> reactive_power_flows or branch_q
-#   - p_gens -> generator_p or gen_active_power
-#   - q_gens -> generator_q or gen_reactive_power
-#   - p_loads -> load_p or load_active_power
-#   - q_loads -> load_q or load_reactive_power
-#   - q_caps -> capacitor_q or cap_reactive_power
-#   - Consider using consistent naming: entity_quantity pattern
 """
 
 from __future__ import annotations
@@ -21,13 +11,25 @@ from pathlib import Path
 from typing import Any, Optional
 import pandas as pd
 
+_FIELD_ALIASES = {
+    "p_flows": "active_power_flows",
+    "q_flows": "reactive_power_flows",
+    "p_gens": "active_power_generation",
+    "q_gens": "reactive_power_generation",
+    "p_loads": "active_power_loads",
+    "q_loads": "reactive_power_loads",
+    "q_caps": "capacitor_reactive_power",
+    "p_bats": "battery_active_power",
+    "q_bats": "battery_reactive_power",
+}
+
 
 @dataclass
 class PowerFlowResult:
     """Unified result container for power flow and OPF analysis.
 
     This dataclass provides a standard interface for accessing results
-    from any solver backend (matrix, pyomo, multiperiod, FBS). It also
+    from any solver backend (matrix, pyomo, matrix_bess, FBS). It also
     supports benchmarking and cross-backend comparison via optional
     backend metadata fields.
 
@@ -37,14 +39,24 @@ class PowerFlowResult:
         Bus voltage magnitudes (p.u.)
     voltage_angles : pd.DataFrame or None
         Bus voltage angles (degrees) - primarily from FBS
-    p_flows : pd.DataFrame or None
+    active_power_flows : pd.DataFrame or None
         Branch active power flows (p.u.)
-    q_flows : pd.DataFrame or None
+    reactive_power_flows : pd.DataFrame or None
         Branch reactive power flows (p.u.)
-    p_gens : pd.DataFrame or None
+    active_power_generation : pd.DataFrame or None
         Generator active power outputs (p.u.)
-    q_gens : pd.DataFrame or None
+    reactive_power_generation : pd.DataFrame or None
         Generator reactive power outputs (p.u.)
+    active_power_loads : pd.DataFrame or None
+        Load active power (p.u.)
+    reactive_power_loads : pd.DataFrame or None
+        Load reactive power (p.u.)
+    battery_active_power : pd.DataFrame or None
+        Battery active power (p.u.)
+    battery_reactive_power : pd.DataFrame or None
+        Battery reactive power (p.u.)
+    capacitor_reactive_power : pd.DataFrame or None
+        Capacitor reactive power (p.u.)
     currents : pd.DataFrame or None
         Branch currents (p.u.) - primarily from FBS
     current_angles : pd.DataFrame or None
@@ -60,9 +72,9 @@ class PowerFlowResult:
     solve_time : float or None
         Solution time in seconds (if available)
     solver : str
-        Name of the solver used ("matrix", "pyomo", "multiperiod", "fbs")
+        Name of the solver used ("matrix", "pyomo", "matrix_bess", "fbs")
     backend : str or None
-        Backend identifier for benchmarking (e.g., "pyomo", "multiperiod", "matrix", "fbs")
+        Backend identifier for benchmarking (e.g., "pyomo", "matrix_bess", "matrix", "fbs")
     termination_condition : str or None
         Solver termination condition (e.g., "optimal", "infeasible", "unbounded")
     error_message : str or None
@@ -87,26 +99,26 @@ class PowerFlowResult:
     # Core power flow results
     voltages: Optional[pd.DataFrame] = None
     voltage_angles: Optional[pd.DataFrame] = None
-    p_flows: Optional[pd.DataFrame] = None
-    q_flows: Optional[pd.DataFrame] = None
+    active_power_flows: Optional[pd.DataFrame] = None
+    reactive_power_flows: Optional[pd.DataFrame] = None
 
     # Generator results
-    p_gens: Optional[pd.DataFrame] = None
-    q_gens: Optional[pd.DataFrame] = None
+    active_power_generation: Optional[pd.DataFrame] = None
+    reactive_power_generation: Optional[pd.DataFrame] = None
 
     # Load results
-    p_loads: Optional[pd.DataFrame] = None
-    q_loads: Optional[pd.DataFrame] = None
+    active_power_loads: Optional[pd.DataFrame] = None
+    reactive_power_loads: Optional[pd.DataFrame] = None
 
     # Battery results
-    p_bats: Optional[pd.DataFrame] = None
-    q_bats: Optional[pd.DataFrame] = None
+    battery_active_power: Optional[pd.DataFrame] = None
+    battery_reactive_power: Optional[pd.DataFrame] = None
     p_discharge: Optional[pd.DataFrame] = None
     p_charge: Optional[pd.DataFrame] = None
     soc: Optional[pd.DataFrame] = None
 
     # Capacitor results
-    q_caps: Optional[pd.DataFrame] = None
+    capacitor_reactive_power: Optional[pd.DataFrame] = None
 
     # Regulator results
     tap_ratios: Optional[pd.DataFrame] = None
@@ -120,6 +132,13 @@ class PowerFlowResult:
     currents: Optional[pd.DataFrame] = None
     current_angles: Optional[pd.DataFrame] = None
 
+    # Dual variables (populated when duals=True, Pyomo only)
+    dual_power_balance_p: Optional[pd.DataFrame] = None
+    dual_power_balance_q: Optional[pd.DataFrame] = None
+    dual_voltage_drop: Optional[pd.DataFrame] = None
+    dual_voltage_limits_lower: Optional[pd.DataFrame] = None
+    dual_voltage_limits_upper: Optional[pd.DataFrame] = None
+
     # Solver metadata
     objective_value: Optional[float] = None
     converged: bool = True
@@ -132,7 +151,7 @@ class PowerFlowResult:
     )
 
     # case metadata
-    backend: Optional[str] = None  # e.g., "pyomo", "multiperiod", "matrix", "fbs"
+    backend: Optional[str] = None  # e.g., "pyomo", "matrix_bess", "matrix", "fbs"
     termination_condition: Optional[str] = (
         None  # e.g., "optimal", "infeasible", "unbounded"
     )
@@ -143,6 +162,11 @@ class PowerFlowResult:
     raw_result: Any = field(default=None, repr=False)
     model: Any = field(default=None, repr=False)
     case: Any = field(default=None, repr=False)
+
+    def __getattr__(self, name):
+        if name in _FIELD_ALIASES:
+            return getattr(self, _FIELD_ALIASES[name])
+        raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
 
     # -------------------------------------------------------------------------
     # Convenience methods
@@ -232,13 +256,13 @@ class PowerFlowResult:
     def plot_power_flows(self):
         """Plot branch power flows."""
 
-        if self.p_flows is None or self.q_flows is None:
+        if self.active_power_flows is None or self.reactive_power_flows is None:
             raise RuntimeError("No results available.")
 
-        s = self.p_flows.copy()
-        s["a"] = s["a"] + 1j * self.q_flows["a"]
-        s["b"] = s["b"] + 1j * self.q_flows["b"]
-        s["c"] = s["c"] + 1j * self.q_flows["c"]
+        s = self.active_power_flows.copy()
+        s["a"] = s["a"] + 1j * self.reactive_power_flows["a"]
+        s["b"] = s["b"] + 1j * self.reactive_power_flows["b"]
+        s["c"] = s["c"] + 1j * self.reactive_power_flows["c"]
         # Ensure expected shape
         if "tb" not in s.columns and "id" in s.columns:
             s["tb"] = s["id"]
@@ -253,11 +277,11 @@ class PowerFlowResult:
 
     def plot_gens(self):
         """Plot generator outputs."""
-        if self.p_gens is None:
+        if self.active_power_generation is None:
             raise RuntimeError("No generator results available.")
         from distopf.plot import plot_gens
 
-        return plot_gens(self.p_gens, self.q_gens)
+        return plot_gens(self.active_power_generation, self.reactive_power_generation)
 
     def plot_network(
         self,
@@ -272,12 +296,12 @@ class PowerFlowResult:
         from distopf.plot import plot_network
 
         return plot_network(
-            self.model,
+            self.case,
             v=self.voltages,
-            p_flow=self.p_flows,
-            q_flow=self.q_flows,
-            p_gen=self.p_gens,
-            q_gen=self.q_gens,
+            p_flow=self.active_power_flows,
+            q_flow=self.reactive_power_flows,
+            p_gen=self.active_power_generation,
+            q_gen=self.reactive_power_generation,
             v_min=v_min,
             v_max=v_max,
             show_phases=show_phases,

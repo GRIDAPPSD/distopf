@@ -1,4 +1,4 @@
-fb,tb,raa,rab,rac,rbb,rbc,rcc,xaa,xab,xac,xbb,xbc,xcc,type,name,status,s_base,v_ln_base,z_base,phases,s_a,s_b,s_c
+fb,tb,r_aa,r_ab,r_ac,r_bb,r_bc,r_cc,x_aa,x_ab,x_ac,x_bb,x_bc,x_cc,type,name,status,s_base,v_ln_base,z_base,phases,s_a,s_b,s_c
 1,2,1.73611E-05,0,0,1.73611E-05,0,1.73611E-05,1.73611E-05,0,0,1.73611E-05,0,1.73611E-05,switch,switch_1_2,CLOSED,1000000,2401.77712,5.768533333,abc,0,0,0
 2,3,0.006024306,0.002048611,0.002013889,0.006128472,0.002083333,0.006076389,0.014184027,0.006597222,0.005069444,0.013784723,0.005572917,0.014010416,overhead_line,oh_line_2_3,,1000000,2401.77712,5.768533333,abc,0,0,0
 3,4,0,0,0,0.00765625,0,0,0,0,0,0.007760417,0,0,overhead_line,oh_line_3_4,,1000000,2401.77712,5.768533333,b,0,0,0

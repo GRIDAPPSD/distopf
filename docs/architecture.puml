@@ -1,0 +1,78 @@
+@startuml DistOPF Architecture
+skinparam packageStyle rectangle
+skinparam defaultFontSize 12
+skinparam arrowColor #333
+skinparam packageBorderColor #666
+
+title DistOPF Module Architecture
+
+package "User API" {
+    [Case] as case
+    [create_case()] as create
+    [run_opf() / run_pf()] as run
+}
+
+package "Data Import" {
+    [importer.py\n(Case data container)] as importer
+    [dss_importer/\n(OpenDSS → CSV)] as dss
+    [cim_importer/\n(CIM XML → CSV)] as cim
+}
+
+package "Wrappers" {
+    [MatrixWrapper\n(CVXPY/CLARABEL)] as matrix_w
+    [MatrixBessWrapper\n(Multi-period + batteries)] as bess_w
+    [PyomoWrapper\n(lindist / branchflow)] as pyomo_w
+}
+
+package "Model Formulations" {
+    [matrix_models/\n(LinDistModel)] as matrix_m
+    [matrix_models/matrix_bess/\n(LinDistModelMP)] as bess_m
+    [pyomo_models/\n(lindist + branchflow)] as pyomo_m
+}
+
+package "Solvers" {
+    [CVXPY / CLARABEL] as cvxpy
+    [Pyomo + IPOPT] as ipopt
+    [Pyomo + MINLP\n(Bonmin/Couenne)] as minlp
+}
+
+package "Results" {
+    [PowerFlowResult] as result
+    [fbs.py\n(Forward-Backward Sweep)] as fbs
+}
+
+create --> case
+case --> importer : loads data
+dss --> importer
+cim --> importer
+
+run --> matrix_w : backend="matrix"
+run --> bess_w : backend="matrix_bess"
+run --> pyomo_w : backend="pyomo"\nor backend="nlp"
+
+matrix_w --> matrix_m
+bess_w --> bess_m
+pyomo_w --> pyomo_m
+
+matrix_m --> cvxpy
+bess_m --> cvxpy
+pyomo_m --> ipopt : model_type="lindist"
+pyomo_m --> ipopt : model_type="branchflow"
+pyomo_m --> minlp : discrete controls
+
+matrix_w --> result
+bess_w --> result
+pyomo_w --> result
+fbs --> result
+
+note right of pyomo_w
+  "nlp" alias auto-injects
+  model_type="branchflow"
+end note
+
+note right of bess_w
+  "multiperiod" alias
+  maps to "matrix_bess"
+end note
+
+@enduml

@@ -132,9 +132,16 @@ class LinDistModelRegulatorMI(LinDistBase):
         prob.solve(solver=solver, verbose=False)
 
         x_res = self.xk.value
+        # Treat optimal and optimal_inaccurate as success; for mixed-integer solvers,
+        # a user_limit status can still yield a feasible incumbent, so accept it if
+        # a solution was produced.
+        acceptable_statuses = {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}
+        success = prob.status in acceptable_statuses or (
+            prob.status == cp.USER_LIMIT and x_res is not None
+        )
         result = OptimizeResult(
             fun=prob.value,
-            success=(prob.status == "optimal"),
+            success=success,
             message=prob.status,
             x=x_res,
             nit=prob.solver_stats.num_iters,

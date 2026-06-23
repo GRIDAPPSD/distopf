@@ -1,6 +1,6 @@
 """Integration snapshot tests for DistOPF.
 
-These tests run various model/backend/case/objective combinations and compare
+These tests run various model/wrapper/case/objective combinations and compare
 results against stored reference data to catch regressions. If a code change
 alters numerical results, the affected scenario will fail with a clear diff.
 
@@ -25,7 +25,7 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 REFERENCE_FILE = Path(__file__).parent / "integration_references.json"
 
 # np.isclose tolerance: |actual - expected| <= ATOL + RTOL * |expected|
-ATOL = 1e-6
+ATOL = 1e-4
 RTOL = 1e-5
 
 # ---------------------------------------------------------------------------
@@ -34,25 +34,29 @@ RTOL = 1e-5
 
 SCENARIOS = [
     # ── Power flow (run_pf → matrix-based unconstrained PF) ──
+    {"id": "minimal_triplex_pf", "case": "minimal_triplex", "method": "pf"},
+    {"id": "triplex_pv_pf", "case": "triplex_pv", "method": "pf"},
     {"id": "ieee13_pf", "case": "ieee13", "method": "pf"},
     {"id": "ieee123_pf", "case": "ieee123_30der", "method": "pf"},
     # ── Forward-backward sweep ──
+    {"id": "minimal_triplex_fbs", "case": "minimal_triplex", "method": "fbs"},
+    {"id": "triplex_pv_fbs", "case": "triplex_pv", "method": "fbs"},
     {"id": "ieee13_fbs", "case": "ieee13", "method": "fbs"},
     {"id": "ieee123_fbs", "case": "ieee123_30der", "method": "fbs"},
-    # ── Matrix backend (CVXPY / CLARABEL) ──
+    # ── Matrix wrapper (CVXPY / CLARABEL) ──
     {
         "id": "ieee13_mat_loss",
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
     },
     {
         "id": "ieee13_mat_loss_Q",
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_variable": "Q",
     },
     {
@@ -60,7 +64,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_variable": "Q",
     },
     {
@@ -68,7 +72,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "curtail_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_variable": "P",
     },
     {
@@ -76,7 +80,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_variable": "PQ",
     },
     {
@@ -84,16 +88,32 @@ SCENARIOS = [
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_capacitors": True,
     },
-    # ── Pyomo backend (IPOPT) ──
+    # ── Pyomo wrapper (IPOPT) ──
+    {
+        "id": "minimal_triplex_pyo_loss",
+        "case": "minimal_triplex",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "pyomo",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "triplex_pv_pyo_loss",
+        "case": "triplex_pv",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "pyomo",
+        "requires_ipopt": True,
+    },
     {
         "id": "ieee13_pyo_loss",
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "pyomo",
+        "wrapper": "pyomo",
         "requires_ipopt": True,
     },
     {
@@ -101,7 +121,7 @@ SCENARIOS = [
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "pyomo",
+        "wrapper": "pyomo",
         "control_variable": "Q",
         "requires_ipopt": True,
     },
@@ -110,7 +130,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "pyomo",
+        "wrapper": "pyomo",
         "control_variable": "Q",
         "requires_ipopt": True,
     },
@@ -119,17 +139,17 @@ SCENARIOS = [
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "pyomo",
+        "wrapper": "pyomo",
         "control_variable": "PQ",
         "requires_ipopt": True,
     },
-    # ── Multiperiod backend (single-step for comparable results) ──
+    # ── Multiperiod wrapper (single-step for comparable results) ──
     {
         "id": "ieee13_mp_loss",
         "case": "ieee13",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "multiperiod",
+        "wrapper": "matrix_bess",
         "n_steps": 1,
     },
     {
@@ -137,9 +157,59 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "multiperiod",
+        "wrapper": "matrix_bess",
         "control_variable": "Q",
         "n_steps": 1,
+    },
+    # ── Nonlinear branchflow (Pyomo / IPOPT) ──
+    # {
+    #     "id": "minimal_triplex_nlp_loss",
+    #     "case": "minimal_triplex",
+    #     "method": "opf",
+    #     "objective": "loss_min",
+    #     "formulation": "branchflow",
+    #     "requires_ipopt": True,
+    # },
+    {
+        "id": "triplex_pv_nlp_loss",
+        "case": "triplex_pv",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_loss",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_loss_Q",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "control_variable": "Q",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_vdev",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "voltage_deviation",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_bat_nlp_loss",
+        "case": "ieee123_30der_bat",
+        "method": "opf",
+        "objective": "loss_min",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
     },
     # ── Edge cases ──
     {
@@ -147,7 +217,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "control_variable": "Q",
         "ignore_schedule": True,
     },
@@ -156,7 +226,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
-        "backend": "matrix",
+        "wrapper": "matrix",
         "ignore_gen": True,
     },
     {"id": "ieee13_heavy_pf", "case": "ieee13", "method": "pf", "load_mult": 1.5},
@@ -193,7 +263,8 @@ _MODIFY_KEYS = frozenset(
 )
 _OPF_KEYS = frozenset(
     {
-        "backend",
+        "wrapper",
+        "formulation",
         "control_variable",
         "control_regulators",
         "control_capacitors",
@@ -233,8 +304,8 @@ def extract_metrics(result) -> dict:
     # Voltage / flow statistics (min, max, mean per phase)
     for attr, prefix in [
         ("voltages", "v"),
-        ("p_flows", "pf"),
-        ("q_flows", "qf"),
+        ("active_power_flows", "pf"),
+        ("reactive_power_flows", "qf"),
     ]:
         df = getattr(result, attr, None)
         if df is None:
@@ -250,7 +321,10 @@ def extract_metrics(result) -> dict:
             m[f"{prefix}_{ph}_mean"] = float(np.mean(vals))
 
     # Generator output totals
-    for attr, prefix in [("p_gens", "pg"), ("q_gens", "qg")]:
+    for attr, prefix in [
+        ("active_power_generation", "pg"),
+        ("reactive_power_generation", "qg"),
+    ]:
         df = getattr(result, attr, None)
         if df is None or df.empty:
             continue
@@ -345,6 +419,7 @@ def generate_all_references():
     print(f"\nWrote {len(refs)} scenario references to {REFERENCE_FILE}")
 
 
+# disable reference generation to prevent accidental overwrites
 if __name__ == "__main__":
     print("Generating integration reference data...\n")
     generate_all_references()

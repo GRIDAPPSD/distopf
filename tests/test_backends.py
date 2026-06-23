@@ -1,4 +1,4 @@
-"""Tests for backend selection, objective resolution, model factory, and auto_solve."""
+"""Tests for wrapper selection, objective resolution, model factory, and auto_solve."""
 
 import tempfile
 import warnings
@@ -9,10 +9,8 @@ import pytest
 import pyomo.environ as pyo
 
 import distopf as opf
-from distopf.distOPF import (
+from distopf.wrappers.matrix_wrapper import (
     OBJECTIVE_ALIASES,
-    _get_data_from_path,
-    _handle_path_input,
     auto_solve,
     create_model,
     resolve_objective_alias,
@@ -72,136 +70,196 @@ class TestObjectiveAliases:
         case = opf.create_case(
             opf.CASES_DIR / "csv" / "ieee123_30der", ignore_schedule=True
         )
-        r1 = case.run_opf("loss_min", control_variable="P", backend="pyomo")
+        r1 = case.run_opf("loss_min", control_variable="P", wrapper="pyomo")
 
         case2 = opf.create_case(
             opf.CASES_DIR / "csv" / "ieee123_30der", ignore_schedule=True
         )
-        r2 = case2.run_opf("loss", control_variable="P", backend="pyomo")
+        r2 = case2.run_opf("loss", control_variable="P", wrapper="pyomo")
         assert (r1.voltages["a"] - r2.voltages["a"]).abs().max() < 1e-6
 
     def test_curtail_aliases_run_opf(self):
         """Curtailment aliases should work with matrix backend."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-        r = case.run_opf("curtail", control_variable="P", backend="matrix")
+        r = case.run_opf("curtail", control_variable="P", wrapper="matrix")
         assert r is not None
 
 
 # ---------------------------------------------------------------------------
-# Backend selection
+# Wrapper selection
 # ---------------------------------------------------------------------------
 
 
-class TestBackendSelection:
-    """Test backend auto-selection and explicit backend usage."""
+class TestWrapperSelection:
+    """Test wrapper registry and explicit wrapper usage."""
 
-    def test_auto_selects_matrix_for_control_regulator(self):
-        """Cases that want regulator taps should auto-select pyomo backend."""
+    def test_resolve_wrapper_pyomo(self):
+        """Pyomo wrapper should resolve correctly."""
+        from distopf.api import _resolve_wrapper
+
+        cls, _ = _resolve_wrapper("pyomo", None)
+        from distopf.wrappers.pyomo_wrapper import PyomoWrapper
+
+        assert cls is PyomoWrapper
+
+    def test_resolve_wrapper_unknown_raises(self):
+        """Unknown wrapper should raise ValueError."""
+        from distopf.api import _resolve_wrapper
+
+        with pytest.raises(ValueError, match="Unknown wrapper"):
+            _resolve_wrapper("nonexistent", None)
+
+    def test_resolve_formulation_branchflow(self):
+        """branchflow formulation should auto-select pyomo wrapper."""
+        from distopf.api import _resolve_wrapper
+        from distopf.wrappers.pyomo_wrapper import PyomoWrapper
+
+        cls, extra = _resolve_wrapper(None, "branchflow")
+        assert cls is PyomoWrapper
+        assert extra == {"model_type": "branchflow"}
+
+    def test_resolve_formulation_lindist_selects_pyomo_by_default(self):
+        """lindist formulation without wrapper= should default to pyomo."""
+        from distopf.api import _resolve_wrapper
+        from distopf.wrappers.pyomo_wrapper import PyomoWrapper
+
+        cls, extra = _resolve_wrapper(None, "lindist")
+        assert cls is PyomoWrapper
+        assert extra == {"model_type": "lindist"}
+
+    def test_resolve_formulation_lindist_with_matrix_wrapper(self):
+        """lindist + wrapper='matrix' should be valid."""
+        from distopf.api import _resolve_wrapper
+        from distopf.wrappers.matrix_wrapper import MatrixWrapper
+
+        cls, extra = _resolve_wrapper("matrix", "lindist")
+        assert cls is MatrixWrapper
+        assert extra == {"model_type": "lindist"}
+
+    def test_resolve_formulation_cap_mi_selects_matrix(self):
+        """lindist_cap_mi formulation should auto-select matrix wrapper."""
+        from distopf.api import _resolve_wrapper
+        from distopf.wrappers.matrix_wrapper import MatrixWrapper
+
+        cls, extra = _resolve_wrapper(None, "lindist_cap_mi")
+        assert cls is MatrixWrapper
+        assert extra == {"model_type": "lindist_cap_mi"}
+
+    def test_incompatible_wrapper_formulation_raises(self):
+        """Incompatible wrapper+formulation should raise ValueError."""
+        from distopf.api import _resolve_wrapper
+
+        with pytest.raises(ValueError, match="not compatible"):
+            _resolve_wrapper("pyomo", "lindist_cap_mi")
+
+    def test_unknown_formulation_raises(self):
+        """Unknown formulation should raise ValueError."""
+        from distopf.api import _resolve_wrapper
+
+        with pytest.raises(ValueError, match="Unknown formulation"):
+            _resolve_wrapper(None, "totally_made_up")
+
+    def test_explicit_matrix_wrapper(self):
+        """Can explicitly use matrix wrapper."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        assert case._select_backend(control_regulators=True) == "pyomo"
-
-    def test_auto_selects_multiperiod_for_n_steps(self):
-        """Cases with n_steps > 1 should auto-select pyomo."""
-        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13", n_steps=24)
-        assert case._select_backend() == "pyomo"
-
-    def test_explicit_matrix_backend(self):
-        """Can explicitly use matrix backend."""
-        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        r = case.run_opf("loss", backend="matrix")
+        r = case.run_opf("loss", wrapper="matrix")
         assert r is not None
 
     @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
-    def test_explicit_pyomo_backend(self):
-        """Can explicitly use pyomo backend."""
+    def test_explicit_pyomo_wrapper(self):
+        """Can explicitly use pyomo wrapper."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        r = case.run_opf("loss", backend="pyomo")
+        r = case.run_opf("loss", wrapper="pyomo")
         assert r is not None
 
     def test_multiperiod_model_creation(self):
         """to_matrix_model with multiperiod=True creates multiperiod model."""
-        from distopf.matrix_models.multiperiod import LinDistBaseMP
+        from distopf.matrix_models.matrix_bess import LinDistBaseMP
 
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13", n_steps=2)
         model = case.to_matrix_model(multiperiod=True)
         assert isinstance(model, LinDistBaseMP)
 
-    def test_invalid_backend_raises(self):
-        """Invalid backend should raise ValueError."""
+    def test_invalid_wrapper_raises(self):
+        """Invalid wrapper should raise ValueError."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        with pytest.raises(ValueError, match="Unknown backend"):
-            case.run_opf("loss", backend="invalid_backend")
+        with pytest.raises(ValueError, match="Unknown wrapper"):
+            case.run_opf("loss", wrapper="invalid_wrapper")
 
 
 # ---------------------------------------------------------------------------
-# Backend consistency
+# Wrapper consistency
 # ---------------------------------------------------------------------------
 
 
-class TestBackendConsistency:
-    """Test that backends return consistent result structures."""
+class TestWrapperConsistency:
+    """Test that wrappers return consistent result structures."""
 
     def test_matrix_results_have_time_column(self):
-        """Matrix backend results should include 't' column for consistency."""
+        """Matrix wrapper results should include 't' column for consistency."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        r = case.run_opf("loss", backend="matrix")
+        r = case.run_opf("loss", wrapper="matrix")
 
         assert "t" in r.voltages.columns, "voltages missing 't' column"
-        assert "t" in r.p_flows.columns, "power_flows missing 't' column"
-        assert "t" in r.q_flows.columns, "power_flows missing 't' column"
-        assert "t" in r.p_gens.columns, "p_gens missing 't' column"
-        assert "t" in r.q_gens.columns, "q_gens missing 't' column"
+        assert "t" in r.active_power_flows.columns, "power_flows missing 't' column"
+        assert "t" in r.reactive_power_flows.columns, "power_flows missing 't' column"
+        assert "t" in r.active_power_generation.columns, (
+            "active_power_generation missing 't' column"
+        )
+        assert "t" in r.reactive_power_generation.columns, (
+            "reactive_power_generation missing 't' column"
+        )
 
         # Time value should be 0 for single-period
         assert (r.voltages["t"] == 0).all()
 
     @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
     def test_pyomo_results_have_time_column(self):
-        """Pyomo backend results should include 't' column."""
+        """Pyomo wrapper results should include 't' column."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        r = case.run_opf("loss", backend="pyomo")
+        r = case.run_opf("loss", wrapper="pyomo")
 
         assert "t" in r.voltages.columns, "voltages missing 't' column"
 
     def test_multiperiod_warns_on_control_regulators(self):
-        """Multiperiod backend should warn when control_regulators is used."""
+        """Matrix BESS wrapper should warn when control_regulators is used."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13", n_steps=1)
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            case.run_opf("loss", backend="multiperiod", control_regulators=True)
+            case.run_opf("loss", wrapper="matrix_bess", control_regulators=True)
             assert len(w) >= 1
             assert "control_regulators" in str(w[0].message)
 
     @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
     def test_pyomo_supports_control_capacitors(self):
-        """Pyomo backend should support control_capacitors."""
+        """Pyomo wrapper should support control_capacitors."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        r = case.run_opf("loss", backend="pyomo", control_capacitors=True)
+        r = case.run_opf("loss", wrapper="pyomo", control_capacitors=True)
         assert r.converged
 
     @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
     def test_pyomo_runs_with_solver_kwarg(self):
-        """Pyomo backend should accept solver kwarg."""
+        """Pyomo wrapper should accept solver kwarg."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        r = case.run_opf("loss", backend="pyomo")
+        r = case.run_opf("loss", wrapper="pyomo")
         assert r.converged
 
     @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
     def test_pyomo_recognizes_curtail_objective(self):
-        """Pyomo backend should recognize curtail objective."""
+        """Pyomo wrapper should recognize curtail objective."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         try:
-            case.run_opf("curtail", backend="pyomo")
+            case.run_opf("curtail", wrapper="pyomo")
         except ValueError as e:
             assert "Unknown pyomo objective" not in str(e)
 
     @pytest.mark.skipif(not _ipopt_available, reason="Ipopt not available")
     def test_voltage_columns_consistent(self):
-        """Voltage DataFrames should have consistent columns across backends."""
+        """Voltage DataFrames should have consistent columns across wrappers."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 
-        r_matrix = case.run_opf("loss", backend="matrix")
-        r_pyomo = case.run_opf("loss", backend="pyomo")
+        r_matrix = case.run_opf("loss", wrapper="matrix")
+        r_pyomo = case.run_opf("loss", wrapper="pyomo")
 
         required_cols = {"id", "name", "t", "a", "b", "c"}
         assert required_cols.issubset(set(r_matrix.voltages.columns))
@@ -353,35 +411,25 @@ class TestAutoSolve:
 
 
 # ---------------------------------------------------------------------------
-# Path handling
+# Path handling via create_case
 # ---------------------------------------------------------------------------
 
 
-class TestHandlePathInput:
-    """Test _handle_path_input path resolution."""
+class TestCreateCasePathHandling:
+    """Test path handling through create_case entrypoint."""
 
-    def test_absolute_path_returned(self):
-        """Absolute path should be returned as-is."""
-        p = Path("/some/absolute/path")
-        assert _handle_path_input(p) == p
+    def test_existing_directory_path(self):
+        """An existing case directory path should resolve through create_case."""
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
+        assert case.branch_data is not None
 
-    def test_relative_existing_path(self):
-        """Relative path that exists in CWD should be resolved."""
-        p = _handle_path_input(opf.CASES_DIR / "csv" / "ieee13")
-        assert p.exists()
-
-    def test_cases_dir_shortcut(self):
-        """Paths findable in CASES_DIR/csv/ should resolve."""
-        p = _handle_path_input(Path("ieee13"))
-        assert p.exists()
-
-    def test_get_data_from_path_nonexistent_raises(self):
-        """_get_data_from_path with non-existent path should raise."""
+    def test_nonexistent_path_raises(self):
+        """create_case with non-existent path should raise."""
         with pytest.raises(FileNotFoundError):
-            _get_data_from_path(Path("/nonexistent/path"))
+            opf.create_case(Path("/nonexistent/path"))
 
-    def test_get_data_from_path_file_not_dss_raises(self):
-        """_get_data_from_path with a regular file should raise."""
+    def test_file_not_dss_raises(self):
+        """create_case with non-DSS regular file should raise."""
         with tempfile.NamedTemporaryFile(suffix=".csv") as f:
-            with pytest.raises(ValueError, match="must point to a directory"):
-                _get_data_from_path(Path(f.name))
+            with pytest.raises(ValueError, match="Cannot determine model type"):
+                opf.create_case(Path(f.name))

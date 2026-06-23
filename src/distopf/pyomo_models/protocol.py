@@ -1,4 +1,4 @@
-from typing import Protocol, Dict, List
+from typing import Protocol, Dict, List, Tuple
 import pyomo.environ as pyo  # type: ignore
 
 
@@ -103,8 +103,10 @@ class LindistModelProtocol(Protocol):
     soc: pyo.Var  # State of charge
 
     # ==================== MAPPINGS & UTILITIES ====================
-    from_bus_map: Dict[int, int]  # Mapping from to_bus to from_bus
-    to_bus_map: Dict[int, List[int]]  # Mapping from bus to list of downstream buses
+    to_bus_map: Dict[
+        int, List[Tuple[int, int]]
+    ]  # Mapping from bus to (fb, tb) downstream branches
+    primary_phase_map: Dict[Tuple[int, int], str]  # Center-tap primary phase by branch
     name_map: Dict[int, str]  # Mapping from bus ID to bus name
 
     # ==================== PYOMO UTILITIES ====================

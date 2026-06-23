@@ -1,8 +1,8 @@
-"""Tests for the nonlinear OPF (NLP) backend."""
+"""Tests for the nonlinear OPF (NLP/BranchFlow) via PyomoWrapper."""
 
 import pytest
 import distopf as opf
-from distopf.backends.nlp_backend import NlpBackend
+from distopf.wrappers.pyomo_wrapper import PyomoWrapper
 from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
 from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
 
@@ -13,24 +13,22 @@ def small_case():
     return opf.create_case("src/distopf/cases/csv/2Bus-1ph-batt")
 
 
-class TestNlpBackendSelection:
-    """Test that backend='nlp' is properly registered and selectable."""
+class TestNlpWrapperSelection:
+    """Test that formulation='branchflow' is properly registered and selectable."""
 
-    def test_backend_nlp_in_factory(self):
-        """Test that 'nlp' backend is registered in BackendSelector."""
-        from distopf.backend_selector import BackendSelector
+    def test_formulation_branchflow_routes_to_pyomo(self):
+        """Test that 'branchflow' formulation resolves to PyomoWrapper with model_type."""
+        from distopf.api import _resolve_wrapper
 
-        assert "nlp" in BackendSelector.BACKEND_FACTORY
+        wrapper_cls, extra_kwargs = _resolve_wrapper(None, "branchflow")
+        assert wrapper_cls is PyomoWrapper
+        assert extra_kwargs == {"model_type": "branchflow"}
 
-    def test_backend_nlp_is_nlp_backend_class(self):
-        """Test that 'nlp' backend can be instantiated."""
-        from distopf.backends.nlp_backend import NlpBackend
-        import distopf as opf
-
+    def test_branchflow_instantiates_pyomo_wrapper(self):
+        """Test that formulation='branchflow' creates a PyomoWrapper."""
         case = opf.create_case("src/distopf/cases/csv/2Bus-1ph-batt")
-        # Directly import and instantiate NlpBackend (avoid lazy loading issue)
-        backend = NlpBackend(case)
-        assert isinstance(backend, NlpBackend)
+        wrapper = PyomoWrapper(case)
+        assert isinstance(wrapper, PyomoWrapper)
 
 
 class TestNlpModelCreation:
@@ -59,7 +57,11 @@ class TestNlpModelCreation:
 
     def test_add_nlp_constraints_with_discrete_controls(self, small_case):
         """Test that discrete control constraints can be added."""
-        model = create_nl_branchflow_model(small_case)
+        model = create_nl_branchflow_model(
+            small_case,
+            control_capacitors=True,
+            control_regulators=True,
+        )
         add_nlp_constraints(
             model,
             circular_constraints=True,
@@ -70,26 +72,25 @@ class TestNlpModelCreation:
         assert hasattr(model, "reg_tap_sos1")
         assert hasattr(model, "reg_tap_upper")
         assert hasattr(model, "reg_tap_lower")
-        assert hasattr(model, "cap_mccormick_upper")
-        assert hasattr(model, "cap_mccormick_lower_1")
-        assert hasattr(model, "cap_mccormick_lower_2")
+        assert hasattr(model, "cap_mccormick_u1")
+        assert hasattr(model, "cap_mccormick_l1")
+        assert hasattr(model, "cap_mccormick_l2")
 
-    def test_nlp_backend_instantiation(self, small_case):
-        """Test that NlpBackend can be instantiated."""
-        backend = NlpBackend(small_case)
-        assert backend is not None
-        assert backend.case is small_case
+    def test_nlp_wrapper_instantiation(self, small_case):
+        """Test that PyomoWrapper can be instantiated for branchflow."""
+        wrapper = PyomoWrapper(small_case)
+        assert wrapper is not None
+        assert wrapper.case is small_case
 
-    def test_nlp_backend_model_building(self, small_case):
-        """Test that NlpBackend can build a model without solving."""
-        backend = NlpBackend(small_case)
-        # Manually build the model (normally done in solve())
+    def test_nlp_wrapper_model_building(self, small_case):
+        """Test that branchflow model can be built without solving."""
+        wrapper = PyomoWrapper(small_case)
         from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
         from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
 
-        backend.model = create_nl_branchflow_model(small_case)
-        add_nlp_constraints(backend.model)
-        assert backend.model is not None
+        wrapper.model = create_nl_branchflow_model(small_case)
+        add_nlp_constraints(wrapper.model)
+        assert wrapper.model is not None
 
 
 class TestNlpBackendSolverValidation:
@@ -97,51 +98,49 @@ class TestNlpBackendSolverValidation:
 
     def test_discrete_controls_require_minlp_solver(self, small_case):
         """Test that discrete controls with IPOPT solver raises error."""
-        backend = NlpBackend(small_case)
+        wrapper = PyomoWrapper(small_case)
         with pytest.raises(ValueError, match="MINLP solver"):
-            backend.solve(
+            wrapper.solve(
                 control_regulators=True,
                 solver="ipopt",
+                model_type="branchflow",
             )
 
     def test_discrete_capacitors_require_minlp_solver(self, small_case):
         """Test that capacitor control with IPOPT solver raises error."""
-        backend = NlpBackend(small_case)
+        wrapper = PyomoWrapper(small_case)
         with pytest.raises(ValueError, match="MINLP solver"):
-            backend.solve(
+            wrapper.solve(
                 control_capacitors=True,
                 solver="ipopt",
+                model_type="branchflow",
             )
 
     def test_continuous_optimization_allows_ipopt(self, small_case):
         """Test that continuous optimization (no discrete controls) allows IPOPT."""
-        backend = NlpBackend(small_case)
-        # This should not raise an error (though it may fail to solve if IPOPT not available)
+        wrapper = PyomoWrapper(small_case)
         try:
-            # Just test that the validation passes; actual solve may fail if solver unavailable
             from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
             from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
 
-            backend.model = create_nl_branchflow_model(small_case)
+            wrapper.model = create_nl_branchflow_model(small_case)
             add_nlp_constraints(
-                backend.model, control_regulators=False, control_capacitors=False
+                wrapper.model, control_regulators=False, control_capacitors=False
             )
-            # If we get here, validation passed
             assert True
         except Exception:
-            # Solver may not be available, but validation should have passed
             pass
 
 
-class TestNlpBackendIntegration:
-    """Integration tests for NLP backend with Case API."""
+class TestNlpIntegration:
+    """Integration tests for branchflow formulation with Case API."""
 
-    def test_case_run_opf_with_nlp_backend(self, small_case):
-        """Test that Case.run_opf() accepts backend='nlp'."""
-        # This test just checks that the backend is accepted
+    def test_case_run_opf_with_branchflow_formulation(self, small_case):
+        """Test that Case.run_opf() accepts formulation='branchflow'."""
+        # This test just checks that the formulation is accepted
         # Actual solve may fail if IPOPT not available or model is infeasible
         try:
-            result = small_case.run_opf(backend="nlp", raw_result=False)
+            result = small_case.run_opf(formulation="branchflow", raw_result=False)
             assert result is not None
         except Exception as e:
             # If solver not available or model infeasible, that's OK for this test
@@ -151,11 +150,11 @@ class TestNlpBackendIntegration:
             ):
                 raise
 
-    def test_case_run_opf_nlp_with_initialization(self, small_case):
-        """Test that Case.run_opf() with backend='nlp' accepts initialize flag."""
+    def test_case_run_opf_branchflow_with_initialization(self, small_case):
+        """Test that Case.run_opf() with formulation='branchflow' accepts initialize flag."""
         try:
             result = small_case.run_opf(
-                backend="nlp", initialize="fbs", raw_result=False
+                formulation="branchflow", initialize="fbs", raw_result=False
             )
             assert result is not None
         except Exception as e:

@@ -31,6 +31,17 @@ minimization, and generation curtailment minimization, where either generator re
 ```
 pip install distopf
 ```
+
+### Optional Extras
+
+| Extra | Install command | Purpose |
+|-------|----------------|---------|
+| `cim` | `pip install distopf[cim]` | CIM XML file import support (requires pre-release packages `cim-graph` and `gridappsd-python`) |
+
+> **Note:** The `cim` extra depends on pre-release packages. If you do not need CIM file support, a plain
+> `pip install distopf` is sufficient. CIM functionality will raise an informative `ImportError` if those
+> packages are not installed.
+
 ## Developer Installation
 To install the latest version from github:
  
@@ -42,6 +53,10 @@ To install the latest version from github:
 4. From the directory where the DistOPF package is stored, run:
 
 `pip install -e .`
+
+To also install the optional CIM extra in editable mode:
+
+`pip install -e ".[cim]"`
 
 This installs your local DistOPF package the python environment you activated. The `-e` option enables editable 
 mode, which allows you to directly edit the package and see changes immediately reflected in your environment 
@@ -65,57 +80,40 @@ result = case.run_opf(objective="curtail_min", control_variable="P", v_max=1.05,
 result.plot_network().show(renderer="browser")
 ```
 
-## Optimization Backends
+## Optimization Wrappers
 
-DistOPF supports multiple optimization backends for solving OPF problems:
+DistOPF supports multiple optimization wrappers for solving OPF problems:
 
-### Linear Backend (backend='pyomo')
-The default linear backend uses the LinDistFlow model with CVXPY or Pyomo solvers.
+### Pyomo Wrapper — LinDistFlow (default)
+The default Pyomo wrapper uses the LinDistFlow model (`formulation="lindist"`).
 - **Model**: Linear approximation of power flow equations
-- **Solver**: CVXPY or Pyomo with linear solvers
+- **Solver**: Pyomo with linear solvers
 - **Speed**: Fast, suitable for real-time applications
 - **Accuracy**: Good for systems with small voltage deviations
 
 ```python
 import distopf as opf
-case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
-result = case.run_opf(backend="pyomo", objective="loss")
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
+result = case.run_opf(wrapper="pyomo", objective="loss")  # formulation="lindist" is the default
 ```
 
-### Nonlinear Backend (backend='nlp')
-The nonlinear backend uses the BranchFlow model with IPOPT or MINLP solvers for higher accuracy.
+### Pyomo Wrapper — BranchFlow
+The BranchFlow model type uses nonlinear power flow equations with IPOPT or MINLP solvers for higher accuracy.
+Use `formulation="branchflow"`.
 - **Model**: Nonlinear power flow equations (exact)
-- **Solver**: IPOPT (continuous) or MINLP solvers like Bonmin/Couenne (discrete controls)
+- **Solver**: IPOPT (continuous) or MINLP using Gurobi if installed (discrete controls)
 - **Speed**: Slower than linear, but more accurate
-- **Accuracy**: Exact power flow representation
+- **Accuracy**: Nonlinear power flow representation
 
 #### Continuous Optimization (IPOPT)
 For continuous optimization without discrete controls:
 
 ```python
 import distopf as opf
-case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
 result = case.run_opf(
-    backend="nlp",
+    formulation="branchflow",
     objective="loss",
-    solver="ipopt",
-)
-```
-
-#### With FBS Initialization
-Initialize the nonlinear model from a fast backward-forward sweep (FBS) solution for better convergence:
-
-```python
-import distopf as opf
-from distopf.fbs import fbs_solve
-
-case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
-fbs_result = fbs_solve(case)  # Optional: run FBS first
-
-result = case.run_opf(
-    backend="nlp",
-    objective="loss",
-    initialize="fbs",  # Initialize from FBS results
     solver="ipopt",
 )
 ```
@@ -127,35 +125,63 @@ Enable regulator tap optimization and capacitor switching with MINLP solvers:
 import distopf as opf
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
 result = case.run_opf(
-    backend="nlp",
+    wrapper="pyomo",
+    formulation="branchflow",
     objective="loss",
     control_regulators=True,      # Enable regulator tap control
     control_capacitors=True,       # Enable capacitor switching
     initialize="fbs",              # Recommended for discrete controls
-    solver="bonmin",               # MINLP solver (bonmin, couenne, etc.)
+    solver="gurobi",               # MINLP compatible solver 
 )
 ```
 
-#### Backend Comparison
-| Feature | Linear (pyomo) | Nonlinear (nlp) |
+### Matrix BESS Wrapper (Multi-Period with Batteries)
+The `matrix_bess` wrapper supports multi-period (time-series) optimization with battery energy storage.
+
+```python
+import distopf as opf
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der_bat")
+result = case.run_opf(wrapper="matrix_bess", objective="loss")
+```
+
+#### Wrapper Comparison
+| Feature | Matrix/Matrix BESS | Pyomo  |
 |---------|---|---|
-| Model Type | LinDistFlow (linear) | BranchFlow (nonlinear) |
-| Solver | CVXPY, Pyomo | IPOPT, MINLP |
-| Speed | Fast | Slower |
-| Accuracy | Approximate | Exact |
-| Discrete Controls | Limited | Full support |
-| Initialization | N/A | Optional (FBS) |
-| Solver Availability | Common | Requires IPOPT/MINLP |
+| Model Type | LinDistFlow (linear) | LinDistFlow or Non-Linear BranchFlow |
+| Formulation | Matrix-based | Algebraic equations |
+| Solver API | Scipy or CVXPY | Pyomo |
+| Prefered Solver | HiGHs or Clarabel | IPOPT, Gurobi, Knitro |
 
 #### Solver Requirements
-- **IPOPT**: Install via `conda install -c conda-forge ipopt` or `apt-get install coinor-libipopt-dev`
-- **MINLP Solvers**: Install Bonmin or Couenne via `conda install -c conda-forge bonmin couenne`
+- **IPOPT**: Install via `conda install -c conda-forge ipopt`. On Ubuntu, `apt-get install coinor-libipopt-dev` only installs headers and shared libraries; it does not provide the `ipopt` executable that Pyomo's `SolverFactory("ipopt")` expects.
 
-#### Known Limitations
-- NLP backend requires a compatible solver (IPOPT or MINLP)
-- Convergence may be slow for large systems or difficult cases
-- Some cases may be infeasible with the nonlinear model
-- Discrete controls require MINLP solvers which may be slower than continuous optimization
+
+### Result Fields
+
+`PowerFlowResult` uses descriptive field names. Short aliases are also accepted for backward compatibility.
+
+| Field Name | Alias |
+|---|---|
+| `active_power_flows` | `p_flows` |
+| `reactive_power_flows` | `q_flows` |
+| `active_power_generation` | `p_gens` |
+| `reactive_power_generation` | `q_gens` |
+| `active_power_loads` | `p_loads` |
+| `reactive_power_loads` | `q_loads` |
+| `capacitor_reactive_power` | `q_caps` |
+| `battery_active_power` | `p_bats` |
+| `voltage_magnitudes` | `voltages` |
+
+#### Dual Variables
+When running with `duals=True`, dual variables are accessible on the result object:
+
+```python
+result = case.run_opf(wrapper="pyomo", objective="loss", duals=True)
+result.dual_power_balance_p
+result.dual_power_balance_q
+result.dual_voltage_drop
+result.dual_voltage_limits
+```
 
 ## Using a custom model.
 Create CSVs formatted as shown below and store them in a single folder. The csv names must match exactly as shown. 
@@ -167,6 +193,7 @@ Column order is not important.
    -gen_data.csv
    -cap_data.csv
    -reg_data.csv
+   -bat_data.csv
 ```
 ```python
 import distopf as opf
@@ -184,28 +211,42 @@ bus_data = pd.read_csv("path/to/your_model_directory/bus_data.csv", header=0)
 gen_data = pd.read_csv("path/to/your_model_directory/gen_data.csv", header=0)
 cap_data = pd.read_csv("path/to/your_model_directory/cap_data.csv", header=0)
 reg_data = pd.read_csv("path/to/your_model_directory/reg_data.csv", header=0)
+bat_data = pd.read_csv("path/to/your_model_directory/bat_data.csv", header=0)
+schedules = pd.read_csv("path/to/your_model_directory/schedules.csv", header=0)  # Optional for multi-period cases
 case = opf.Case(
     branch_data=branch_data,
     bus_data=bus_data,
     gen_data=gen_data,
     cap_data=cap_data,
-    reg_data=reg_data
+    reg_data=reg_data,
+    bat_data=bat_data,
+    schedules=schedules
 )
 
 ```
+
+> **Phase naming convention:** Three-phase buses and lines use phases `a`, `b`, `c`.
+> Triplex (North American split-phase residential secondary) buses and lines use phases
+> `s1` and `s2`, which are the two 120 V legs of a center-tapped single-phase
+> transformer. `s1s2` refers to the 240 V line-to-line connection across both legs.
 
 ### branch_data.csv
 
 - fb: From bus id number
 - tb: To bus id number
-- r: resistance in p.u.
-- x: reactance in p.u.
-- type: overhead_line, switch, transformer, etc.
+- r_aa, r_ab, r_ac, r_bb, r_bc, r_cc: upper-diagonal resistance matrix elements (p.u.) for 3-phase lines
+- x_aa, x_ab, x_ac, x_bb, x_bc, x_cc: upper-diagonal reactance matrix elements (p.u.) for 3-phase lines
+- r_s1s1, r_s1s2, r_s2s2: resistance matrix elements (p.u.) for triplex (split-phase) lines
+- x_s1s1, x_s1s2, x_s2s2: reactance matrix elements (p.u.) for triplex (split-phase) lines
+- primary_phase: primary-side phase for center-tap transformer branches (e.g. "a", "b", "c")
+- s_a_max, s_b_max, s_c_max: per-phase apparent power limits (VA)
+- type: overhead_line, switch, transformer, center_tap_xfmr, etc.
 - name: other name of line
 - status: (for switches) OPEN or CLOSED
 - s_base: base VA
 - v_ln_base: base line-to-neutral voltage
 - z_base: base impedance
+- phases: phases present on the line (e.g. "abc", "s1s2", "a")
 
 ### bus_data.csv
 
@@ -219,19 +260,24 @@ case = opf.Case(
 - v_min, v_max: voltage magnitude limits (p.u.)
 - cvr_p, cvr_q: conservation voltage reduction parameters; alternative to ZIP model for voltage dependant loads. (set to
   0 for no voltage dependence)
-- phases: phases at bus (e.g. "abc", "a", "ab", etc.)
+- pl_s1, ql_s1, pl_s2, ql_s2, pl_s1s2, ql_s1s2: active and reactive loads for triplex (split-phase) buses (p.u.)
+- primary_phase: primary-side phase for triplex buses (e.g. "a", "b", "c")
+- phases: phases at bus (e.g. "abc", "a", "ab", "s1s2", etc.)
 
 ### gen_data.csv
 
 - id: bus id
 - name: generator name
-- pa, pb, pc: active power output (p.u.)
-- qa, qb, qc: reactive power output (p.u.)
+- p_a, p_b, p_c: active power output (p.u.)
+- q_a, q_b, q_c: reactive power output (p.u.)
 - s_base: base power (VA)
-- sa_max, sb_max, sc_max: rated maximum apparent power output (VA)
-- phases: generator phases (abc string) (this IS implemented)
-- qa_max, qb_max, qc_max: (not implemented) maximum reactive power output (p.u.)
-- qa_min, qb_min, qc_min: (not implemented) minimum reactive power output (p.u.)
+- s_a_max, s_b_max, s_c_max: rated maximum apparent power output per 3-phase (VA)
+- p_s1, p_s2: active power output for triplex (split-phase) generators (p.u.)
+- q_s1, q_s2: reactive power output for triplex generators (p.u.)
+- s_s1_max, s_s2_max: rated maximum apparent power for triplex phases (VA)
+- phases: generator phases (e.g. "abc", "s1s2") (this IS implemented)
+- q_a_max, q_b_max, q_c_max: (not implemented) maximum reactive power output (p.u.)
+- q_a_min, q_b_min, q_c_min: (not implemented) minimum reactive power output (p.u.)
 
 ### cap_data.csv
 
@@ -247,73 +293,36 @@ case = opf.Case(
 - name: regulator name 
 - tap_a, tap_b, tap_c: tap position (p.u.) -16 to +16; 0 is no tap change
 
-## Case Options
-```
-    Use `Case` or `create_case()` to create and run a case. Call `run_pf()` or `run_opf()` to obtain a `PowerFlowResult`.
-    Parameters
-    ----------
-    config: str or dict
-        Path to JSON config or dictionary with parameters to create case. Alternative to using **config.
-    data_path: str or pathlib.Path
-        Path to the directory containing the data CSVs or path to OpenDSS model. Will also accept names of
-        cases include in package e.g. "ieee13", "ieee34", "ieee123".
-    output_dir: str or pathlib.Path
-        (default: "output") Directory to save results.
-    branch_data : pd.DataFrame or None
-        DataFrame containing branch data (r and x values, limits). Overrides data found from data_path.
-    bus_data : pd.DataFrame or None
-        DataFrame containing bus data (loads, voltages, limits). Overrides data found from data_path.
-    gen_data : pd.DataFrame or None
-        DataFrame containing generator/DER data. Overrides data found from data_path.
-    cap_data : pd.DataFrame or None
-        DataFrame containing capacitor data. Overrides data found from data_path.
-    reg_data : pd.DataFrame or None
-        DataFrame containing regulator data. Overrides data found from data_path.
-    v_swing: Number or size-3 array
-        Override substation voltage. Scalar or 3-phase array. Per Unit.
-    v_min: Number
-        Override all voltage minimum limits. Per Unit.
-    v_max: Number
-        Override all voltage maximum limits. Per Unit.
-    gen_mult: Number
-        Scale all generator outputs and ratings. Per Unit.
-    load_mult:
-        Scale all loads.
-    cvr_p:
-        CVR factor for voltage dependent loads. Active power component. cvr_p = (dP/P)/(dV/V)
-        To convert from ZIP parameters, kz, ki, kp: cvr_p = 2kz + 1ki
-    cvr_q:
-        CVR factor for voltage dependent loads. Reactive power component.cvr_q = (dQ/Q)/(dV/V)
-        To convert from ZIP parameters, kz, ki, kp: cvr_q = 2kz + 1ki
-    control_variable: str
-        Control variable for optimization. Options (case-insensitive):
-            None: Power flow only with no optimization. `objective_function` options will be ignored.
-            "P": Active power injections from generators. Active power outputs set in gen_data.csv will be ignored
-                 and reactive power outputs set in gen_data static.
-            "Q": Reactive power injections from generators.
-                 Active power outputs set in gen_data.csv are constant and reactive power outputs set in
-                 gen_data.csv will be ignored.
-    objective_function: str or Callable
-        Objective function for optimization. Options (case-insensitive):
-            "gen_max": Maximize output of generators. Uses scipy.optimize.linprog.
-            "load_min": Minimize total substation active power load. Uses scipy.optimize.linprog.
-            "loss_min": Minimize total line active power losses. Quadratic. Uses CVXPY.
-            "curtail_min": Minimize DER/Generator curtailment. Quadratic. Uses CVXPY.
-            "target_p_3ph": Substation load tracks active power target on each phase. Quadratic. Uses CVXPY.
-            "target_q_3ph": Substation load tracks reactive power target on each phase. Quadratic. Uses CVXPY.
-            "target_p_total": Substation load tracks total active power. Quadratic. Uses CVXPY.
-            "target_q_total": Substation load tracks total reactive power. Quadratic. Uses CVXPY.
-    show_plots: bool
-        (default False) If true, renders plots in browser
-    save_results: bool
-        (default False) If true, saves result data to CSVs in output_dir
-    save_plots: bool
-        (default False) If true, saves interactive plots as html to output folder
-    save_inputs: bool
-        (default False) If true, saves model CSV and other input parameters.
-        NOTE CSVs include any modifications made by other parameters such as gen_mult, load_mult, v_max, v_min, or
-        v_swing.
-```
+## Case and run_opf Options
+
+### `create_case()` / `Case.__init__()` parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `data_path` | required | Path to CSV directory, `.dss` file, or `.xml` CIM file |
+| `start_step` | `0` | Starting time step for multi-period analysis |
+| `n_steps` | `1` | Number of time steps (`1` = single-period) |
+| `delta_t` | `1.0` | Hours per time step (for battery energy calculations) |
+| `ignore_schedule` | `False` | If True, ignore schedule data; use multiplier 1.0 everywhere |
+| `ignore_gen` | `False` | If True, remove all generators |
+| `ignore_bat` | `False` | If True, remove all batteries |
+| `ignore_cap` | `False` | If True, remove all capacitors |
+| `ignore_reg` | `False` | If True, remove all regulators |
+
+When constructing `Case` directly, pass DataFrames instead of `data_path`:
+`branch_data`, `bus_data`, `gen_data`, `cap_data`, `reg_data`, `bat_data`, `schedules`.
+
+### `case.modify()` parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `v_swing` | Override substation voltage (scalar or 3-element array, p.u.) |
+| `v_min` | Override all bus voltage lower limits (p.u.) |
+| `v_max` | Override all bus voltage upper limits (p.u.) |
+| `gen_mult` | Scale all generator outputs and ratings |
+| `load_mult` | Scale all loads |
+| `cvr_p` | CVR factor for active power: `cvr_p = (dP/P)/(dV/V)`. ZIP equivalent: `2kz + ki` |
+| `cvr_q` | CVR factor for reactive power: `cvr_q = (dQ/Q)/(dV/V)`. ZIP equivalent: `2kz + ki` |
 
 # OpenDSS Interface
 You may also run using an OpenDSS model file as input.
@@ -325,5 +334,53 @@ case = opf.create_case(
 )
 ```
 
+# CIM XML Interface
+
+To load a power system model from a CIM XML file, install the optional `cim` extra first:
+
+```
+pip install distopf[cim]
+```
+
+Then pass the path to your `.xml` file:
+
+```python
+import distopf as opf
+case = opf.create_case(data_path="path/to/model.xml")
+```
+
+If the `cim` extra is not installed, calling `create_case` with a `.xml` file will raise:
+
+```
+ImportError: CIM file support requires optional dependencies.
+Install them with: pip install distopf[cim]
+```
+
 # Citing this tool
-Paper coming soon.
+
+Gray, Nathan T., Dubey, Anamika, Reiman, Andrew P., "DistOPF: Advanced Solutions for Distribution Optimal Power Flow Analysis - DistOPF v0.2 Documentation," (2025), https://doi.org/10.2172/2999990 
+```
+@techreport{osti_2999990,
+  author       = {Gray, Nathan T. and Dubey, Anamika and Reiman, Andrew P. and Sadnan, Rabayet},
+  title        = {DistOPF: Advanced Solutions for Distribution Optimal Power Flow Analysis - DistOPF v0.2 Documentation},
+  institution  = {Pacific Northwest National Laboratory (PNNL), Richland, WA (United States)},
+  doi          = {10.2172/2999990},
+  url          = {https://www.osti.gov/biblio/2999990},
+  place        = {United States},
+  year         = {2025},
+  month        = {03}}
+
+
+```
+R. Sadnan, N. Gray, A. Bose, A. Dubey and K. P. Schneider, "Scaling Distributed Optimal Renewable Energy Coordination in Unbalanced Distribution Systems," in IEEE Transactions on Sustainable Energy, vol. 17, no. 1, pp. 3-15, Jan. 2026, doi: 10.1109/TSTE.2024.3492976.
+```
+@ARTICLE{10745555,
+  author={Sadnan, Rabayet and Gray, Nathan and Bose, Anjan and Dubey, Anamika and Schneider, Kevin P.},
+  journal={IEEE Transactions on Sustainable Energy}, 
+  title={Scaling Distributed Optimal Renewable Energy Coordination in Unbalanced Distribution Systems}, 
+  year={2026},
+  volume={17},
+  number={1},
+  pages={3-15},
+  doi={10.1109/TSTE.2024.3492976}}
+```

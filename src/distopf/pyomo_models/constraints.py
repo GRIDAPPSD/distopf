@@ -14,22 +14,30 @@ sqrt2 = sqrt(2)
 sqrt3 = sqrt(3)
 
 
+
 def add_p_flow_constraints(m: LindistModelProtocol) -> None:
     """
     Add LinDistFlow power balance constraints.
     Active power: P_ij = sum(P_jk) + p_L - p_D
     """
 
-    def p_balance_rule(m: LindistModelProtocol, _id, ph, t):
-        load = m.p_load[_id, ph, t]
-        generation = m.p_gen[_id, ph, t] if (_id, ph, t) in m.p_gen else 0
-        p_bat = m.p_bat[_id, ph, t] if (_id, ph, t) in m.p_bat else 0
-        incoming_flow = m.p_flow[_id, ph, t]
+    def p_balance_rule(m: LindistModelProtocol, fb, tb, ph, t):
+        load = m.p_load[tb, ph, t]
+        generation = m.p_gen[tb, ph, t] if (tb, ph, t) in m.p_gen else 0
+        p_bat = m.p_bat[tb, ph, t] if (tb, ph, t) in m.p_bat else 0
+        incoming_flow = m.p_flow[fb, tb, ph, t]
         outgoing_flows = sum(
-            m.p_flow[to_bus, ph, t]
-            for to_bus in m.to_bus_map[_id]
-            if (to_bus, ph) in m.branch_phase_set
+            m.p_flow[fb2, tb2, ph, t]
+            for fb2, tb2 in m.to_bus_map[tb]
+            if (fb2, tb2, ph) in m.branch_phase_set
         )
+        # Center-tap transformer: primary phase feeds secondary s1+s2 flows
+        if ph not in ("s1", "s2"):
+            for fb2, tb2 in m.to_bus_map[tb]:
+                if getattr(m, "primary_phase_map", {}).get((fb2, tb2)) == ph:
+                    for sec_ph in ("s1", "s2"):
+                        if (fb2, tb2, sec_ph) in m.branch_phase_set:
+                            outgoing_flows += m.p_flow[fb2, tb2, sec_ph, t]
         return incoming_flow == outgoing_flows + load - generation - p_bat
 
     m.power_balance_p = pyo.Constraint(
@@ -43,17 +51,24 @@ def add_q_flow_constraints(m: LindistModelProtocol) -> None:
     Reactive power: Q_ij = sum(Q_jk) + q_L - q_D - q_C
     """
 
-    def q_balanced_rule(m: LindistModelProtocol, _id, ph, t):
-        load = m.q_load[_id, ph, t]
-        generation = m.q_gen[_id, ph, t] if (_id, ph, t) in m.q_gen else 0
-        q_bat = m.q_bat[_id, ph, t] if (_id, ph, t) in m.q_bat else 0
-        capacitor = m.q_cap[_id, ph, t] if (_id, ph, t) in m.q_cap else 0
-        incoming_flow = m.q_flow[_id, ph, t]
+    def q_balanced_rule(m: LindistModelProtocol, fb, tb, ph, t):
+        load = m.q_load[tb, ph, t]
+        generation = m.q_gen[tb, ph, t] if (tb, ph, t) in m.q_gen else 0
+        q_bat = m.q_bat[tb, ph, t] if (tb, ph, t) in m.q_bat else 0
+        capacitor = m.q_cap[tb, ph, t] if (tb, ph, t) in m.q_cap else 0
+        incoming_flow = m.q_flow[fb, tb, ph, t]
         outgoing_flows = sum(
-            m.q_flow[to_bus, ph, t]
-            for to_bus in m.to_bus_map[_id]
-            if (to_bus, ph) in m.branch_phase_set
+            m.q_flow[fb2, tb2, ph, t]
+            for fb2, tb2 in m.to_bus_map[tb]
+            if (fb2, tb2, ph) in m.branch_phase_set
         )
+        # Center-tap transformer: primary phase feeds secondary s1+s2 flows
+        if ph not in ("s1", "s2"):
+            for fb2, tb2 in m.to_bus_map[tb]:
+                if getattr(m, "primary_phase_map", {}).get((fb2, tb2)) == ph:
+                    for sec_ph in ("s1", "s2"):
+                        if (fb2, tb2, sec_ph) in m.branch_phase_set:
+                            outgoing_flows += m.q_flow[fb2, tb2, sec_ph, t]
         return incoming_flow == outgoing_flows + load - generation - capacitor - q_bat
 
     m.power_balance_q = pyo.Constraint(
@@ -70,9 +85,37 @@ def add_voltage_drop_constraints(m: LindistModelProtocol) -> None:
     Simplified for LinDistFlow: v_j = v_i - 2*(r*P + x*Q)
     """
 
-    def voltage_drop_rule(m: LindistModelProtocol, _id, ph, t):
-        if (_id, ph) in m.reg_phase_set:
+    def voltage_drop_rule(m: LindistModelProtocol, fb, tb, ph, t):
+        if (fb, tb, ph) in m.reg_phase_set:
             return pyo.Constraint.Skip
+
+        # Triplex (secondary) phases: 2-wire voltage drop, no sqrt(3) cross-terms
+        if ph in ("s1", "s2"):
+            other = "s2" if ph == "s1" else "s1"
+            self_pair = ph + ph  # "s1s1" or "s2s2"
+            cross_pair = "s1s2"
+
+            voltage_drop = (
+                2 * m.r[fb, tb, self_pair] * m.p_flow[fb, tb, ph, t]
+                + 2 * m.x[fb, tb, self_pair] * m.q_flow[fb, tb, ph, t]
+            )
+            if (fb, tb, other) in m.branch_phase_set:
+                voltage_drop += (
+                    2 * m.r[fb, tb, cross_pair] * m.p_flow[fb, tb, other, t]
+                    + 2 * m.x[fb, tb, cross_pair] * m.q_flow[fb, tb, other, t]
+                )
+
+            # For center-tap transformer branches, the from bus has the primary
+            # phase (e.g. "a") not the secondary phase.
+            primary_ph = m.primary_phase_map.get((fb, tb), None)
+            if primary_ph is not None:
+                # Center-tap xfmr: reference primary phase voltage at from bus
+                return m.v2[tb, ph, t] == m.v2[fb, primary_ph, t] - voltage_drop
+            else:
+                # Triplex line: same phase on both sides
+                return m.v2[tb, ph, t] == m.v2[fb, ph, t] - voltage_drop
+
+        # Standard 3-phase voltage drop
         # here, "a" represents the current phase,
         # b an c represent next and previous phase
         a = ph
@@ -82,19 +125,27 @@ def add_voltage_drop_constraints(m: LindistModelProtocol) -> None:
         aa = "".join(sorted(a + a))
 
         voltage_drop = (
-            2 * m.r[_id, aa] * m.p_flow[_id, ph, t]
-            + 2 * m.x[_id, aa] * m.q_flow[_id, ph, t]
+            2 * m.r[fb, tb, aa] * m.p_flow[fb, tb, ph, t]
+            + 2 * m.x[fb, tb, aa] * m.q_flow[fb, tb, ph, t]
         )
-        if (_id, b) in m.branch_phase_set:
+        if (fb, tb, b) in m.branch_phase_set:
             ab = "".join(sorted(a + b))
-            voltage_drop += (-m.r[_id, ab] + sqrt3 * m.x[_id, ab]) * m.p_flow[_id, b, t]
-            voltage_drop += (-m.x[_id, ab] - sqrt3 * m.r[_id, ab]) * m.q_flow[_id, b, t]
-        if (_id, c) in m.branch_phase_set:
+            voltage_drop += (-m.r[fb, tb, ab] + sqrt3 * m.x[fb, tb, ab]) * m.p_flow[
+                fb, tb, b, t
+            ]
+            voltage_drop += (-m.x[fb, tb, ab] - sqrt3 * m.r[fb, tb, ab]) * m.q_flow[
+                fb, tb, b, t
+            ]
+        if (fb, tb, c) in m.branch_phase_set:
             ac = "".join(sorted(a + c))
-            voltage_drop += (-m.r[_id, ac] - sqrt3 * m.x[_id, ac]) * m.p_flow[_id, c, t]
-            voltage_drop += (-m.x[_id, ac] + sqrt3 * m.r[_id, ac]) * m.q_flow[_id, c, t]
+            voltage_drop += (-m.r[fb, tb, ac] - sqrt3 * m.x[fb, tb, ac]) * m.p_flow[
+                fb, tb, c, t
+            ]
+            voltage_drop += (-m.x[fb, tb, ac] + sqrt3 * m.r[fb, tb, ac]) * m.q_flow[
+                fb, tb, c, t
+            ]
 
-        return m.v2[_id, ph, t] == m.v2[m.from_bus_map[_id], ph, t] - voltage_drop
+        return m.v2[tb, ph, t] == m.v2[fb, ph, t] - voltage_drop
 
     m.voltage_drop = pyo.Constraint(
         m.branch_phase_set, m.time_set, rule=voltage_drop_rule
@@ -107,17 +158,16 @@ def add_regulator_constraints(m: LindistModelProtocol) -> None:
     v_reg = vi*reg_ratio^2
     """
 
-    def regulator_v_drop(m: LindistModelProtocol, _id, ph, t):
-        raa = m.r[_id, ph + ph]
-        xaa = m.x[_id, ph + ph]
-        voltage_drop = 2 * raa * m.p_flow[_id, ph, t] + 2 * xaa * m.q_flow[_id, ph, t]
-        return m.v2[_id, ph, t] == m.v2_reg[_id, ph, t] - voltage_drop
-
-    def regulator_rule(m: LindistModelProtocol, _id, ph, t):
-        return (
-            m.v2_reg[_id, ph, t]
-            == m.v2[m.from_bus_map[_id], ph, t] * m.reg_ratio[_id, ph] ** 2
+    def regulator_v_drop(m: LindistModelProtocol, fb, tb, ph, t):
+        raa = m.r[fb, tb, ph + ph]
+        xaa = m.x[fb, tb, ph + ph]
+        voltage_drop = (
+            2 * raa * m.p_flow[fb, tb, ph, t] + 2 * xaa * m.q_flow[fb, tb, ph, t]
         )
+        return m.v2[tb, ph, t] == m.v2_reg[fb, tb, ph, t] - voltage_drop
+
+    def regulator_rule(m: LindistModelProtocol, fb, tb, ph, t):
+        return m.v2_reg[fb, tb, ph, t] == m.v2[fb, ph, t] * m.reg_ratio[fb, tb, ph] ** 2
 
     m.regulator_voltage_drop = pyo.Constraint(
         m.reg_phase_set, m.time_set, rule=regulator_v_drop
@@ -168,18 +218,20 @@ def add_generator_constant_q_constraints(m: LindistModelProtocol) -> None:
 
 def add_generator_constant_p_constraints_q_control(m: LindistModelProtocol) -> None:
     def _rule(m: LindistModelProtocol, _id, ph, t):
-        if m.gen_control_type[_id, ph] != ControlVariable.Q:
-            return pyo.Constraint.Skip
-        return m.p_gen[_id, ph, t] == m.p_gen_nom[_id, ph, t]
+        ct = m.gen_control_type[_id, ph]
+        if ct in (ControlVariable.NONE, ControlVariable.Q):
+            return m.p_gen[_id, ph, t] == m.p_gen_nom[_id, ph, t]
+        return pyo.Constraint.Skip
 
     m.constant_p_gen = pyo.Constraint(m.gen_phase_set, m.time_set, rule=_rule)
 
 
 def add_generator_constant_q_constraints_p_control(m: LindistModelProtocol) -> None:
     def _rule(m: LindistModelProtocol, _id, ph, t):
-        if m.gen_control_type[_id, ph] != ControlVariable.P:
-            return pyo.Constraint.Skip
-        return m.q_gen[_id, ph, t] == m.q_gen_nom[_id, ph, t]
+        ct = m.gen_control_type[_id, ph]
+        if ct in (ControlVariable.NONE, ControlVariable.P):
+            return m.q_gen[_id, ph, t] == m.q_gen_nom[_id, ph, t]
+        return pyo.Constraint.Skip
 
     m.constant_q_gen = pyo.Constraint(m.gen_phase_set, m.time_set, rule=_rule)
 
@@ -299,6 +351,8 @@ def add_generator_limits(m: LindistModelProtocol) -> None:
     """Add generator bounds following the original base.py logic"""
 
     def p_gen_bounds(m: LindistModelProtocol, _id, ph, t):
+        if m.gen_control_type[_id, ph] == ControlVariable.NONE:
+            return pyo.Constraint.Skip
         return (
             0,
             m.p_gen[_id, ph, t],
@@ -306,6 +360,8 @@ def add_generator_limits(m: LindistModelProtocol) -> None:
         )
 
     def q_gen_bounds(m: LindistModelProtocol, _id, ph, t):
+        if m.gen_control_type[_id, ph] == ControlVariable.NONE:
+            return pyo.Constraint.Skip
         if m.gen_control_type[_id, ph] == ControlVariable.Q:
             q_max = sqrt(max(0, m.s_rated[_id, ph] ** 2 - m.p_gen_nom[_id, ph, t] ** 2))
             return (
@@ -341,8 +397,10 @@ def add_octagonal_thermal_constraints(m: LindistModelProtocol) -> None:
 
     where c = sqrt(2) - 1 ≈ 0.4142
 
-    Requires branch_data to have columns 'sa_max', 'sb_max', 'sc_max' for
-    per-phase apparent power limits. Branches without limits are skipped.
+    Requires branch_data to have columns for branch apparent power limits:
+    primary phases: 's_a_max', 's_b_max', 's_c_max'
+    triplex phases: 's_s1_max', 's_s2_max' (legacy: 's1_max', 's2_max')
+    Branches without limits are skipped.
     """
     # Check if thermal limits exist in the model
     if not hasattr(m, "s_branch_max"):
@@ -350,69 +408,77 @@ def add_octagonal_thermal_constraints(m: LindistModelProtocol) -> None:
 
     c = sqrt2 - 1  # ≈ 0.4142
 
-    def _has_thermal_limit(m, _id, ph):
+    def _has_thermal_limit(m, fb, tb, ph):
         """Check if branch has a valid thermal limit."""
-        limit = pyo.value(m.s_branch_max.get((_id, ph), None))
+        limit = pyo.value(m.s_branch_max.get((fb, tb, ph), None))
         return limit is not None and limit > 0
 
     # Quadrant 1: +P, +Q
-    def thermal_1(m: LindistModelProtocol, _id, ph, t):
-        if not _has_thermal_limit(m, _id, ph):
+    def thermal_1(m: LindistModelProtocol, fb, tb, ph, t):
+        if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
         return (
-            c * m.p_flow[_id, ph, t] + m.q_flow[_id, ph, t] <= m.s_branch_max[_id, ph]
+            c * m.p_flow[fb, tb, ph, t] + m.q_flow[fb, tb, ph, t]
+            <= m.s_branch_max[fb, tb, ph]
         )
 
-    def thermal_2(m: LindistModelProtocol, _id, ph, t):
-        if not _has_thermal_limit(m, _id, ph):
+    def thermal_2(m: LindistModelProtocol, fb, tb, ph, t):
+        if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
         return (
-            m.p_flow[_id, ph, t] + c * m.q_flow[_id, ph, t] <= m.s_branch_max[_id, ph]
+            m.p_flow[fb, tb, ph, t] + c * m.q_flow[fb, tb, ph, t]
+            <= m.s_branch_max[fb, tb, ph]
         )
 
     # Quadrant 4: +P, -Q
-    def thermal_3(m: LindistModelProtocol, _id, ph, t):
-        if not _has_thermal_limit(m, _id, ph):
+    def thermal_3(m: LindistModelProtocol, fb, tb, ph, t):
+        if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
         return (
-            m.p_flow[_id, ph, t] - c * m.q_flow[_id, ph, t] <= m.s_branch_max[_id, ph]
+            m.p_flow[fb, tb, ph, t] - c * m.q_flow[fb, tb, ph, t]
+            <= m.s_branch_max[fb, tb, ph]
         )
 
-    def thermal_4(m: LindistModelProtocol, _id, ph, t):
-        if not _has_thermal_limit(m, _id, ph):
+    def thermal_4(m: LindistModelProtocol, fb, tb, ph, t):
+        if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
         return (
-            c * m.p_flow[_id, ph, t] - m.q_flow[_id, ph, t] <= m.s_branch_max[_id, ph]
+            c * m.p_flow[fb, tb, ph, t] - m.q_flow[fb, tb, ph, t]
+            <= m.s_branch_max[fb, tb, ph]
         )
 
     # Quadrant 3: -P, -Q
-    def thermal_5(m: LindistModelProtocol, _id, ph, t):
-        if not _has_thermal_limit(m, _id, ph):
+    def thermal_5(m: LindistModelProtocol, fb, tb, ph, t):
+        if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
         return (
-            -c * m.p_flow[_id, ph, t] - m.q_flow[_id, ph, t] <= m.s_branch_max[_id, ph]
+            -c * m.p_flow[fb, tb, ph, t] - m.q_flow[fb, tb, ph, t]
+            <= m.s_branch_max[fb, tb, ph]
         )
 
-    def thermal_6(m: LindistModelProtocol, _id, ph, t):
-        if not _has_thermal_limit(m, _id, ph):
+    def thermal_6(m: LindistModelProtocol, fb, tb, ph, t):
+        if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
         return (
-            -m.p_flow[_id, ph, t] - c * m.q_flow[_id, ph, t] <= m.s_branch_max[_id, ph]
+            -m.p_flow[fb, tb, ph, t] - c * m.q_flow[fb, tb, ph, t]
+            <= m.s_branch_max[fb, tb, ph]
         )
 
     # Quadrant 2: -P, +Q
-    def thermal_7(m: LindistModelProtocol, _id, ph, t):
-        if not _has_thermal_limit(m, _id, ph):
+    def thermal_7(m: LindistModelProtocol, fb, tb, ph, t):
+        if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
         return (
-            -m.p_flow[_id, ph, t] + c * m.q_flow[_id, ph, t] <= m.s_branch_max[_id, ph]
+            -m.p_flow[fb, tb, ph, t] + c * m.q_flow[fb, tb, ph, t]
+            <= m.s_branch_max[fb, tb, ph]
         )
 
-    def thermal_8(m: LindistModelProtocol, _id, ph, t):
-        if not _has_thermal_limit(m, _id, ph):
+    def thermal_8(m: LindistModelProtocol, fb, tb, ph, t):
+        if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
         return (
-            -c * m.p_flow[_id, ph, t] + m.q_flow[_id, ph, t] <= m.s_branch_max[_id, ph]
+            -c * m.p_flow[fb, tb, ph, t] + m.q_flow[fb, tb, ph, t]
+            <= m.s_branch_max[fb, tb, ph]
         )
 
     m.thermal_limit_1 = pyo.Constraint(m.branch_phase_set, m.time_set, rule=thermal_1)
@@ -435,25 +501,27 @@ def add_circular_thermal_constraints(m: LindistModelProtocol) -> None:
     This is a nonlinear (quadratic) constraint requiring a nonlinear solver
     (e.g., IPOPT) or a solver supporting second-order cone constraints.
 
-    Requires branch_data to have columns 'sa_max', 'sb_max', 'sc_max' for
-    per-phase apparent power limits. Branches without limits are skipped.
+    Requires branch_data to have columns for branch apparent power limits:
+    primary phases: 's_a_max', 's_b_max', 's_c_max'
+    triplex phases: 's_s1_max', 's_s2_max' (legacy: 's1_max', 's2_max')
+    Branches without limits are skipped.
     """
     if not hasattr(m, "s_branch_max"):
         return
 
-    def _has_thermal_limit(m, _id, ph):
+    def _has_thermal_limit(m, fb, tb, ph):
         """Check if branch has a valid thermal limit."""
-        if (_id, ph) not in m.s_branch_max:
+        if (fb, tb, ph) not in m.s_branch_max:
             return False
-        limit = pyo.value(m.s_branch_max[_id, ph])
+        limit = pyo.value(m.s_branch_max[fb, tb, ph])
         return limit is not None and limit > 0
 
-    def thermal_circle(m: LindistModelProtocol, _id, ph, t):
-        if not _has_thermal_limit(m, _id, ph):
+    def thermal_circle(m: LindistModelProtocol, fb, tb, ph, t):
+        if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
         return (
-            m.p_flow[_id, ph, t] ** 2 + m.q_flow[_id, ph, t] ** 2
-            <= m.s_branch_max[_id, ph] ** 2
+            m.p_flow[fb, tb, ph, t] ** 2 + m.q_flow[fb, tb, ph, t] ** 2
+            <= m.s_branch_max[fb, tb, ph] ** 2
         )
 
     m.thermal_limit_circle = pyo.Constraint(
@@ -719,8 +787,8 @@ def add_regulator_tap_sos1_constraints(m: LindistModelProtocol) -> None:
     sum_k(u_reg[id, ph, k, t]) == 1 for all (id, ph, t)
     """
 
-    def sos1_rule(m: LindistModelProtocol, _id, ph, t):
-        return sum(m.u_reg[_id, ph, k, t] for k in m.tap_set) == 1
+    def sos1_rule(m: LindistModelProtocol, fb, tb, ph, t):
+        return sum(m.u_reg[fb, tb, ph, k, t] for k in m.tap_set) == 1
 
     m.reg_tap_sos1 = pyo.Constraint(m.reg_phase_set, m.time_set, rule=sos1_rule)
 
@@ -733,23 +801,23 @@ def add_regulator_mi_with_impedance_constraints(m: LindistModelProtocol) -> None
     Then: v_j = v2_reg - 2*r*p_ij - 2*x*q_ij
     """
 
-    def reg_tap_upper(m: LindistModelProtocol, _id, ph, k, t):
-        i = m.from_bus_map[_id]
-        return m.v2_reg[_id, ph, t] - m.tap_ratio_squared[k] * m.v2[
-            i, ph, t
-        ] <= m.reg_big_m * (1 - m.u_reg[_id, ph, k, t])
+    def reg_tap_upper(m: LindistModelProtocol, fb, tb, ph, k, t):
+        return m.v2_reg[fb, tb, ph, t] - m.tap_ratio_squared[k] * m.v2[
+            fb, ph, t
+        ] <= m.reg_big_m * (1 - m.u_reg[fb, tb, ph, k, t])
 
-    def reg_tap_lower(m: LindistModelProtocol, _id, ph, k, t):
-        i = m.from_bus_map[_id]
-        return m.v2_reg[_id, ph, t] - m.tap_ratio_squared[k] * m.v2[
-            i, ph, t
-        ] >= -m.reg_big_m * (1 - m.u_reg[_id, ph, k, t])
+    def reg_tap_lower(m: LindistModelProtocol, fb, tb, ph, k, t):
+        return m.v2_reg[fb, tb, ph, t] - m.tap_ratio_squared[k] * m.v2[
+            fb, ph, t
+        ] >= -m.reg_big_m * (1 - m.u_reg[fb, tb, ph, k, t])
 
-    def reg_v_drop_rule(m: LindistModelProtocol, _id, ph, t):
-        raa = m.r[_id, ph + ph]
-        xaa = m.x[_id, ph + ph]
-        voltage_drop = 2 * raa * m.p_flow[_id, ph, t] + 2 * xaa * m.q_flow[_id, ph, t]
-        return m.v2[_id, ph, t] == m.v2_reg[_id, ph, t] - voltage_drop
+    def reg_v_drop_rule(m: LindistModelProtocol, fb, tb, ph, t):
+        raa = m.r[fb, tb, ph + ph]
+        xaa = m.x[fb, tb, ph + ph]
+        voltage_drop = (
+            2 * raa * m.p_flow[fb, tb, ph, t] + 2 * xaa * m.q_flow[fb, tb, ph, t]
+        )
+        return m.v2[tb, ph, t] == m.v2_reg[fb, tb, ph, t] - voltage_drop
 
     m.reg_tap_upper = pyo.Constraint(
         m.reg_phase_set, m.tap_set, m.time_set, rule=reg_tap_upper
@@ -776,18 +844,18 @@ def add_regulator_tap_change_limit_constraints(
     if not getattr(m, "reg_mi_enabled", False):
         return
 
-    def tap_change_limit_upper(m: LindistModelProtocol, _id, ph, t):
+    def tap_change_limit_upper(m: LindistModelProtocol, fb, tb, ph, t):
         if t == pyo.value(m.start_step):
             return pyo.Constraint.Skip
-        tap_t = sum(k * m.u_reg[_id, ph, k, t] for k in m.tap_set)
-        tap_prev = sum(k * m.u_reg[_id, ph, k, t - 1] for k in m.tap_set)
+        tap_t = sum(k * m.u_reg[fb, tb, ph, k, t] for k in m.tap_set)
+        tap_prev = sum(k * m.u_reg[fb, tb, ph, k, t - 1] for k in m.tap_set)
         return tap_t - tap_prev <= max_tap_change
 
-    def tap_change_limit_lower(m: LindistModelProtocol, _id, ph, t):
+    def tap_change_limit_lower(m: LindistModelProtocol, fb, tb, ph, t):
         if t == pyo.value(m.start_step):
             return pyo.Constraint.Skip
-        tap_t = sum(k * m.u_reg[_id, ph, k, t] for k in m.tap_set)
-        tap_prev = sum(k * m.u_reg[_id, ph, k, t - 1] for k in m.tap_set)
+        tap_t = sum(k * m.u_reg[fb, tb, ph, k, t] for k in m.tap_set)
+        tap_prev = sum(k * m.u_reg[fb, tb, ph, k, t - 1] for k in m.tap_set)
         return tap_t - tap_prev >= -max_tap_change
 
     m.reg_tap_change_upper = pyo.Constraint(
