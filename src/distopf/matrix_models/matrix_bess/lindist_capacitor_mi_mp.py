@@ -5,7 +5,7 @@ from numpy import zeros
 from scipy.sparse import csr_array, lil_array, vstack
 
 from distopf.matrix_models.matrix_bess.base_mp import LinDistBaseMP
-from distopf.utils import get
+from distopf.utils.input_handlers import get
 
 
 class LinDistModelCapMI_MP(LinDistBaseMP):

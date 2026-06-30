@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from distopf.api import Case
 from typing import Optional
-from distopf.utils import get
+from distopf.utils.input_handlers import get
 from distopf.results import PowerFlowResult
 
 PHASE_IDX_MAP = {"a": 0, "b": 1, "c": 2, "s1": 3, "s2": 4}

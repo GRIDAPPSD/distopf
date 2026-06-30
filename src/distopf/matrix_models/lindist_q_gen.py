@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import distopf as opf
 from distopf.matrix_models.base import LinDistBase
-from distopf.utils import get
+from distopf.utils.input_handlers import get
 
 
 class LinDistModelQGen(LinDistBase):

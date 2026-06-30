@@ -29,7 +29,7 @@ import distopf.matrix_models.multiperiod as mpopf
 from distopf.api import create_case
 from distopf import CASES_DIR
 
-from distopf.benchmarking import (
+from distopf.utils.results_comparison import (
     SolverResult,
     compare_results,
     format_comparison_table,
