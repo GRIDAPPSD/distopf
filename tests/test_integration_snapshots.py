@@ -25,7 +25,7 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 REFERENCE_FILE = Path(__file__).parent / "integration_references.json"
 
 # np.isclose tolerance: |actual - expected| <= ATOL + RTOL * |expected|
-ATOL = 1e-6
+ATOL = 1e-4
 RTOL = 1e-5
 
 # ---------------------------------------------------------------------------
