@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Optional
 import pandas as pd
+import json
 
 _FIELD_ALIASES = {
     "p_flows": "active_power_flows",
@@ -140,6 +141,7 @@ class PowerFlowResult:
     dual_voltage_limits_upper: Optional[pd.DataFrame] = None
 
     # Solver metadata
+    metadata: Optional[dict] = None  # Additional solver metadata (e.g., solver options, logs)
     objective_value: Optional[float] = None
     converged: bool = True
     iterations: Optional[int] = None
@@ -183,23 +185,17 @@ class PowerFlowResult:
         return asdict(self)
 
     def save(self, output_dir: Path | str) -> None:
-        """Save all results to CSV files.
-
-        Parameters
-        ----------
-        output_dir : Path or str
-            Directory to save results to (created if doesn't exist)
-        """
+        """Save results, input data, and a unified run config for replay."""
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save each DataFrame that exists
+        # 1. Result DataFrames
         for name, val in self.to_dict().items():
             if val is not None and hasattr(val, "to_csv"):
                 val.to_csv(output_dir / f"{name}.csv", index=False)
 
-        # Save metadata
-        metadata = {
+        # 2. Solver metadata
+        solver_meta = {
             "objective_value": self.objective_value,
             "converged": self.converged,
             "iterations": self.iterations,
@@ -207,7 +203,28 @@ class PowerFlowResult:
             "solve_time": self.solve_time,
             "solver": self.solver,
         }
-        pd.Series(metadata).to_csv(output_dir / "metadata.csv")
+        pd.Series(solver_meta).to_csv(output_dir / "solver_metadata.csv")
+
+        # 3. Input data (writes input/*.csv and input/case_metadata.json)
+        if self.case is not None:
+            self.case.save(output_dir / "input")
+
+        # 4. Unified run config — the single file replay needs
+        if self.metadata and "call" in self.metadata:
+            run_config = {
+                "schema_version": 1,
+                "provenance": self.metadata.get("provenance", {}),
+                "case": {
+                    "source": "csv",
+                    "path": "input",
+                    "kwargs": (
+                        self.case._construction_kwargs() if self.case is not None else {}
+                    ),
+                },
+                "call": self.metadata["call"],
+            }
+            with open(output_dir / "run_config.json", "w") as f:
+                json.dump(run_config, f, indent=2, default=str)
 
     def summary(self) -> str:
         """Return a summary string of the results.

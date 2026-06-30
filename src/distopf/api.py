@@ -4,6 +4,7 @@ import warnings
 import pandas as pd
 from typing import Optional, TYPE_CHECKING
 from collections.abc import Callable
+from distopf.utils.call_recorder import record_call
 
 logger = logging.getLogger("distopf")
 
@@ -12,7 +13,7 @@ logger = logging.getLogger("distopf")
 if TYPE_CHECKING:
     from distopf.matrix_models.base import LinDistBase
 
-from distopf.utils import (
+from distopf.utils.input_handlers import (
     handle_branch_input,
     handle_bus_input,
     handle_gen_input,
@@ -358,7 +359,7 @@ class Case:
     # -------------------------------------------------------------------------
     # Analysis Methods
     # -------------------------------------------------------------------------
-
+    @record_call
     def run_pf(self, raw_result: bool = False):
         """
         Run unconstrained power flow analysis.
@@ -392,6 +393,7 @@ class Case:
         fbs = FBS(self)
         return fbs.solve(max_iterations=100, tolerance=1e-6, verbose=False)
 
+    @record_call
     def run_fbs(
         self, max_iterations: int = 100, tolerance: float = 1e-6, verbose: bool = False
     ):
@@ -449,6 +451,7 @@ class Case:
             if handler:
                 self._disable_verbose(handler)
 
+    @record_call
     def run_opf(
         self,
         objective: Optional[str | Callable] = None,
@@ -843,7 +846,9 @@ class Case:
         gen.loc[i, ["q_a_min", "q_b_min", "q_c_min"]] = q_min  # unlimited
 
         gen.loc[:, ["p_a", "p_b", "p_c", "q_a", "q_b", "q_c"]] = (
-            gen.loc[:, ["p_a", "p_b", "p_c", "q_a", "q_b", "q_c"]].astype(float).fillna(0.0)
+            gen.loc[:, ["p_a", "p_b", "p_c", "q_a", "q_b", "q_c"]]
+            .astype(float)
+            .fillna(0.0)
         )
         gen.loc[:, [f"s{a}_max" for a in "abc"]] = (
             gen.loc[:, [f"s{a}_max" for a in "abc"]].astype(float).fillna(0.0)
@@ -932,6 +937,24 @@ class Case:
             "schedule_summary": sched_summary,
         }
 
+    def _construction_kwargs(self) -> dict:
+        """Kwargs needed by ``create_case`` to reconstruct this Case from CSVs.
+
+        These are the time-series and ``ignore_*`` flags that aren't captured in
+        the saved CSV input files themselves but are required for an identical
+        reconstruction via ``create_case``.
+        """
+        return {
+            "start_step": self.start_step,
+            "n_steps": self.n_steps,
+            "delta_t": self.delta_t,
+            "ignore_schedule": self.ignore_schedule,
+            "ignore_gen": self.ignore_gen,
+            "ignore_bat": self.ignore_bat,
+            "ignore_cap": self.ignore_cap,
+            "ignore_reg": self.ignore_reg,
+        }
+
     def describe(self) -> str:
         """Return a human-readable summary of this Case.
 
@@ -1012,6 +1035,62 @@ class Case:
 
         with open(output_dir / "case_metadata.json", "w") as f:
             json.dump(self._metadata(), f, indent=2)
+
+
+def replay(run_config_path: Path | str):
+    """Reproduce a previous analysis run from a unified ``run_config.json``.
+
+    The config contains the case source path (resolved relative to the config
+    file's location), the construction kwargs for ``create_case``, and the
+    original method call with its arguments.
+
+    Parameters
+    ----------
+    run_config_path : Path or str
+        Path to a ``run_config.json`` file written by ``PowerFlowResult.save()``.
+
+    Returns
+    -------
+    PowerFlowResult
+        The result of re-executing the recorded call.
+
+    Raises
+    ------
+    ValueError
+        If the run was marked non-replayable (e.g. a custom Callable objective).
+    """
+    import json
+    run_config_path = Path(run_config_path)
+    with open(run_config_path) as f:
+        config = json.load(f)
+
+    schema_version = config.get("schema_version")
+    if schema_version != 1:
+        raise ValueError(
+            f"Unsupported run_config schema_version: {schema_version} "
+            f"(this distopf supports version 1)"
+        )
+
+    call = config["call"]
+    if not call.get("replayable", True):
+        bad = [
+            k for k, v in call["arguments"].items()
+            if isinstance(v, dict) and v.get("__nonserializable__")
+        ]
+        raise ValueError(f"Run is not replayable (non-serializable args: {bad})")
+
+    case_info = config["case"]
+    case_path = Path(case_info["path"])
+    if not case_path.is_absolute():
+        case_path = (run_config_path.parent / case_path).resolve()
+
+    case = create_case(
+        case_path,
+        model_type=case_info.get("source"),
+        **case_info.get("kwargs", {}),
+    )
+
+    return getattr(case, call["method"])(**call["arguments"])
 
 
 def create_case(
