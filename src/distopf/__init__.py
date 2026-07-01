@@ -38,7 +38,7 @@ logger.addHandler(_logging.NullHandler())
 # Lightweight imports (always loaded) - these are fast
 # =============================================================================
 from distopf.cases import CASES_DIR
-from distopf.api import Case, create_case
+from distopf.api import Case, create_case, replay
 from distopf.results import PowerFlowResult
 from distopf.fbs import run_fbs_with_opf_setpoints
 
@@ -85,7 +85,7 @@ from distopf.plot import (
 from distopf.wrappers.matrix_wrapper import create_model, auto_solve
 from distopf.fbs import fbs_solve, FBS
 
-from distopf.utils import (
+from distopf.utils.input_handlers import (
     get,
     handle_bus_input,
     handle_branch_input,
@@ -138,6 +138,7 @@ __all__ = [
     # Data containers
     "Case",
     "create_case",
+    "replay",
     # Result containers
     "PowerFlowResult",
     "run_fbs_with_opf_setpoints",

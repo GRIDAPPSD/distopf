@@ -53,7 +53,7 @@ def test_result_save_and_summary(tmp_path):
     outdir = tmp_path / "results"
     res.save(outdir)
     assert (outdir / "voltages.csv").exists()
-    assert (outdir / "metadata.csv").exists()
+    assert (outdir / "run_config.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +121,7 @@ class TestPowerFlowResultMethods:
         result = case.run_pf()
         result.save(tmp_path / "results")
 
-        assert (tmp_path / "results" / "metadata.csv").exists()
+        assert (tmp_path / "results" / "run_config.json").exists()
         assert (tmp_path / "results" / "voltages.csv").exists()
         assert (tmp_path / "results" / "active_power_flows.csv").exists()
         assert (tmp_path / "results" / "reactive_power_flows.csv").exists()
@@ -130,7 +130,7 @@ class TestPowerFlowResultMethods:
         """save() on empty result should still create metadata."""
         result = PowerFlowResult()
         result.save(tmp_path / "empty_results")
-        assert (tmp_path / "empty_results" / "metadata.csv").exists()
+        assert (tmp_path / "empty_results" / "solver_metadata.csv").exists()
 
     def test_plot_voltages_raises_without_data(self):
         """plot_voltages() should raise if no voltage data."""

@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 import distopf as opf
-from distopf.utils import (
+from distopf.utils.input_handlers import (
     get,
     handle_bat_input,
     handle_branch_input,

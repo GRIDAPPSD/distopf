@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from distopf.results import PowerFlowResult
 
 
+
 class PyomoWrapper(Wrapper):
     """Pyomo/IPOPT wrapper for OPF optimization.
 
@@ -68,6 +69,7 @@ class PyomoWrapper(Wrapper):
             If raw_result=False: PowerFlowResult with all results
             If raw_result=True: Pyomo PyoResult object with all variable results
         """
+        
         model_type = kwargs.pop("model_type", "lindist")
 
         if model_type == "branchflow":
