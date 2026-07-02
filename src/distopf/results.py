@@ -141,7 +141,9 @@ class PowerFlowResult:
     dual_voltage_limits_upper: Optional[pd.DataFrame] = None
 
     # Solver metadata
-    metadata: Optional[dict] = None  # Additional solver metadata (e.g., solver options, logs)
+    metadata: Optional[dict] = (
+        None  # Additional solver metadata (e.g., solver options, logs)
+    )
     objective_value: Optional[float] = None
     converged: bool = True
     iterations: Optional[int] = None
@@ -151,7 +153,8 @@ class PowerFlowResult:
     result_type: str = (
         "opf"  # "pf" for power flow, "opf" for optimal power flow, "fbs" for FBS
     )
-
+    log: str = ""
+    solver_metrics: Optional[dict] = field(default=None)
     # case metadata
     backend: Optional[str] = None  # e.g., "pyomo", "matrix_bess", "matrix", "fbs"
     termination_condition: Optional[str] = (
@@ -194,8 +197,8 @@ class PowerFlowResult:
             if val is not None and hasattr(val, "to_csv"):
                 val.to_csv(output_dir / f"{name}.csv", index=False)
 
-        # 2. Solver metadata
-        solver_meta = {
+        # 2. Solver metrics
+        solver_metrics = {
             "objective_value": self.objective_value,
             "converged": self.converged,
             "iterations": self.iterations,
@@ -203,7 +206,8 @@ class PowerFlowResult:
             "solve_time": self.solve_time,
             "solver": self.solver,
         }
-        pd.Series(solver_meta).to_csv(output_dir / "solver_metadata.csv")
+        with open(output_dir / "solver_metrics.json", "w") as f:
+            json.dump(solver_metrics, f, indent=2, default=str)
 
         # 3. Input data (writes input/*.csv and input/case_metadata.json)
         if self.case is not None:
@@ -218,13 +222,20 @@ class PowerFlowResult:
                     "source": "csv",
                     "path": "input",
                     "kwargs": (
-                        self.case._construction_kwargs() if self.case is not None else {}
+                        self.case._construction_kwargs()
+                        if self.case is not None
+                        else {}
                     ),
                 },
                 "call": self.metadata["call"],
             }
             with open(output_dir / "run_config.json", "w") as f:
                 json.dump(run_config, f, indent=2, default=str)
+        
+        #5. Log file
+        if self.log:
+            with open(output_dir / "solver.log", "w") as f:
+                f.write(self.log)
 
     def summary(self) -> str:
         """Return a summary string of the results.

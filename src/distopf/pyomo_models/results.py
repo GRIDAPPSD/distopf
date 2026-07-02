@@ -23,13 +23,18 @@ class PyoResult:
     def __init__(
         self,
         model: pyo.ConcreteModel | LindistModelProtocol,
+        results,
+        solve_time: float | None = None,
+        log: str = "",
         objective_value: float | None = None,
         extract_duals: bool = False,
     ):
-        self._model = model  # Store model reference for dual extraction
+        self.model = model  # Store model reference for dual extraction
+        self.results = results
+        self.log = log
         self.voltages = get_voltages(model.v2)
         self.objective_value = objective_value
-
+        self.solve_time = solve_time
         # Extract all variables
         vars = [
             att
@@ -95,10 +100,10 @@ class PyoResult:
         >>> duals = res.get_dual("power_balance_p")
         >>> custom_duals = res.get_dual("my_custom_constraint")
         """
-        if not hasattr(self, "_model"):
+        if not hasattr(self, "model"):
             raise RuntimeError("Model not stored in result. Cannot extract duals.")
 
-        model = self._model
+        model = self.model
         if not hasattr(model, constraint_name):
             return pd.DataFrame()
 
@@ -123,10 +128,10 @@ class PyoResult:
         >>> for constraint_name, duals_df in all_duals.items():
         ...     print(f"{constraint_name}: {len(duals_df)} duals")
         """
-        if not hasattr(self, "_model"):
+        if not hasattr(self, "model"):
             raise RuntimeError("Model not stored in result. Cannot extract duals.")
 
-        model = self._model
+        model = self.model
         duals_dict = {}
 
         for attr_name in dir(model):

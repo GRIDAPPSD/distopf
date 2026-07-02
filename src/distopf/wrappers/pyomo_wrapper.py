@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from distopf.results import PowerFlowResult
 
 
-
 class PyomoWrapper(Wrapper):
     """Pyomo/IPOPT wrapper for OPF optimization.
 
@@ -69,7 +68,7 @@ class PyomoWrapper(Wrapper):
             If raw_result=False: PowerFlowResult with all results
             If raw_result=True: Pyomo PyoResult object with all variable results
         """
-        
+
         model_type = kwargs.pop("model_type", "lindist")
 
         if model_type == "branchflow":
@@ -222,7 +221,7 @@ class PyomoWrapper(Wrapper):
 
         objective_value = getattr(self.result, "objective_value", None)
         solve_time = getattr(self.result, "solve_time", None)
-
+        log = getattr(self.result, "log", "")
         # Extract duals if available on the raw result
         dual_power_balance_p = getattr(self.result, "dual_power_balance_p", None)
         dual_power_balance_q = getattr(self.result, "dual_power_balance_q", None)
@@ -262,6 +261,7 @@ class PyomoWrapper(Wrapper):
             raw_result=self.result,
             model=self.model,
             case=self.case,
+            log=log,
         )
 
     def _initialize_from_fbs(self) -> None:

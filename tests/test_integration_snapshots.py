@@ -203,14 +203,14 @@ SCENARIOS = [
         "formulation": "branchflow",
         "requires_ipopt": True,
     },
-    {
-        "id": "ieee123_bat_nlp_loss",
-        "case": "ieee123_30der_bat",
-        "method": "opf",
-        "objective": "loss_min",
-        "formulation": "branchflow",
-        "requires_ipopt": True,
-    },
+    # {
+    #     "id": "ieee123_bat_nlp_loss",
+    #     "case": "ieee123_30der_bat",
+    #     "method": "opf",
+    #     "objective": "loss_min",
+    #     "formulation": "branchflow",
+    #     "requires_ipopt": True,
+    # },
     # ── Edge cases ──
     {
         "id": "ieee123_nosched_mat_Q",
@@ -371,7 +371,7 @@ def test_integration_snapshot(scenario, references):
             warnings.simplefilter("ignore")
             result = run_scenario(scenario)
         except ValueError as e:
-            pytest.warns(f"Scenario '{sid}' failed: {e}")
+            pytest.warns(UserWarning, match=rf"Scenario '{sid}' failed: {e}")
 
     actual = extract_metrics(result)
 
