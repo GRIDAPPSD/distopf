@@ -763,7 +763,7 @@ wheels = [
 
 [[package]]
 name = "distopf"
-version = "1.0.0.post1"
+version = "1.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "altdss", extra = ["all"] },
