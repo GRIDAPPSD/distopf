@@ -371,7 +371,7 @@ def test_integration_snapshot(scenario, references):
             warnings.simplefilter("ignore")
             result = run_scenario(scenario)
         except ValueError as e:
-            pytest.warns(f"Scenario '{sid}' failed: {e}")
+            pytest.warns(UserWarning, match=fr"Scenario '{sid}' failed: {e}")
 
     actual = extract_metrics(result)
 
