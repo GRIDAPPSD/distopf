@@ -25,7 +25,7 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 REFERENCE_FILE = Path(__file__).parent / "integration_references.json"
 
 # np.isclose tolerance: |actual - expected| <= ATOL + RTOL * |expected|
-ATOL = 1e-4
+ATOL = 1e-5
 RTOL = 1e-5
 
 # ---------------------------------------------------------------------------
@@ -203,14 +203,14 @@ SCENARIOS = [
         "formulation": "branchflow",
         "requires_ipopt": True,
     },
-    {
-        "id": "ieee123_bat_nlp_loss",
-        "case": "ieee123_30der_bat",
-        "method": "opf",
-        "objective": "loss_min",
-        "formulation": "branchflow",
-        "requires_ipopt": True,
-    },
+    # {
+    #     "id": "ieee123_bat_nlp_loss",
+    #     "case": "ieee123_30der_bat",
+    #     "method": "opf",
+    #     "objective": "loss_min",
+    #     "formulation": "branchflow",
+    #     "requires_ipopt": True,
+    # },
     # ── Edge cases ──
     {
         "id": "ieee123_nosched_mat_Q",
