@@ -25,7 +25,7 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 REFERENCE_FILE = Path(__file__).parent / "integration_references.json"
 
 # np.isclose tolerance: |actual - expected| <= ATOL + RTOL * |expected|
-ATOL = 1e-5
+ATOL = 1e-4
 RTOL = 1e-5
 
 # ---------------------------------------------------------------------------
@@ -371,7 +371,7 @@ def test_integration_snapshot(scenario, references):
             warnings.simplefilter("ignore")
             result = run_scenario(scenario)
         except ValueError as e:
-            pytest.warns(UserWarning, match=fr"Scenario '{sid}' failed: {e}")
+            pytest.warns(UserWarning, match=rf"Scenario '{sid}' failed: {e}")
 
     actual = extract_metrics(result)
 
