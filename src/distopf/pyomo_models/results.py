@@ -100,7 +100,7 @@ class PyoResult:
         >>> duals = res.get_dual("power_balance_p")
         >>> custom_duals = res.get_dual("my_custom_constraint")
         """
-        if not hasattr(self, "_model"):
+        if not hasattr(self, "model"):
             raise RuntimeError("Model not stored in result. Cannot extract duals.")
 
         model = self.model
@@ -128,7 +128,7 @@ class PyoResult:
         >>> for constraint_name, duals_df in all_duals.items():
         ...     print(f"{constraint_name}: {len(duals_df)} duals")
         """
-        if not hasattr(self, "_model"):
+        if not hasattr(self, "model"):
             raise RuntimeError("Model not stored in result. Cannot extract duals.")
 
         model = self.model
