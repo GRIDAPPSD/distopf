@@ -74,6 +74,7 @@ from distopf.pyomo_models.objectives import (
     loss_objective_rule,
     create_penalized_objective,
     set_objective,
+    cost_minimization_rule,
 )
 
 # Solver
@@ -121,6 +122,7 @@ __all__ = [
     "loss_objective_rule",
     "create_penalized_objective",
     "set_objective",
+    "cost_minimization_rule",
     # Solver
     "solve",
 ]

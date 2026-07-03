@@ -155,6 +155,36 @@ result = case.run_opf(wrapper="matrix_bess", objective="loss")
 #### Solver Requirements
 - **IPOPT**: Install via `conda install -c conda-forge ipopt`. On Ubuntu, `apt-get install coinor-libipopt-dev` only installs headers and shared libraries; it does not provide the `ipopt` executable that Pyomo's `SolverFactory("ipopt")` expects.
 
+### Optimization Objectives
+
+DistOPF supports multiple optimization objectives for distribution system OPF:
+
+| Objective | String | Supported Wrappers | Description |
+|-----------|--------|-------------------|-------------|
+| **Loss Minimization** | `"loss"`, `"loss_min"` | All | Minimize distribution losses (most common) |
+| **Substation Power** | `"substation"`, `"substation_power"` | Pyomo, Matrix | Minimize power imported from substation |
+| **Voltage Deviation** | `"voltage_deviation"` | Pyomo | Minimize deviations from nominal voltage (1.0 p.u.) |
+| **Generation Curtailment** | `"curtail"`, `"curtail_min"`, `"curtailment"` | Pyomo | Minimize DER curtailment |
+| **Cost Minimization** | `"cost"`, `"cost_min"` | Pyomo (LinDistFlow, BranchFlow) | Minimize energy procurement cost from swing bus |
+
+#### Cost Minimization with Price Data
+
+To use cost minimization, add an hourly `price` column to the case schedules (in $/MWh):
+
+```python
+import pandas as pd
+import distopf as opf
+
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
+
+# Add hourly electricity prices
+case.schedules['price'] = [38, 35, 34, 32, 30, 32, 38, 45, 52, 58, 62, 65, 
+                            68, 65, 62, 58, 55, 60, 75, 82, 78, 65, 50, 42]
+
+# Run OPF minimizing energy cost
+result = case.run_opf(objective="cost")
+print(f"Total energy cost: ${result.objective_value:.2f}")
+```
 
 ### Result Fields
 

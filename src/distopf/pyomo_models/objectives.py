@@ -108,6 +108,16 @@ def generation_curtailment_objective_rule(model: LindistModelProtocol):
     return total_curtailment
 
 
+def cost_minimization_rule(m):
+    """Minimize energy procurement cost from swing bus."""
+    total_cost = 0
+    for fb, tb, ph in m.branch_phase_set:
+        for t in m.time_set:
+            if fb in m.swing_bus_set:
+                total_cost += m.p_flow[fb, tb, ph, t] * m.price[t] * m.delta_t
+    return total_cost
+
+
 # ============ Penalty Functions for Soft Constraints ==================================
 # ======================================================================================
 #

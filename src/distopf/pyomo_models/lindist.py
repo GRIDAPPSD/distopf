@@ -559,6 +559,21 @@ def _create_branch_thermal_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         )
 
 
+def _create_price_parameters(m: pyo.ConcreteModel, case: Case) -> None:
+    """Create electricity price parameters from schedules."""
+    price_data = {}
+    if "price" in case.schedules.columns:
+        for t in m.time_set:
+            price_data[t] = case.schedules.at[t, "price"]
+
+    m.price = pyo.Param(
+        m.time_set,
+        initialize=price_data,
+        default=0.0,
+        doc="Hourly electricity price ($/MWh)",
+    )
+
+
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     """
     Create all parameters for the Pyomo model including impedances, loads,
@@ -573,7 +588,7 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_v_limit_parameters(m, case)
     _create_battery_parameters(m, case)
     _create_branch_thermal_parameters(m, case)
-
+    _create_price_parameters(m, case)
 
 def create_lindist_model(
     case: Case,

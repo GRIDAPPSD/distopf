@@ -37,7 +37,7 @@ def _parse_phases(phases_str: str) -> list[str]:
     >>> _parse_phases("s1")
     ['s1']
     """
-    return re.findall(r'[A-Za-z]\d|.', phases_str)
+    return re.findall(r"[A-Za-z]\d|.", phases_str)
 
 
 def _create_phase_tuples(df: pd.DataFrame, id_col: str = "id") -> list[tuple[int, str]]:
@@ -85,7 +85,9 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
     m.branch_phase_pair_set = pyo.Set(
         initialize=[
             (int(fb), int(tb), ph1 + ph2)
-            for fb, tb, phs in case.branch_data.loc[:, ["fb", "tb", "phases"]].to_numpy()
+            for fb, tb, phs in case.branch_data.loc[
+                :, ["fb", "tb", "phases"]
+            ].to_numpy()
             for ph1, ph2 in combinations_with_replacement(sorted(_parse_phases(phs)), 2)
         ]
     )
@@ -101,7 +103,9 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
     m.branch_angle_phase_pair_set = pyo.Set(
         initialize=[
             (int(fb), int(tb), ph1 + ph2)
-            for fb, tb, phs in case.branch_data.loc[:, ["fb", "tb", "phases"]].to_numpy()
+            for fb, tb, phs in case.branch_data.loc[
+                :, ["fb", "tb", "phases"]
+            ].to_numpy()
             for ph1, ph2 in product(_parse_phases(phs), repeat=2)
             if tb not in m.swing_bus_set
         ]
@@ -579,7 +583,24 @@ def _create_branch_thermal_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 
 
 def _create_angle_parameters(m: pyo.ConcreteModel, case: Case) -> None:
-    m.d = pyo.Param(m.branch_angle_phase_pair_set, initialize=0, mutable=True, domain=pyo.Any)
+    m.d = pyo.Param(
+        m.branch_angle_phase_pair_set, initialize=0, mutable=True, domain=pyo.Any
+    )
+
+
+def _create_price_parameters(m: pyo.ConcreteModel, case: Case) -> None:
+    """Create electricity price parameters from schedules."""
+    price_data = {}
+    if "price" in case.schedules.columns:
+        for t in m.time_set:
+            price_data[t] = case.schedules.at[t, "price"]
+
+    m.price = pyo.Param(
+        m.time_set,
+        initialize=price_data,
+        default=0.0,
+        doc="Hourly electricity price ($/MWh)",
+    )
 
 
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
@@ -597,6 +618,7 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_battery_parameters(m, case)
     _create_branch_thermal_parameters(m, case)
     _create_angle_parameters(m, case)
+    _create_price_parameters(m, case)
 
 
 def create_nl_branchflow_model(

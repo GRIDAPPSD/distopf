@@ -179,12 +179,22 @@ def voltage_differences(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure
     return fig
 
 
-def plot_power_flows(s: pd.DataFrame, t=None) -> go.Figure:
+def plot_power_flows(
+    p: pd.DataFrame,
+    q: pd.DataFrame,
+    t: int = None,
+) -> go.Figure:
     """
     Plot the active and reactive power flowing into each bus on each phase.
+
     Parameters
     ----------
-    s : pd.DataFrame
+    p : pd.DataFrame
+        Active power flows with columns ``fb``, ``tb``, ``from_name``,
+        ``to_name``, optionally ``t``, and phase columns ``a``, ``b``, ``c``
+        (and optionally ``s1``, ``s2`` for triplex lines) containing real floats.
+    q : pd.DataFrame
+        Reactive power flows with the same structure as ``p``.
     t : int or None
         Time step to plot. Defaults to 0 when a ``t`` column is present.
 
@@ -192,37 +202,93 @@ def plot_power_flows(s: pd.DataFrame, t=None) -> go.Figure:
     -------
     fig : Plotly figure object
     """
-    s = _choose_t(s, t)
-    s = s.melt(
-        ignore_index=True,
-        id_vars=["fb", "tb", "from_name", "to_name"],
-        var_name="phase",
-        value_name="s",
+    p = _choose_t(p, t)
+    q = _choose_t(q, t)
+
+    id_vars = ["fb", "tb", "from_name", "to_name"]
+    phase_cols = [c for c in ["a", "b", "c", "s1", "s2"] if c in p.columns]
+
+    p_long = p[id_vars + phase_cols].melt(
+        id_vars=id_vars, var_name="phase", value_name="power"
     )
-    s["p"] = s.s.apply(lambda x: x.real)
-    s["q"] = s.s.apply(lambda x: x.imag)
-    del s["s"]
-    s = s.melt(
-        ignore_index=True,
-        id_vars=["fb", "tb", "from_name", "to_name", "phase"],
-        var_name="part",
-        value_name="power",
+    p_long["part"] = "p"
+
+    q_long = q[id_vars + phase_cols].melt(
+        id_vars=id_vars, var_name="phase", value_name="power"
     )
+    q_long["part"] = "q"
+
+    df = pd.concat([p_long, q_long], ignore_index=True)
+
     fig = px.bar(
-        s,
+        df,
         x="to_name",
         y="power",
         facet_col="phase",
         facet_row="part",
         color="phase",
+        category_orders={"phase": phase_cols, "part": ["q", "p"]},
         labels={"to_name": "To-Bus Name"},
     )
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
-    fig.update_layout(
-        yaxis4_title="Active Power (p.u.)",
-        yaxis_title="Reactive Power (p.u.)",
-    )
+
+    # In plotly, facet_row places the first category on the BOTTOM row.
+    # With category_orders={"part": ["q", "p"]}, bottom row = q, top row = p.
+    # yaxis1..N correspond to the bottom row (q); yaxis(N+1)..2N to top row (p).
+    n_phases = len(phase_cols)
+    p_first_axis = n_phases + 1  # first p-row yaxis index
+    layout_updates = {
+        "yaxis_title": "Reactive Power (p.u.)",
+        f"yaxis{p_first_axis}_title": "Active Power (p.u.)",
+    }
+    fig.update_layout(**layout_updates)
     return fig
+
+
+# def plot_power_flows(s: pd.DataFrame, t=None) -> go.Figure:
+#     """
+#     Plot the active and reactive power flowing into each bus on each phase.
+#     Parameters
+#     ----------
+#     s : pd.DataFrame
+#     t : int or None
+#         Time step to plot. Defaults to 0 when a ``t`` column is present.
+
+#     Returns
+#     -------
+#     fig : Plotly figure object
+#     """
+#     s = _choose_t(s, t)
+#     s = s.melt(
+#         ignore_index=True,
+#         id_vars=["fb", "tb", "from_name", "to_name"],
+#         var_name="phase",
+#         value_name="s",
+#     )
+#     s["p"] = s.s.apply(lambda x: x.real)
+#     s["q"] = s.s.apply(lambda x: x.imag)
+#     del s["s"]
+#     s = s.melt(
+#         ignore_index=True,
+#         id_vars=["fb", "tb", "from_name", "to_name", "phase"],
+#         var_name="part",
+#         value_name="power",
+#     )
+#     fig = px.bar(
+#         s,
+#         x="to_name",
+#         y="power",
+#         facet_col="phase",
+#         facet_row="part",
+#         color="phase",
+#         labels={"to_name": "To-Bus Name"},
+#     )
+#     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
+#     fig.update_layout(
+#         yaxis4_title="Active Power (p.u.)",
+#         yaxis_title="Reactive Power (p.u.)",
+#     )
+#     return fig
 
 
 def plot_gens(p_gens: pd.DataFrame, q_gens: pd.DataFrame, t=None) -> go.Figure:
@@ -716,7 +782,9 @@ def plot_voltage_vs_distance(
                     )
 
     for col_idx in range(1, len(phases) + 1):
-        fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=col_idx)
+        fig.update_xaxes(
+            title_text="Distance from Source Bus (hops)", row=1, col=col_idx
+        )
     fig.update_yaxes(title_text="Voltage (pu)", row=1, col=1)
     fig.update_layout(title_text=title, hovermode="closest")
 
@@ -906,7 +974,9 @@ def plot_line_flow_vs_distance(
                     )
 
     for col_idx in range(1, len(phases) + 1):
-        fig.update_xaxes(title_text="Distance from Source Bus (hops)", row=1, col=col_idx)
+        fig.update_xaxes(
+            title_text="Distance from Source Bus (hops)", row=1, col=col_idx
+        )
     fig.update_yaxes(
         title_text=f"{flow_name} (kW)" if "Power" in flow_name else f"{flow_name}",
         row=1,
@@ -1082,8 +1152,13 @@ def _process_branch_data(branch_data, bus_data, _s, phase_list, edge_scale, edge
         branch_data["s_a"] = _s.a
         branch_data["s_b"] = _s.b
         branch_data["s_c"] = _s.c
-        branch_data["p_abs"] = np.abs(np.real(_s.loc[:, phase_list].sum(axis=1)))
-        branch_data["q_abs"] = np.abs(np.imag(_s.loc[:, phase_list].sum(axis=1)))
+        p_complex = _s.loc[:, phase_list].sum(axis=1)
+        # branch_data["p_abs"] = np.abs(np.real(_s.loc[:, phase_list].sum(axis=1)))
+        # branch_data["q_abs"] = np.abs(np.imag(_s.loc[:, phase_list].sum(axis=1)))
+        branch_data["p_abs"] = p_complex.map(lambda z: abs(z.real))
+        branch_data["q_abs"] = p_complex.map(lambda z: abs(z.imag))
+        branch_data["p_direction"] = p_complex.map(lambda z: np.sign(z.real + 1e-6))
+        branch_data["q_direction"] = p_complex.map(lambda z: np.sign(z.imag + 1e-6))
         branch_data["p_norm"] = (
             branch_data["p_abs"].to_numpy() / branch_data["p_abs"].max() * edge_scale
             + edge_min
@@ -1092,12 +1167,12 @@ def _process_branch_data(branch_data, bus_data, _s, phase_list, edge_scale, edge
             branch_data["q_abs"].to_numpy() / branch_data["q_abs"].max() * edge_scale
             + edge_min
         )
-        branch_data["p_direction"] = np.sign(
-            np.real(_s.loc[:, phase_list].sum(axis=1)) + 1e-6
-        )
-        branch_data["q_direction"] = np.sign(
-            np.imag(_s.loc[:, phase_list].sum(axis=1)) + 1e-6
-        )
+        # branch_data["p_direction"] = np.sign(
+        #     np.real(_s.loc[:, phase_list].sum(axis=1)) + 1e-6
+        # )
+        # branch_data["q_direction"] = np.sign(
+        #     np.imag(_s.loc[:, phase_list].sum(axis=1)) + 1e-6
+        # )
     return branch_data
 
 
