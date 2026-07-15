@@ -231,8 +231,8 @@ class PowerFlowResult:
             }
             with open(output_dir / "run_config.json", "w") as f:
                 json.dump(run_config, f, indent=2, default=str)
-        
-        #5. Log file
+
+        # 5. Log file
         if self.log:
             with open(output_dir / "solver.log", "w") as f:
                 f.write(self.log)
@@ -273,35 +273,19 @@ class PowerFlowResult:
     # Plotting methods (delegate to plot module)
     # -------------------------------------------------------------------------
 
-    def plot_voltages(self):
+    def plot_voltages(self, t=None):
         """Plot bus voltage profile."""
         if self.voltages is None:
             raise RuntimeError("No voltage results available.")
         from distopf.plot import plot_voltages
 
-        return plot_voltages(self.voltages)
+        return plot_voltages(self.voltages, t=t)
 
-    def plot_power_flows(self):
+    def plot_power_flows(self, t=None):
         """Plot branch power flows."""
-
-        if self.active_power_flows is None or self.reactive_power_flows is None:
-            raise RuntimeError("No results available.")
-
-        s = self.active_power_flows.copy()
-        s["a"] = s["a"] + 1j * self.reactive_power_flows["a"]
-        s["b"] = s["b"] + 1j * self.reactive_power_flows["b"]
-        s["c"] = s["c"] + 1j * self.reactive_power_flows["c"]
-        # Ensure expected shape
-        if "tb" not in s.columns and "id" in s.columns:
-            s["tb"] = s["id"]
-            from_bus_map = {
-                int(tb): int(fb)
-                for fb, tb in self.branch_data.loc[:, ["fb", "tb"]].to_numpy()
-            }
-            s["fb"] = s["tb"].map(from_bus_map)
         from distopf.plot import plot_power_flows
 
-        return plot_power_flows(s)
+        return plot_power_flows(self.active_power_flows, self.reactive_power_flows, t=t)
 
     def plot_gens(self):
         """Plot generator outputs."""
@@ -311,12 +295,38 @@ class PowerFlowResult:
 
         return plot_gens(self.active_power_generation, self.reactive_power_generation)
 
+    def plot_batteries(self):
+        """Plot battery power and state of charge over time."""
+        if self.battery_active_power is None or self.soc is None:
+            raise RuntimeError("No battery results available.")
+        from distopf.plot import plot_batteries
+
+        return plot_batteries(self.battery_active_power, self.soc)
+
+    def plot_schedules(self):
+        """Plot time-series schedules from the associated case.
+
+        Returns
+        -------
+        fig : Plotly figure object
+            Faceted line plot with one row per schedule variable
+
+        Raises
+        ------
+        RuntimeError
+            If no case reference available or case has no schedules
+        """
+        if self.case is None:
+            raise RuntimeError("No case reference available in result.")
+        return self.case.plot_schedules()
+
     def plot_network(
         self,
         v_min: float = 0.95,
         v_max: float = 1.05,
         show_phases: str = "abc",
         show_reactive_power: bool = False,
+        t: Optional[int] = None,
     ):
         """Plot network visualization with results."""
         if self.voltages is None:
@@ -325,15 +335,12 @@ class PowerFlowResult:
 
         return plot_network(
             self.case,
-            v=self.voltages,
-            p_flow=self.active_power_flows,
-            q_flow=self.reactive_power_flows,
-            p_gen=self.active_power_generation,
-            q_gen=self.reactive_power_generation,
+            result=self,
             v_min=v_min,
             v_max=v_max,
             show_phases=show_phases,
             show_reactive_power=show_reactive_power,
+            t=t,
         )
 
 

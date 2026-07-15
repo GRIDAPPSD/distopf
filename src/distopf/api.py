@@ -715,6 +715,29 @@ class Case:
             show_reactive_power=show_reactive_power,
         )
 
+    def plot_schedules(self):
+        """Plot time-series schedules as faceted line plots.
+
+        Each schedule column is plotted as a separate facet row with its own
+        independent y-axis scale and colored line.
+
+        Returns
+        -------
+        fig : Plotly figure object
+            Faceted line plot with one row per schedule variable
+
+        Raises
+        ------
+        RuntimeError
+            If no schedules are available in the case
+        """
+        if self.schedules is None or self.schedules.empty:
+            raise RuntimeError("No schedules available in this case.")
+        from distopf.plot import plot_schedules
+
+        return plot_schedules(self.schedules)
+
+
     # -------------------------------------------------------------------------
     # Case Modification Methods
     # -------------------------------------------------------------------------
@@ -835,9 +858,9 @@ class Case:
         q_phase = round(q / n_phases, 9)
         s_rated_phase = round(s_rated / n_phases, 9)
         gen.loc[i, "phases"] = phases
-        gen.loc[i, [f"s{ph}_max" for ph in phases]] = s_rated_phase  # unlimited
-        gen.loc[i, [f"p{ph}" for ph in phases]] = p_phase  # unlimited
-        gen.loc[i, [f"q{ph}" for ph in phases]] = q_phase  # unlimited
+        gen.loc[i, [f"s_{ph}_max" for ph in phases]] = s_rated_phase  # unlimited
+        gen.loc[i, [f"p_{ph}" for ph in phases]] = p_phase  # unlimited
+        gen.loc[i, [f"q_{ph}" for ph in phases]] = q_phase  # unlimited
         if q_max is None:
             q_max = s_rated
         if q_min is None:
@@ -850,8 +873,8 @@ class Case:
             .astype(float)
             .fillna(0.0)
         )
-        gen.loc[:, [f"s{a}_max" for a in "abc"]] = (
-            gen.loc[:, [f"s{a}_max" for a in "abc"]].astype(float).fillna(0.0)
+        gen.loc[:, [f"s_{a}_max" for a in "abc"]] = (
+            gen.loc[:, [f"s_{a}_max" for a in "abc"]].astype(float).fillna(0.0)
         )
         self.gen_data = gen
 
@@ -870,9 +893,9 @@ class Case:
         if _id in cap.loc[:, "id"].to_numpy():
             i = self.cap_data.loc[self.cap_data.id == _id, "id"].index[0]
         print(cap.name.dtype)
-        cap.at[i, "name"] = name
+        cap.at[i, "name"] = str(name)
         cap.at[i, "id"] = _id
-        bus_phases = self.bus_data.loc[self.bus_data.name == "13", "phases"].to_numpy()[
+        bus_phases = self.bus_data.loc[self.bus_data.name == name, "phases"].to_numpy()[
             0
         ]
         if phases is None:
@@ -880,9 +903,9 @@ class Case:
         n_phases = len(phases)
         q_phase = round(q / n_phases, 9)
         cap.loc[i, "phases"] = phases
-        cap.loc[i, [f"q{ph}" for ph in phases]] = q_phase  # unlimited
-        cap.loc[i, [f"q{ph}" for ph in phases]] = (
-            cap.loc[i, [f"q{ph}" for ph in phases]].astype(float).fillna(0.0)
+        cap.loc[i, [f"q_{ph}" for ph in phases]] = q_phase  # unlimited
+        cap.loc[i, [f"q_{ph}" for ph in phases]] = (
+            cap.loc[i, [f"q_{ph}" for ph in phases]].astype(float).fillna(0.0)
         )
         self.cap_data = cap
 

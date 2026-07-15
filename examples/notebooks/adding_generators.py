@@ -15,7 +15,7 @@ users should either:
 
 import marimo
 
-__generated_with = "0.15.2"
+__generated_with = "0.23.9"
 app = marimo.App(width="medium")
 
 
@@ -24,17 +24,19 @@ def _():
     from distopf import create_case, CASES_DIR
     import pandas as pd
 
-    return (create_case, pd, CASES_DIR)
+    return CASES_DIR, create_case
 
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""## Run OPF on the IEEE 123 bus system with 30 DERs - base case""")
+    mo.md(r"""
+    ## Run OPF on the IEEE 123 bus system with 30 DERs - base case
+    """)
     return
 
 
 @app.cell
-def _(create_case, CASES_DIR):
+def _(CASES_DIR, create_case):
     # Load case with existing generators and run OPF with loss minimization
     _case = create_case(CASES_DIR / "csv" / "ieee123_30der")
     _case.modify(v_min=0.95, v_max=1.1)
@@ -45,22 +47,20 @@ def _(create_case, CASES_DIR):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ## Modifying generator properties using DataFrame manipulation
-    
+
     The Case object exposes gen_data as a pandas DataFrame that can be modified.
     Common modifications include:
-    - Changing control_variable ("", "P", "Q", "PQ")
+    - Changing control_variable ("\", "P", "Q", "PQ")
     - Scaling generator power with gen_mult via case.modify()
     - Adjusting individual generator power limits
-    """
-    )
+    """)
     return
 
 
 @app.cell
-def _(create_case, CASES_DIR):
+def _(CASES_DIR, create_case):
     # Load case with existing DERs
     case = create_case(CASES_DIR / "csv" / "ieee123_30der")
     case.modify(v_min=0.95, v_max=1.1)
@@ -72,28 +72,28 @@ def _(create_case, CASES_DIR):
     case.modify(gen_mult=10)
 
     # Run OPF with curtailment minimization (keeps voltages in bounds)
-    case.run_opf("curtail_min", control_variable="PQ")
-    case.plot_network(show_reactive_power=False)
-    return (case,)
+    result = case.run_opf("curtail_min", control_variable="PQ")
+    result.plot_network(show_reactive_power=False)
+    return (result,)
 
 
 @app.cell
-def _(case):
-    case.plot_voltages()
+def _(result):
+    result.plot_voltages()
     return
 
 
 @app.cell
-def _(case):
+def _(result):
     # Show generator outputs after optimization
-    case.plot_gens()
+    result.plot_gens()
     return
 
 
 @app.cell
-def _(case):
+def _(result):
     # Show same voltage plot (for comparison)
-    case.plot_voltages()
+    result.plot_voltages()
     return
 
 
