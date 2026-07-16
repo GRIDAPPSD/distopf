@@ -466,7 +466,7 @@ class TestIgnoreData:
     def test_ignore_bat_empties_bat_data(self):
         """ignore_bat=True should result in empty bat_data DataFrame."""
         case = opf.create_case(
-            opf.CASES_DIR / "csv" / "ieee123_30der_bat", ignore_bat=True
+            opf.CASES_DIR / "csv" / "ieee123_bat", ignore_bat=True
         )
         assert case.bat_data.empty
         assert case.ignore_bat is True

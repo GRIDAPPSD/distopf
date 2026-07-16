@@ -34,14 +34,15 @@ def _choose_t(df, t=None):
         df = df.drop("t", axis=1)
     return df
 
+
 def _remove_empty_triplex_phases(df: pd.DataFrame) -> pd.DataFrame:
     """Remove s1 and s2 columns if they contain only NaNs or 0s.
-    
+
     Parameters
     ----------
     df : pd.DataFrame
         DataFrame to clean
-        
+
     Returns
     -------
     pd.DataFrame
@@ -54,6 +55,7 @@ def _remove_empty_triplex_phases(df: pd.DataFrame) -> pd.DataFrame:
             if len(col_data) == 0 or (col_data == 0).all():
                 df = df.drop(columns=[col])
     return df
+
 
 def plot_schedules(schedules: pd.DataFrame) -> go.Figure:
     """
@@ -79,11 +81,7 @@ def plot_schedules(schedules: pd.DataFrame) -> go.Figure:
     df_melted = df.melt(id_vars="time")
 
     fig = px.line(
-        df_melted,
-        x="time",
-        y="value",
-        facet_row="variable",
-        color="variable"
+        df_melted, x="time", y="value", facet_row="variable", color="variable"
     )
 
     # Hide legend and remove facet annotations
@@ -96,6 +94,7 @@ def plot_schedules(schedules: pd.DataFrame) -> go.Figure:
         fig.update_yaxes(title_text=variable, matches=None, row=i, col=1)
 
     return fig
+
 
 def plot_voltages(v: pd.DataFrame, t=None) -> go.Figure:
     """
@@ -114,7 +113,7 @@ def plot_voltages(v: pd.DataFrame, t=None) -> go.Figure:
         If multiple time steps are present and t is None, returns an animated figure.
     """
     v = _remove_empty_triplex_phases(v)
-    
+
     v = v.copy()
     if "id" not in v.columns:
         v["id"] = v.index
@@ -288,7 +287,7 @@ def plot_power_flows(
     """
     p = _remove_empty_triplex_phases(p)
     q = _remove_empty_triplex_phases(q)
-    
+
     # Check if we should create animation
     animate = t is None and "t" in p.columns and len(p.t.unique()) > 1
 
@@ -404,7 +403,7 @@ def plot_gens(p_gens: pd.DataFrame, q_gens: pd.DataFrame, t=None) -> go.Figure:
     """
     p_gens = _remove_empty_triplex_phases(p_gens)
     q_gens = _remove_empty_triplex_phases(q_gens)
-    
+
     p_gens = p_gens.copy()
     q_gens = q_gens.copy()
 
@@ -412,20 +411,8 @@ def plot_gens(p_gens: pd.DataFrame, q_gens: pd.DataFrame, t=None) -> go.Figure:
     animate = t is None and "t" in p_gens.columns and len(p_gens.t.unique()) > 1
 
     if not animate:
-        if t is None:
-            t = 0
-        if "t" in p_gens.columns:
-            t1 = t
-            if t is None and len(p_gens) > 0:
-                t1 = min(p_gens.t)
-            p_gens = pd.DataFrame(p_gens.loc[p_gens.t == t1, :])
-            p_gens = p_gens.drop("t", axis=1)
-        if "t" in q_gens.columns:
-            t2 = t
-            if t is None and len(q_gens) > 0:
-                t2 = min(q_gens.t)
-            q_gens = pd.DataFrame(q_gens.loc[q_gens.t == t2, :])
-            q_gens = q_gens.drop("t", axis=1)
+        p_gens = _choose_t(p_gens, t=t)
+        q_gens = _choose_t(q_gens, t=t)
 
     animation_frame = None
     id_vars_p = ["id", "name"]
@@ -477,10 +464,8 @@ def plot_gens(p_gens: pd.DataFrame, q_gens: pd.DataFrame, t=None) -> go.Figure:
         animation_frame=animation_frame,
     )
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
-    fig.update_layout(
-        yaxis4_title="Active Power (p.u.)",
-        yaxis_title="Reactive Power (p.u.)",
-    )
+    fig.update_yaxes(title_text="Active Power (p.u.)", row=1, col=1)
+    fig.update_yaxes(title_text="Reactive Power (p.u.)", row=2, col=1)
     return fig
 
 
@@ -500,7 +485,7 @@ def plot_pq(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
     """
     p = _remove_empty_triplex_phases(p)
     q = _remove_empty_triplex_phases(q)
-    
+
     p = p.copy()
     q = q.copy()
 
@@ -689,7 +674,7 @@ def plot_ders(ders: pd.DataFrame) -> go.Figure:
 def plot_polar(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
     p = _remove_empty_triplex_phases(p)
     q = _remove_empty_triplex_phases(q)
-    
+
     p = p.copy()
     q = q.copy()
 
@@ -1206,7 +1191,7 @@ def plot_network(
         q_gen = result.reactive_power_generation
         p_bat = result.battery_active_power
         soc = result.soc
-    
+
     # Remove empty triplex phases
     if v is not None:
         v = _remove_empty_triplex_phases(v)
@@ -1222,7 +1207,7 @@ def plot_network(
         q_gen = _remove_empty_triplex_phases(q_gen)
     if p_bat is not None:
         p_bat = _remove_empty_triplex_phases(p_bat)
-    
+
     # validate phases
     if show_phases.lower() not in ["a", "b", "c", "abc"]:
         raise ValueError("Invalid phase. Must be 'a', 'b', 'c', or 'abc'.")
@@ -1306,10 +1291,13 @@ def _process_bus_data(bus_data, v, phase_list, t):
         bus_data.y = bus_data.y / bus_data.y.abs().max()
     if _v is not None:
         _v.index = _v.id - 1
-        bus_data.v_a = _v.a
-        bus_data.v_b = _v.b
-        bus_data.v_c = _v.c
-        bus_data.color = _v[phase_list].mean(axis=1)
+        bus_data.v_a = _v.a if "a" in _v.columns else np.nan
+        bus_data.v_b = _v.b if "b" in _v.columns else np.nan
+        bus_data.v_c = _v.c if "c" in _v.columns else np.nan
+        bus_data["v_s1"] = _v["s1"] if "s1" in _v.columns else np.nan
+        bus_data["v_s2"] = _v["s2"] if "s2" in _v.columns else np.nan
+        available_phases = [p for p in phase_list + ["s1", "s2"] if p in _v.columns]
+        bus_data.color = _v[available_phases].mean(axis=1)
     return bus_data
 
 
@@ -1324,10 +1312,11 @@ def _process_branch_data(
             int(tb): int(fb) for fb, tb in branch_data.loc[:, ["fb", "tb"]].to_numpy()
         }
         _s = p_flow.copy()
-        _s = _s.drop(["a", "b", "c"], axis=1)
-        _s["a"] = p_flow.a + 1j * q_flow.a
-        _s["b"] = p_flow.b + 1j * q_flow.b
-        _s["c"] = p_flow.c + 1j * q_flow.c
+        cols_to_drop = [c for c in ["a", "b", "c", "s1", "s2"] if c in _s.columns]
+        _s = _s.drop(cols_to_drop, axis=1)
+        for ph in ["a", "b", "c", "s1", "s2"]:
+            if ph in p_flow.columns:
+                _s[ph] = p_flow[ph] + 1j * q_flow[ph]
         if "tb" not in _s.columns:
             _s["tb"] = _s["id"]
         if "fb" not in _s.columns:
@@ -1339,6 +1328,8 @@ def _process_branch_data(
     branch_data["s_a"] = complex(np.nan, np.nan)
     branch_data["s_b"] = complex(np.nan, np.nan)
     branch_data["s_c"] = complex(np.nan, np.nan)
+    branch_data["s_s1"] = complex(np.nan, np.nan)
+    branch_data["s_s2"] = complex(np.nan, np.nan)
     branch_data["p_abs"] = 1
     branch_data["q_abs"] = 1
     branch_data["p_norm"] = edge_min
@@ -1353,10 +1344,17 @@ def _process_branch_data(
     branch_data["y_mid"] = 1 / 2 * (branch_data.y0 + branch_data.y1)
     if _s is not None:
         _s.index = _s.tb.to_numpy() - 1
-        branch_data["s_a"] = _s.a
-        branch_data["s_b"] = _s.b
-        branch_data["s_c"] = _s.c
-        p_complex = _s.loc[:, phase_list].sum(axis=1)
+        branch_data["s_a"] = _s.a if "a" in _s.columns else complex(np.nan, np.nan)
+        branch_data["s_b"] = _s.b if "b" in _s.columns else complex(np.nan, np.nan)
+        branch_data["s_c"] = _s.c if "c" in _s.columns else complex(np.nan, np.nan)
+        branch_data["s_s1"] = (
+            _s["s1"] if "s1" in _s.columns else complex(np.nan, np.nan)
+        )
+        branch_data["s_s2"] = (
+            _s["s2"] if "s2" in _s.columns else complex(np.nan, np.nan)
+        )
+        available_phases = [p for p in phase_list + ["s1", "s2"] if p in _s.columns]
+        p_complex = _s.loc[:, available_phases].sum(axis=1)
         branch_data["p_abs"] = p_complex.map(lambda z: abs(z.real))
         branch_data["q_abs"] = p_complex.map(lambda z: abs(z.imag))
         branch_data["p_direction"] = p_complex.map(lambda z: np.sign(z.real + 1e-6))
@@ -1375,8 +1373,10 @@ def _process_branch_data(
 def _process_gen_data(gen_data, p_gen, q_gen, t):
     """Merge generator setpoints from result frames into gen_data.
 
-    Supports both legacy wide format (columns a/b/c) and the newer normalized
-    format that includes a time column ``t``.
+    Supports multiple phase column formats:
+    - Traditional 3-phase: columns a/b/c
+    - Split-phase (triplex): columns s1/s2
+    - Normalized: columns with phase/value
     """
 
     if p_gen is not None and p_gen.shape[0] == 0:
@@ -1403,45 +1403,100 @@ def _process_gen_data(gen_data, p_gen, q_gen, t):
     p_gen = _latest_abc(p_gen)
     q_gen = _latest_abc(q_gen)
 
-    if p_gen is not None:
-        gen_data["p_a"] = p_gen["a"].to_numpy()
-        gen_data["p_b"] = p_gen["b"].to_numpy()
-        gen_data["p_c"] = p_gen["c"].to_numpy()
+    def _assign_phase_values(gen_data, phase_data, p_or_q, phase_cols):
+        """Assign phase power values, handling missing phases gracefully."""
+        if phase_data is None:
+            return gen_data
 
-    if q_gen is not None:
-        gen_data["q_a"] = q_gen["a"].to_numpy()
-        gen_data["q_b"] = q_gen["b"].to_numpy()
-        gen_data["q_c"] = q_gen["c"].to_numpy()
+        for phase in phase_cols:
+            col_name = f"{p_or_q}_{phase}"
+            if col_name in gen_data.columns:
+                # If phase column exists in phase_data, use it; otherwise use NaN
+                if phase in phase_data.columns:
+                    try:
+                        gen_data[col_name] = phase_data[phase].to_numpy()
+                    except (KeyError, ValueError):
+                        pass
+        return gen_data
+
+    # Determine which phase columns are present in gen_data
+    phase_cols_3ph = ["a", "b", "c"]
+    phase_cols_split = ["s1", "s2"]
+
+    # Get phase columns that actually exist in gen_data
+    p_phase_cols = [
+        ph for ph in phase_cols_3ph + phase_cols_split if f"p_{ph}" in gen_data.columns
+    ]
+    q_phase_cols = [
+        ph for ph in phase_cols_3ph + phase_cols_split if f"q_{ph}" in gen_data.columns
+    ]
+
+    # Assign values for each phase, skipping if they don't exist in phase_data
+    gen_data = _assign_phase_values(gen_data, p_gen, "p", p_phase_cols)
+    gen_data = _assign_phase_values(gen_data, q_gen, "q", q_phase_cols)
 
     return gen_data
 
 
 def _process_bat_data(bat_data, battery_active_power, soc, t):
-    # Merge battery results from PowerFlowResult if available
-    if bat_data is not None and battery_active_power is not None and soc is not None:
-        p_bat = _choose_t(battery_active_power.copy(), t)
-        soc = _choose_t(soc.copy(), t)
+    """Merge battery results from PowerFlowResult if available.
 
-        # Rename power columns with _p suffix before merge to ensure consistency
-        p_bat_renamed = p_bat[["id", "a", "b", "c"]].rename(
-            columns={"a": "a_p", "b": "b_p", "c": "c_p"}
+    Supports multiple phase column formats (a/b/c, s1/s2, or phase/value normalized).
+    """
+    # Return early if any required data is None or empty
+    if (
+        bat_data is None
+        or bat_data.shape[0] == 0
+        or battery_active_power is None
+        or battery_active_power.shape[0] == 0
+        or soc is None
+        or soc.shape[0] == 0
+    ):
+        return bat_data
+
+    p_bat = _choose_t(battery_active_power.copy(), t)
+    soc_data = _choose_t(soc.copy(), t)
+
+    # Skip processing if DataFrames are empty after time filtering
+    if p_bat.shape[0] == 0 or soc_data.shape[0] == 0:
+        return bat_data
+
+    # Determine available phase columns
+    phase_cols = []
+    if "a" in p_bat.columns and "b" in p_bat.columns and "c" in p_bat.columns:
+        phase_cols = ["a", "b", "c"]
+    elif "s1" in p_bat.columns and "s2" in p_bat.columns:
+        phase_cols = ["s1", "s2"]
+    else:
+        # Normalized format (phase/value) - skip, not supported for plotting yet
+        return bat_data
+
+    # Rename power columns with _p suffix before merge to ensure consistency
+    try:
+        p_bat_renamed = p_bat[["id"] + phase_cols].rename(
+            columns={ph: f"{ph}_p" for ph in phase_cols}
         )
 
         # Merge power data
         bat_data = bat_data.merge(p_bat_renamed, on="id", how="left")
 
-        # Sum three-phase power
-        if (
-            "a_p" in bat_data.columns
-            and "b_p" in bat_data.columns
-            and "c_p" in bat_data.columns
-        ):
-            bat_data["p"] = bat_data[["a_p", "b_p", "c_p"]].sum(axis=1)
+        # Sum multi-phase power
+        p_cols = [f"{ph}_p" for ph in phase_cols]
+        if all(col in bat_data.columns for col in p_cols):
+            bat_data["p"] = bat_data[p_cols].sum(axis=1)
+    except (KeyError, ValueError):
+        # If column selection fails, skip power merging
+        pass
 
-        # Merge SOC data
-        bat_data = bat_data.merge(soc[["id", "value"]], on="id", how="left")
+    # Merge SOC data
+    try:
+        bat_data = bat_data.merge(soc_data[["id", "value"]], on="id", how="left")
         if "value" in bat_data.columns:
             bat_data["soc"] = bat_data["value"]
+    except (KeyError, ValueError):
+        # If SOC merge fails, skip it
+        pass
+
     return bat_data
 
 
@@ -1516,111 +1571,159 @@ def _make_edge_traces(branch_data, show_phases, show_reactive_power):
 def _make_hover_text(branch_data, bus_data, cap_data, gen_data, bat_data=None):
     text = []
     for i, bus_row in enumerate(bus_data.itertuples()):
-        bus_phases = bus_row.phases.lower()  # e.g. "abc", "ac", "ab", etc.
+        raw_phases = bus_row.phases.lower()
 
-        # Helper function to format value or dash with better alignment
-        def format_phase_value(value, phase):
-            if phase in bus_phases:
-                return f"{value:>7.3f}"  # Increased width for better alignment
-            else:
-                return "  ---  "  # Centered dashes with proper spacing
+        # Determine which phases to display for this bus
+        is_triplex = "s1" in raw_phases or "s2" in raw_phases
+        if is_triplex:
+            active_phases = [p for p in ["s1", "s2"] if p in raw_phases]
+            primary = str(getattr(bus_row, "primary_phase", "") or "").strip().upper()
+            phase_labels = {
+                p: f"{primary}-{p.upper()}" if primary else p.upper()
+                for p in active_phases
+            }
+        else:
+            active_phases = [p for p in ["a", "b", "c"] if p in raw_phases]
+            phase_labels = {p: p.upper() for p in active_phases}
 
-        # Start with bus header
-        hover_text = ""
+        def _fmt(val, phase):
+            """Format a numeric value; show dashes if phase not active."""
+            if phase not in active_phases:
+                return "  ---  "
+            try:
+                return f"{float(val):>7.3f}"
+            except (TypeError, ValueError):
+                return "  NaN  "
+
+        def _row(icon, label, vals_by_phase):
+            parts = " ".join(
+                _fmt(vals_by_phase.get(p, np.nan), p) for p in active_phases
+            )
+            return f"{icon} {label:<8} {parts}<br>"
+
+        # Header
+        header_labels = "   ".join(f"{phase_labels[p]:>5}" for p in active_phases)
         hover_text = f"<b>  Bus: {bus_row.name:<5}        (p.u.)</b><br>"
-        # Create a formatted table-like structure using spaces and HTML
-        hover_text += "<b>              A       B       C</b><br>"  # Adjusted spacing
-        # hover_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br>"
+        hover_text += f"<b>               {header_labels}</b><br>"
 
-        # Voltage data
-        va, vb, vc = bus_row.v_a, bus_row.v_b, bus_row.v_c
-        va_str = format_phase_value(va, "a")
-        vb_str = format_phase_value(vb, "b")
-        vc_str = format_phase_value(vc, "c")
-        hover_text += f"⚡ V Mag   {va_str} {vb_str} {vc_str}<br>"
+        # Voltages
+        if is_triplex:
+            v_vals = {
+                "s1": getattr(bus_row, "v_s1", np.nan),
+                "s2": getattr(bus_row, "v_s2", np.nan),
+            }
+        else:
+            v_vals = {"a": bus_row.v_a, "b": bus_row.v_b, "c": bus_row.v_c}
+        hover_text += _row("⚡", "V Mag", v_vals)
 
-        # Load data
-        pla, plb, plc = bus_row.pl_a, bus_row.pl_b, bus_row.pl_c
-        qla, qlb, qlc = bus_row.ql_a, bus_row.ql_b, bus_row.ql_c
-        pla_str = format_phase_value(pla, "a")
-        plb_str = format_phase_value(plb, "b")
-        plc_str = format_phase_value(plc, "c")
-        qla_str = format_phase_value(qla, "a")
-        qlb_str = format_phase_value(qlb, "b")
-        qlc_str = format_phase_value(qlc, "c")
-        hover_text += f"💡 P Load  {pla_str} {plb_str} {plc_str}<br>"
-        hover_text += f"💡 Q Load  {qla_str} {qlb_str} {qlc_str}<br>"
+        # Loads
+        if is_triplex:
+            pl_vals = {
+                "s1": getattr(bus_row, "pl_s1", np.nan),
+                "s2": getattr(bus_row, "pl_s2", np.nan),
+            }
+            ql_vals = {
+                "s1": getattr(bus_row, "ql_s1", np.nan),
+                "s2": getattr(bus_row, "ql_s2", np.nan),
+            }
+        else:
+            pl_vals = {"a": bus_row.pl_a, "b": bus_row.pl_b, "c": bus_row.pl_c}
+            ql_vals = {"a": bus_row.ql_a, "b": bus_row.ql_b, "c": bus_row.ql_c}
+        hover_text += _row("💡", "P Load", pl_vals)
+        hover_text += _row("💡", "Q Load", ql_vals)
 
-        # Capacitor data (if present)
-        if cap_data is not None and bus_row.id in cap_data.id.to_numpy():
+        # Capacitor (abc buses only)
+        if (
+            not is_triplex
+            and cap_data is not None
+            and bus_row.id in cap_data.id.to_numpy()
+        ):
             q_cap = cap_data.loc[
                 cap_data.id == bus_row.id, ["q_a", "q_b", "q_c"]
             ].to_numpy()[0]
-            qcap_a_str = format_phase_value(q_cap[0], "a")
-            qcap_b_str = format_phase_value(q_cap[1], "b")
-            qcap_c_str = format_phase_value(q_cap[2], "c")
-            hover_text += f"🔃 Q Cap   {qcap_a_str} {qcap_b_str} {qcap_c_str}<br>"
+            hover_text += _row(
+                "🔃", "Q Cap", {"a": q_cap[0], "b": q_cap[1], "c": q_cap[2]}
+            )
 
-        # Generator data (if present)
+        # Generator
         if bus_row.id in gen_data.id.to_numpy():
-            p_gen = gen_data.loc[
-                gen_data.id == bus_row.id, ["p_a", "p_b", "p_c"]
-            ].to_numpy()[0]
-            q_gen = gen_data.loc[
-                gen_data.id == bus_row.id, ["q_a", "q_b", "q_c"]
-            ].to_numpy()[0]
-            pgen_a_str = format_phase_value(p_gen[0], "a")
-            pgen_b_str = format_phase_value(p_gen[1], "b")
-            pgen_c_str = format_phase_value(p_gen[2], "c")
-            qgen_a_str = format_phase_value(q_gen[0], "a")
-            qgen_b_str = format_phase_value(q_gen[1], "b")
-            qgen_c_str = format_phase_value(q_gen[2], "c")
-            hover_text += f"⚙️ P Gen   {pgen_a_str} {pgen_b_str} {pgen_c_str}<br>"
-            hover_text += f"⚙️ Q Gen   {qgen_a_str} {qgen_b_str} {qgen_c_str}<br>"
+            gen_row = gen_data.loc[gen_data.id == bus_row.id].iloc[0]
+            if is_triplex:
+                pg_vals = {
+                    "s1": gen_row.get("p_s1", np.nan),
+                    "s2": gen_row.get("p_s2", np.nan),
+                }
+                qg_vals = {
+                    "s1": gen_row.get("q_s1", np.nan),
+                    "s2": gen_row.get("q_s2", np.nan),
+                }
+            else:
+                pg_vals = {
+                    "a": gen_row.get("p_a", np.nan),
+                    "b": gen_row.get("p_b", np.nan),
+                    "c": gen_row.get("p_c", np.nan),
+                }
+                qg_vals = {
+                    "a": gen_row.get("q_a", np.nan),
+                    "b": gen_row.get("q_b", np.nan),
+                    "c": gen_row.get("q_c", np.nan),
+                }
+            hover_text += _row("⚙️", "P Gen", pg_vals)
+            hover_text += _row("⚙️", "Q Gen", qg_vals)
 
-        # Battery data (if present)
+        # Battery
         if (
             bat_data is not None
             and len(bat_data) > 0
             and bus_row.id in bat_data.id.to_numpy()
         ):
             bat_row = bat_data.loc[bat_data.id == bus_row.id].iloc[0]
-            # Get three-phase power values (from plot_network merge with suffixes _p)
-            p_bat_a = bat_row.get("a_p", bat_row.get("p_a", 0.0))
-            p_bat_b = bat_row.get("b_p", bat_row.get("p_b", 0.0))
-            p_bat_c = bat_row.get("c_p", bat_row.get("p_c", 0.0))
-            soc = bat_row.get("soc", 0.0)
-            pbat_a_str = format_phase_value(p_bat_a, "a")
-            pbat_b_str = format_phase_value(p_bat_b, "b")
-            pbat_c_str = format_phase_value(p_bat_c, "c")
-            hover_text += f"🔋 P Bat   {pbat_a_str} {pbat_b_str} {pbat_c_str}<br>"
-            hover_text += f"   SOC     {soc * 100:>7.1f}%<br>"
+            if is_triplex:
+                pb_vals = {
+                    "s1": bat_row.get("s1_p", bat_row.get("p_s1", 0.0)),
+                    "s2": bat_row.get("s2_p", bat_row.get("p_s2", 0.0)),
+                }
+            else:
+                pb_vals = {
+                    "a": bat_row.get("a_p", bat_row.get("p_a", 0.0)),
+                    "b": bat_row.get("b_p", bat_row.get("p_b", 0.0)),
+                    "c": bat_row.get("c_p", bat_row.get("p_c", 0.0)),
+                }
+            soc_val = bat_row.get("soc", 0.0)
+            hover_text += _row("🔋", "P Bat", pb_vals)
+            hover_text += f"   SOC     {soc_val * 100:>7.1f}%<br>"
 
-        # Branch flow data (if present)
+        # Branch flow
         edge = branch_data.loc[branch_data.tb == bus_row.id, :]
         if len(edge) > 0:
-            to_name = bus_row.name
             fb = edge.fb.to_numpy()[0]
             from_name = bus_data.loc[bus_data.id == fb, "name"].to_numpy()[0]
-            sa, sb, sc = (
-                edge.s_a.to_numpy()[0],
-                edge.s_b.to_numpy()[0],
-                edge.s_c.to_numpy()[0],
-            )
-
-            pflow_a_str = format_phase_value(np.real(sa), "a")
-            pflow_b_str = format_phase_value(np.real(sb), "b")
-            pflow_c_str = format_phase_value(np.real(sc), "c")
-            qflow_a_str = format_phase_value(np.imag(sa), "a")
-            qflow_b_str = format_phase_value(np.imag(sb), "b")
-            qflow_c_str = format_phase_value(np.imag(sc), "c")
-
+            if is_triplex:
+                ss1 = (
+                    edge.s_s1.to_numpy()[0]
+                    if "s_s1" in edge.columns
+                    else complex(np.nan, np.nan)
+                )
+                ss2 = (
+                    edge.s_s2.to_numpy()[0]
+                    if "s_s2" in edge.columns
+                    else complex(np.nan, np.nan)
+                )
+                pflow_vals = {"s1": np.real(ss1), "s2": np.real(ss2)}
+                qflow_vals = {"s1": np.imag(ss1), "s2": np.imag(ss2)}
+            else:
+                sa = edge.s_a.to_numpy()[0]
+                sb = edge.s_b.to_numpy()[0]
+                sc = edge.s_c.to_numpy()[0]
+                pflow_vals = {"a": np.real(sa), "b": np.real(sb), "c": np.real(sc)}
+                qflow_vals = {"a": np.imag(sa), "b": np.imag(sb), "c": np.imag(sc)}
             hover_text += "<br>"
             hover_text += (
-                f"<b>  {edge.type.to_numpy()[0]}: {from_name} → {to_name}</b><br>"
+                f"<b>  {edge.type.to_numpy()[0]}: {from_name} → {bus_row.name}</b><br>"
             )
-            hover_text += f"➡️ P Flow  {pflow_a_str} {pflow_b_str} {pflow_c_str}<br>"
-            hover_text += f"➡️ Q Flow  {qflow_a_str} {qflow_b_str} {qflow_c_str}<br>"
+            hover_text += _row("➡️", "P Flow", pflow_vals)
+            hover_text += _row("➡️", "Q Flow", qflow_vals)
+
         text.append(hover_text)
     return text
 

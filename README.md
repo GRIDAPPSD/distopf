@@ -140,7 +140,7 @@ The `matrix_bess` wrapper supports multi-period (time-series) optimization with 
 
 ```python
 import distopf as opf
-case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der_bat")
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_bat")
 result = case.run_opf(wrapper="matrix_bess", objective="loss")
 ```
 

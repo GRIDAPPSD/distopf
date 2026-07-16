@@ -205,7 +205,7 @@ SCENARIOS = [
     },
     # {
     #     "id": "ieee123_bat_nlp_loss",
-    #     "case": "ieee123_30der_bat",
+    #     "case": "ieee123_bat",
     #     "method": "opf",
     #     "objective": "loss_min",
     #     "formulation": "branchflow",

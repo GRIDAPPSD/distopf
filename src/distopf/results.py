@@ -287,13 +287,15 @@ class PowerFlowResult:
 
         return plot_power_flows(self.active_power_flows, self.reactive_power_flows, t=t)
 
-    def plot_gens(self):
+    def plot_gens(self, t=None):
         """Plot generator outputs."""
         if self.active_power_generation is None:
             raise RuntimeError("No generator results available.")
         from distopf.plot import plot_gens
 
-        return plot_gens(self.active_power_generation, self.reactive_power_generation)
+        return plot_gens(
+            self.active_power_generation, self.reactive_power_generation, t=t
+        )
 
     def plot_batteries(self):
         """Plot battery power and state of charge over time."""
@@ -341,6 +343,104 @@ class PowerFlowResult:
             show_phases=show_phases,
             show_reactive_power=show_reactive_power,
             t=t,
+        )
+
+    def plot_voltage_vs_distance(
+        self,
+        title: str = "Voltage vs Distance from Source",
+        color_by: str = "algorithm",
+        include_secondary_phases: bool = False,
+    ):
+        """Plot voltage magnitude vs nodal distance from source bus.
+
+        Parameters
+        ----------
+        title : str, optional
+            Plot title. Default: "Voltage vs Distance from Source"
+        color_by : str, optional
+            Column name to color by. Default: "algorithm"
+        include_secondary_phases : bool, optional
+            If True, include secondary phases (s1, s2). Default: False
+
+        Returns
+        -------
+        fig : Plotly figure object
+
+        Raises
+        ------
+        RuntimeError
+            If no case reference or voltage results available
+        """
+        if self.case is None:
+            raise RuntimeError("No case reference available in result.")
+        if self.voltages is None:
+            raise RuntimeError("No voltage results available.")
+        from distopf.plot import plot_voltage_vs_distance
+
+        return plot_voltage_vs_distance(
+            self.case,
+            self.voltages,
+            title=title,
+            color_by=color_by,
+            include_secondary_phases=include_secondary_phases,
+        )
+
+    def plot_line_flow_vs_distance(
+        self,
+        power_type: str = "active",
+        title: str = "Line Flow vs Distance from Source",
+        color_by: str = "algorithm",
+        include_secondary_phases: bool = False,
+    ):
+        """Plot line flow vs nodal distance from source bus.
+
+        Parameters
+        ----------
+        power_type : str, optional
+            Type of power to plot: "active" or "reactive". Default: "active"
+        title : str, optional
+            Plot title. Default: "Line Flow vs Distance from Source"
+        color_by : str, optional
+            Column name to color by. Default: "algorithm"
+        include_secondary_phases : bool, optional
+            If True, include secondary phases (s1, s2). Default: False
+
+        Returns
+        -------
+        fig : Plotly figure object
+
+        Raises
+        ------
+        RuntimeError
+            If no case reference or power flow results available
+        """
+        if self.case is None:
+            raise RuntimeError("No case reference available in result.")
+
+        if power_type.lower() == "active":
+            if self.active_power_flows is None:
+                raise RuntimeError("No active power flow results available.")
+            flow_data = self.active_power_flows
+            flow_name = "Active Power"
+        elif power_type.lower() == "reactive":
+            if self.reactive_power_flows is None:
+                raise RuntimeError("No reactive power flow results available.")
+            flow_data = self.reactive_power_flows
+            flow_name = "Reactive Power"
+        else:
+            raise ValueError(
+                f"power_type must be 'active' or 'reactive', got '{power_type}'"
+            )
+
+        from distopf.plot import plot_line_flow_vs_distance
+
+        return plot_line_flow_vs_distance(
+            self.case,
+            flow_data,
+            flow_name=flow_name,
+            title=title,
+            color_by=color_by,
+            include_secondary_phases=include_secondary_phases,
         )
 
 

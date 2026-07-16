@@ -225,7 +225,7 @@ All need header row updated. Data values are unchanged.
 
 #### `gen_data.csv` (18 files)
 All case directories under `src/distopf/cases/csv/`:
-- `ieee13/`, `ieee13_battery/`, `ieee123/`, `ieee123_30der/`, `ieee123_30der_bat/`,
+- `ieee13/`, `ieee13_battery/`, `ieee123/`, `ieee123_30der/`, `ieee123_bat/`,
   `ieee123_alternate/`, `ieee34/`, `ieee33/`, `9500/`, `9500-primary-network/`,
   `2Bus-1ph-batt/`, `3Bus-1ph-batt/`, `4Bus-YY-Bal_dss/`, `4Bus-YY-Bal_dss_batt/`,
   `minimal_triplex/`, `triplex_pv/`, `triplex_3ph/`, `smartds_small/`
