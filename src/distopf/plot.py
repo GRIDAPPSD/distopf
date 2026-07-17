@@ -464,8 +464,8 @@ def plot_gens(p_gens: pd.DataFrame, q_gens: pd.DataFrame, t=None) -> go.Figure:
         animation_frame=animation_frame,
     )
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
-    fig.update_yaxes(title_text="Active Power (p.u.)", row=1, col=1)
-    fig.update_yaxes(title_text="Reactive Power (p.u.)", row=2, col=1)
+    fig.update_yaxes(title_text="Active Power (p.u.)", row=2, col=1)
+    fig.update_yaxes(title_text="Reactive Power (p.u.)", row=1, col=1)
     return fig
 
 
@@ -1227,9 +1227,42 @@ def plot_network(
     edge_scale = 10
     edge_min = 1
 
+    # Compute global max power flow magnitude for consistent line thickness across frames
+    _phase_cols = [
+        c
+        for c in ["a", "b", "c", "s1", "s2"]
+        if p_flow is not None and c in p_flow.columns
+    ]
+    _global_p_max = (
+        float(p_flow[_phase_cols].fillna(0).sum(axis=1).abs().max())
+        if _phase_cols
+        else None
+    )
+    _phase_cols_q = [
+        c
+        for c in ["a", "b", "c", "s1", "s2"]
+        if q_flow is not None and c in q_flow.columns
+    ]
+    _global_q_max = (
+        float(q_flow[_phase_cols_q].fillna(0).sum(axis=1).abs().max())
+        if _phase_cols_q
+        else None
+    )
+
+    # --- original static processing (unchanged) ---
     bus_data = _process_bus_data(bus_data, v, phase_list, t)
     branch_data = _process_branch_data(
-        branch_data, bus_data, s, p_flow, q_flow, phase_list, edge_scale, edge_min, t
+        branch_data,
+        bus_data,
+        s,
+        p_flow,
+        q_flow,
+        phase_list,
+        edge_scale,
+        edge_min,
+        t,
+        p_max=_global_p_max,
+        q_max=_global_q_max,
     )
     gen_data = _process_gen_data(gen_data, p_gen, q_gen, t)
     bat_data = _process_bat_data(bat_data, p_bat, soc, t)
@@ -1242,7 +1275,6 @@ def plot_network(
     reverse_flow_markers_trace = _make_reverse_flow_marker_trace(
         branch_data, node_size, show_reactive_power
     )
-
     node_trace.text = _make_hover_text(
         branch_data, bus_data, cap_data, gen_data, bat_data
     )
@@ -1260,6 +1292,81 @@ def plot_network(
         ]
     )
 
+    # --- animation (only when t is not explicitly given and multiple steps exist) ---
+    animation_times = _get_animation_times(
+        v, s, p_flow, q_flow, p_gen, q_gen, p_bat, soc
+    )
+    if t is None and len(animation_times) > 1:
+        bat_data_raw = (
+            model.bat_data.copy()
+            if hasattr(model, "bat_data") and model.bat_data is not None
+            else None
+        )
+        frames = []
+        for t_step in animation_times:
+            _bd = _process_bus_data(model.bus_data.copy(), v, phase_list, t_step)
+            _brd = _process_branch_data(
+                model.branch_data.copy(),
+                _bd,
+                s,
+                p_flow,
+                q_flow,
+                phase_list,
+                edge_scale,
+                edge_min,
+                t_step,
+                p_max=_global_p_max,
+                q_max=_global_q_max,
+            )
+            _gd = _process_gen_data(model.gen_data.copy(), p_gen, q_gen, t_step)
+            _btd = _process_bat_data(
+                bat_data_raw.copy() if bat_data_raw is not None else None,
+                p_bat,
+                soc,
+                t_step,
+            )
+            _nt = _make_node_trace(_bd, node_size, v_max, v_min)
+            _ct, _gt, _btt, _st = _make_asset_markers(
+                _bd, cap_data, _gd, _btd, node_size
+            )
+            _ets = _make_edge_traces(_brd, show_phases, show_reactive_power)
+            _rfmt = _make_reverse_flow_marker_trace(
+                _brd, node_size, show_reactive_power
+            )
+            _nt.text = _make_hover_text(_brd, _bd, cap_data, _gd, _btd)
+            frames.append(
+                go.Frame(
+                    data=[*_ets, _st, _rfmt, _btt, _ct, _gt, _nt],
+                    name=str(t_step),
+                )
+            )
+        fig.frames = frames
+        fig.update_layout(
+            sliders=[
+                {
+                    "active": 0,
+                    "x": 0.1,
+                    "y": -0.05,
+                    "len": 0.8,
+                    "steps": [
+                        {
+                            "label": str(ts),
+                            "method": "animate",
+                            "args": [
+                                [str(ts)],
+                                {
+                                    "mode": "immediate",
+                                    "frame": {"duration": 0, "redraw": True},
+                                    "transition": {"duration": 0},
+                                },
+                            ],
+                        }
+                        for ts in animation_times
+                    ],
+                }
+            ],
+        )
+
     fig.update_layout(
         title=title,
         plot_bgcolor="White",
@@ -1276,6 +1383,19 @@ def plot_network(
     )
 
     return fig
+
+
+def _get_animation_times(*dfs) -> list:
+    """Return sorted unique integer time steps from the first dataframe with a 't' column."""
+    for df in dfs:
+        if df is not None and isinstance(df, pd.DataFrame) and "t" in df.columns:
+            try:
+                times = sorted(int(v) for v in df["t"].dropna().unique())
+                if len(times) > 1:
+                    return times
+            except (TypeError, ValueError):
+                pass
+    return []
 
 
 def _process_bus_data(bus_data, v, phase_list, t):
@@ -1302,7 +1422,17 @@ def _process_bus_data(bus_data, v, phase_list, t):
 
 
 def _process_branch_data(
-    branch_data, bus_data, s, p_flow, q_flow, phase_list, edge_scale, edge_min, t
+    branch_data,
+    bus_data,
+    s,
+    p_flow,
+    q_flow,
+    phase_list,
+    edge_scale,
+    edge_min,
+    t,
+    p_max=None,
+    q_max=None,
 ):
     _s = None
     if s is not None:
@@ -1359,13 +1489,17 @@ def _process_branch_data(
         branch_data["q_abs"] = p_complex.map(lambda z: abs(z.imag))
         branch_data["p_direction"] = p_complex.map(lambda z: np.sign(z.real + 1e-6))
         branch_data["q_direction"] = p_complex.map(lambda z: np.sign(z.imag + 1e-6))
+        _p_denom = p_max if p_max is not None else branch_data["p_abs"].max()
+        _q_denom = q_max if q_max is not None else branch_data["q_abs"].max()
         branch_data["p_norm"] = (
-            branch_data["p_abs"].to_numpy() / branch_data["p_abs"].max() * edge_scale
-            + edge_min
+            branch_data["p_abs"].to_numpy() / _p_denom * edge_scale + edge_min
+            if _p_denom > 0
+            else branch_data["p_norm"]
         )
         branch_data["q_norm"] = (
-            branch_data["q_abs"].to_numpy() / branch_data["q_abs"].max() * edge_scale
-            + edge_min
+            branch_data["q_abs"].to_numpy() / _q_denom * edge_scale + edge_min
+            if _q_denom > 0
+            else branch_data["q_norm"]
         )
     return branch_data
 

@@ -1582,7 +1582,7 @@ def modify_case(
     # Modify control_variable
     if control_variable is not None and case.gen_data is not None:
         if control_variable == "":
-            case.gen_data.control_variable = "P"
+            case.gen_data.control_variable = ""
         if control_variable.upper() == "P":
             case.gen_data.control_variable = "P"
         if control_variable.upper() == "Q":
