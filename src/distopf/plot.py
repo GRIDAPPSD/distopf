@@ -1224,7 +1224,7 @@ def plot_network(
     )
 
     node_size = 10
-    edge_scale = 10
+    edge_scale = 20
     edge_min = 1
 
     # Compute global max power flow magnitude for consistent line thickness across frames
@@ -1473,7 +1473,16 @@ def _process_branch_data(
     branch_data["x_mid"] = 1 / 2 * (branch_data.x0 + branch_data.x1)
     branch_data["y_mid"] = 1 / 2 * (branch_data.y0 + branch_data.y1)
     if _s is not None:
-        _s.index = _s.tb.to_numpy() - 1
+        # _s.index = _s.tb.to_numpy() - 1
+        # Save the original index so we can restore it at the end
+        _orig_index = branch_data.index
+
+        # Use (fb, tb) as a unique key on both sides
+        _s = _s.set_index(pd.MultiIndex.from_arrays([_s.fb.to_numpy(), _s.tb.to_numpy()]))
+        branch_data = branch_data.set_index(
+            pd.MultiIndex.from_arrays([branch_data.fb.to_numpy(), branch_data.tb.to_numpy()])
+        )
+
         branch_data["s_a"] = _s.a if "a" in _s.columns else complex(np.nan, np.nan)
         branch_data["s_b"] = _s.b if "b" in _s.columns else complex(np.nan, np.nan)
         branch_data["s_c"] = _s.c if "c" in _s.columns else complex(np.nan, np.nan)
@@ -1501,6 +1510,9 @@ def _process_branch_data(
             if _q_denom > 0
             else branch_data["q_norm"]
         )
+
+        # Restore the original index so downstream code (which likely uses tb-1) still works
+        branch_data.index = _orig_index
     return branch_data
 
 

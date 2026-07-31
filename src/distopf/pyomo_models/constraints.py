@@ -14,17 +14,20 @@ sqrt2 = sqrt(2)
 sqrt3 = sqrt(3)
 
 
-
 def add_p_flow_constraints(m: LindistModelProtocol) -> None:
     """
     Add LinDistFlow power balance constraints.
-    Active power: P_ij = sum(P_jk) + p_L - p_D
+    Active power: P_ij = sum(P_jk) + p_L - p_D - p_bat - p_mpssd
     """
 
     def p_balance_rule(m: LindistModelProtocol, fb, tb, ph, t):
         load = m.p_load[tb, ph, t]
         generation = m.p_gen[tb, ph, t] if (tb, ph, t) in m.p_gen else 0
         p_bat = m.p_bat[tb, ph, t] if (tb, ph, t) in m.p_bat else 0
+        p_mpssd = sum(
+            m.p_mpssd[_id, ph, t]
+            for _id in getattr(m, "mpssd_bus_map", {}).get((tb, ph), [])
+        )
         incoming_flow = m.p_flow[fb, tb, ph, t]
         outgoing_flows = sum(
             m.p_flow[fb2, tb2, ph, t]
@@ -38,7 +41,7 @@ def add_p_flow_constraints(m: LindistModelProtocol) -> None:
                     for sec_ph in ("s1", "s2"):
                         if (fb2, tb2, sec_ph) in m.branch_phase_set:
                             outgoing_flows += m.p_flow[fb2, tb2, sec_ph, t]
-        return incoming_flow == outgoing_flows + load - generation - p_bat
+        return incoming_flow == outgoing_flows + load - generation - p_bat - p_mpssd
 
     m.power_balance_p = pyo.Constraint(
         m.branch_phase_set, m.time_set, rule=p_balance_rule
@@ -48,7 +51,7 @@ def add_p_flow_constraints(m: LindistModelProtocol) -> None:
 def add_q_flow_constraints(m: LindistModelProtocol) -> None:
     """
     Add LinDistFlow power balance constraints.
-    Reactive power: Q_ij = sum(Q_jk) + q_L - q_D - q_C
+    Reactive power: Q_ij = sum(Q_jk) + q_L - q_D - q_C - q_bat - q_mpssd
     """
 
     def q_balanced_rule(m: LindistModelProtocol, fb, tb, ph, t):
@@ -56,6 +59,10 @@ def add_q_flow_constraints(m: LindistModelProtocol) -> None:
         generation = m.q_gen[tb, ph, t] if (tb, ph, t) in m.q_gen else 0
         q_bat = m.q_bat[tb, ph, t] if (tb, ph, t) in m.q_bat else 0
         capacitor = m.q_cap[tb, ph, t] if (tb, ph, t) in m.q_cap else 0
+        q_mpssd = sum(
+            m.q_mpssd[_id, ph, t]
+            for _id in getattr(m, "mpssd_bus_map", {}).get((tb, ph), [])
+        )
         incoming_flow = m.q_flow[fb, tb, ph, t]
         outgoing_flows = sum(
             m.q_flow[fb2, tb2, ph, t]
@@ -69,7 +76,10 @@ def add_q_flow_constraints(m: LindistModelProtocol) -> None:
                     for sec_ph in ("s1", "s2"):
                         if (fb2, tb2, sec_ph) in m.branch_phase_set:
                             outgoing_flows += m.q_flow[fb2, tb2, sec_ph, t]
-        return incoming_flow == outgoing_flows + load - generation - capacitor - q_bat
+        return (
+            incoming_flow
+            == outgoing_flows + load - generation - capacitor - q_bat - q_mpssd
+        )
 
     m.power_balance_q = pyo.Constraint(
         m.branch_phase_set, m.time_set, rule=q_balanced_rule
@@ -300,6 +310,38 @@ def add_circular_generator_constraints_pq_control(m: LindistModelProtocol) -> No
         )
 
     m.gen_circle_constraint = pyo.Constraint(m.gen_phase_set, m.time_set, rule=_circle)
+
+
+def add_p_gen_equal_phase_constraints(m: LindistModelProtocol) -> None:
+    def p_gen_equal_phase_rule(m, _id, ph, t):
+        ct = m.gen_control_type[_id, ph]
+        if ct not in (ControlVariable.P, ControlVariable.PQ):
+            return pyo.Constraint.Skip
+        phases = [p for p in ("a", "b", "c") if (_id, p) in m.gen_phase_set]
+        if len(phases) < 2 or ph == phases[0]:
+            return pyo.Constraint.Skip
+        # Tie every non-first phase to the first phase
+        return m.p_gen[_id, ph, t] == m.p_gen[_id, phases[0], t]
+
+    m.p_gen_equal_phase = pyo.Constraint(
+        m.gen_phase_set, m.time_set, rule=p_gen_equal_phase_rule
+    )
+
+
+def add_q_gen_equal_phase_constraints(m: LindistModelProtocol) -> None:
+    def q_gen_equal_phase_rule(m, _id, ph, t):
+        ct = m.gen_control_type[_id, ph]
+        if ct not in (ControlVariable.Q, ControlVariable.PQ):
+            return pyo.Constraint.Skip
+        phases = [p for p in ("a", "b", "c") if (_id, p) in m.gen_phase_set]
+        if len(phases) < 2 or ph == phases[0]:
+            return pyo.Constraint.Skip
+        # Tie every non-first phase to the first phase
+        return m.q_gen[_id, ph, t] == m.q_gen[_id, phases[0], t]
+
+    m.q_gen_equal_phase = pyo.Constraint(
+        m.gen_phase_set, m.time_set, rule=q_gen_equal_phase_rule
+    )
 
 
 def add_capacitor_constraints(m: LindistModelProtocol) -> None:
@@ -864,3 +906,103 @@ def add_regulator_tap_change_limit_constraints(
     m.reg_tap_change_lower = pyo.Constraint(
         m.reg_phase_set, m.time_set, rule=tap_change_limit_lower
     )
+
+
+def add_mpssd_constant_p_constraints_q_control(m):
+    def _rule(m, _id, ph, t):
+        ct = m.mpssd_control_type[_id, ph]
+        if ct in (ControlVariable.NONE, ControlVariable.Q):
+            return m.p_mpssd[_id, ph, t] == m.p_mpssd_nom[_id, ph, t]
+        return pyo.Constraint.Skip
+
+    m.mpssd_constant_p = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=_rule)
+
+
+def add_mpssd_constant_q_constraints_p_control(m):
+    def _rule(m, _id, ph, t):
+        ct = m.mpssd_control_type[_id, ph]
+        if ct in (ControlVariable.NONE, ControlVariable.P):
+            return m.q_mpssd[_id, ph, t] == m.q_mpssd_nom[_id, ph, t]
+        return pyo.Constraint.Skip
+
+    m.mpssd_constant_q = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=_rule)
+
+
+def add_mpssd_limits(m):
+    def p_bounds(m, _id, ph, t):
+        s = m.mpssd_s_rated[_id, ph]
+        return (-s, m.p_mpssd[_id, ph, t], s)
+
+    def q_bounds(m, _id, ph, t):
+        return (
+            max(-m.mpssd_s_rated[_id, ph], m.mpssd_q_min[_id, ph]),
+            m.q_mpssd[_id, ph, t],
+            min(m.mpssd_s_rated[_id, ph], m.mpssd_q_max[_id, ph]),
+        )
+
+    m.mpssd_p_limits = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=p_bounds)
+    m.mpssd_q_limits = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=q_bounds)
+
+
+def add_circular_mpssd_constraints(m):
+    def _rule(m, _id, ph, t):
+        return (
+            m.p_mpssd[_id, ph, t] ** 2 + m.q_mpssd[_id, ph, t] ** 2
+            <= m.mpssd_s_rated[_id, ph] ** 2
+        )
+
+    m.mpssd_circle = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=_rule)
+
+
+def add_octagonal_mpssd_constraints(m):
+    c = sqrt2 - 1
+
+    def r1(m, i, ph, t):
+        return c * m.p_mpssd[i, ph, t] + m.q_mpssd[i, ph, t] <= m.mpssd_s_rated[i, ph]
+
+    def r2(m, i, ph, t):
+        return m.p_mpssd[i, ph, t] + c * m.q_mpssd[i, ph, t] <= m.mpssd_s_rated[i, ph]
+
+    def r3(m, i, ph, t):
+        return m.p_mpssd[i, ph, t] - c * m.q_mpssd[i, ph, t] <= m.mpssd_s_rated[i, ph]
+
+    def r4(m, i, ph, t):
+        return c * m.p_mpssd[i, ph, t] - m.q_mpssd[i, ph, t] <= m.mpssd_s_rated[i, ph]
+
+    def r5(m, i, ph, t):
+        return -c * m.p_mpssd[i, ph, t] - m.q_mpssd[i, ph, t] <= m.mpssd_s_rated[i, ph]
+
+    def r6(m, i, ph, t):
+        return -m.p_mpssd[i, ph, t] - c * m.q_mpssd[i, ph, t] <= m.mpssd_s_rated[i, ph]
+
+    def r7(m, i, ph, t):
+        return -m.p_mpssd[i, ph, t] + c * m.q_mpssd[i, ph, t] <= m.mpssd_s_rated[i, ph]
+
+    def r8(m, i, ph, t):
+        return -c * m.p_mpssd[i, ph, t] + m.q_mpssd[i, ph, t] <= m.mpssd_s_rated[i, ph]
+
+    m.mpssd_oct_1 = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=r1)
+    m.mpssd_oct_2 = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=r2)
+    m.mpssd_oct_3 = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=r3)
+    m.mpssd_oct_4 = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=r4)
+    m.mpssd_oct_5 = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=r5)
+    m.mpssd_oct_6 = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=r6)
+    m.mpssd_oct_7 = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=r7)
+    m.mpssd_oct_8 = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=r8)
+
+
+def add_dc_bus_balance_constraints(m):
+    """Lossless DC link: sum of AC-side P injections across all ports sharing
+    a dc_bus label equals zero at every timestep."""
+
+    def _rule(m, dc, t):
+        return (
+            sum(
+                m.p_mpssd[_id, ph, t]
+                for (_id, ph) in m.mpssd_phase_set
+                if m.mpssd_dc_bus[_id, ph] == dc
+            )
+            == 0
+        )
+
+    m.dc_bus_balance = pyo.Constraint(m.dc_bus_set, m.time_set, rule=_rule)

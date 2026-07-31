@@ -103,7 +103,24 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
         initialize=_create_phase_tuples(case.bat_data, "id"), dimen=2
     )
     m.bat_set = pyo.Set(initialize=case.bat_data.id.tolist())
-
+    m.mpssd_set = pyo.Set(initialize=case.mpssd_data.id.tolist())
+    m.mpssd_phase_set = pyo.Set(
+        initialize=_create_phase_tuples(case.mpssd_data), dimen=2
+    )
+    # DC bus labels: any nonzero value that appears in mpssd_data.dc_bus
+    dc_labels = sorted(
+        {
+            int(v)
+            for v in case.mpssd_data.get("dc_bus", pd.Series(dtype=int)).tolist()
+            if pd.notna(v) and int(v) != 0
+        }
+    )
+    m.dc_bus_set = pyo.Set(initialize=dc_labels)
+    m.mpssd_bus_map = {}
+    if not case.mpssd_data.empty:
+        for _, row in case.mpssd_data.iterrows():
+            for ph in _parse_phases(str(row.phases)):
+                m.mpssd_bus_map.setdefault((int(row.bus), ph), []).append(int(row.id))
 
 def _create_rx_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     """Create resistance and reactance parameters"""
@@ -216,7 +233,7 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     p_gen_data, q_gen_data = {}, {}
     s_rated_data, q_gen_min_data, q_gen_max_data = {}, {}, {}
     gen_control_data = {}
-
+    price_data = {}
     for _, row in case.gen_data.iterrows():
         phases = _parse_phases(str(row.phases))
         for phase in phases:
@@ -234,6 +251,7 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             q_gen_min_data[(row.id, phase)] = q_min
             q_gen_max_data[(row.id, phase)] = q_max
 
+            price_data[(row.id, phase)] = getattr(row, "price", 0)
             # Control variable type
             control_var = getattr(row, "control_variable", "")
             gen_control_data[(row.id, phase)] = CONTROL_VARIABLE_MAP[control_var]
@@ -282,6 +300,9 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         initialize=gen_control_data,
         default=0,
         doc="Generator control variable type",
+    )
+    m.gen_price = pyo.Param(
+        m.gen_phase_set, initialize=price_data, default=0, doc="Generator energy price"
     )
 
 
@@ -574,6 +595,59 @@ def _create_price_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     )
 
 
+def _create_mpssd_parameters(m: pyo.ConcreteModel, case: Case) -> None:
+    if case.mpssd_data.empty:
+        return
+
+    s_rated_data, q_min_data, q_max_data = {}, {}, {}
+    dc_bus_data, control_data, price_data = {}, {}, {}
+    p_nom_data, q_nom_data = {}, {}
+
+    for _, row in case.mpssd_data.iterrows():
+        _id = int(row.id)
+        dc_raw = getattr(row, "dc_bus", 0)
+        dc = int(dc_raw) if pd.notna(dc_raw) else 0
+        ctrl = CONTROL_VARIABLE_MAP[getattr(row, "control_variable", "PQ")]
+        price = getattr(row, "price", 0.0)
+        for ph in _parse_phases(str(row.phases)):
+            if (_id, ph) not in m.mpssd_phase_set:
+                continue
+            s_rated = getattr(row, f"s_{ph}_max", 1000.0)
+            s_rated_data[(_id, ph)] = s_rated
+            q_max_data[(_id, ph)] = getattr(row, f"q_{ph}_max", s_rated)
+            q_min_data[(_id, ph)] = getattr(row, f"q_{ph}_min", -s_rated)
+            dc_bus_data[(_id, ph)] = dc
+            control_data[(_id, ph)] = ctrl
+            price_data[(_id, ph)] = price
+            p_nom = getattr(row, f"p_{ph}", 0.0)
+            q_nom = getattr(row, f"q_{ph}", 0.0)
+            for t in m.time_set:
+                p_nom_data[(_id, ph, t)] = p_nom
+                q_nom_data[(_id, ph, t)] = q_nom
+
+    m.mpssd_s_rated = pyo.Param(
+        m.mpssd_phase_set, initialize=s_rated_data, default=1000.0
+    )
+    m.mpssd_q_min = pyo.Param(m.mpssd_phase_set, initialize=q_min_data, default=-1000.0)
+    m.mpssd_q_max = pyo.Param(m.mpssd_phase_set, initialize=q_max_data, default=1000.0)
+    m.mpssd_dc_bus = pyo.Param(
+        m.mpssd_phase_set,
+        initialize=dc_bus_data,
+        default=0,
+        doc="DC bus label; ports sharing a label are linked",
+    )
+    m.mpssd_control_type = pyo.Param(
+        m.mpssd_phase_set, initialize=control_data, default=3
+    )
+    m.mpssd_price = pyo.Param(m.mpssd_phase_set, initialize=price_data, default=0.0)
+    m.p_mpssd_nom = pyo.Param(
+        m.mpssd_phase_set, m.time_set, initialize=p_nom_data, default=0.0
+    )
+    m.q_mpssd_nom = pyo.Param(
+        m.mpssd_phase_set, m.time_set, initialize=q_nom_data, default=0.0
+    )
+
+
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     """
     Create all parameters for the Pyomo model including impedances, loads,
@@ -589,6 +663,8 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_battery_parameters(m, case)
     _create_branch_thermal_parameters(m, case)
     _create_price_parameters(m, case)
+    _create_mpssd_parameters(m, case)
+
 
 def create_lindist_model(
     case: Case,
@@ -682,6 +758,9 @@ def create_lindist_model(
     m.q_bat = pyo.Var(m.bat_phase_set, m.time_set, initialize=0)
     m.soc = pyo.Var(m.bat_set, m.time_set, initialize=0.5)
 
+    # MPSSD variables
+    m.p_mpssd = pyo.Var(m.mpssd_phase_set, m.time_set, domain=pyo.Reals, initialize=0)
+    m.q_mpssd = pyo.Var(m.mpssd_phase_set, m.time_set, domain=pyo.Reals, initialize=0)
     # ===== Capacitor MI Variables (conditional) =====
     if control_capacitors:
         m.u_cap = pyo.Var(
@@ -835,6 +914,18 @@ def add_constraints(
         constraints.add_battery_soc_limits(model)
         if circular_constraints:
             constraints.add_circular_battery_constraints(model)
+
+    # MPSSDs
+    constraints.add_mpssd_constant_p_constraints_q_control(model)
+    constraints.add_mpssd_constant_q_constraints_p_control(model)
+    if not equality_only:
+        constraints.add_mpssd_limits(model)
+        if circular_constraints:
+            constraints.add_circular_mpssd_constraints(model)
+        else:
+            constraints.add_octagonal_mpssd_constraints(model)
+    if len(model.dc_bus_set) > 0:
+        constraints.add_dc_bus_balance_constraints(model)
 
 
 class LinDistModel:
