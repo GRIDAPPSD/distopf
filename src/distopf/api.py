@@ -41,11 +41,12 @@ def _get_wrapper_registry() -> dict:
             MatrixBessWrapper,
             PyomoWrapper,
         )
-
+        from distopf.wrappers.sdp_wrapper import SdpWrapper
         _WRAPPER_REGISTRY = {
             "matrix": MatrixWrapper,
             "matrix_bess": MatrixBessWrapper,
             "pyomo": PyomoWrapper,
+            "sdp": SdpWrapper, 
         }
     return _WRAPPER_REGISTRY
 
@@ -53,6 +54,12 @@ def _get_wrapper_registry() -> dict:
 # Maps formulation name → (default_wrapper, model_type, compatible_wrappers)
 # This is the public API for selecting a specific math formulation.
 _FORMULATION_REGISTRY: dict[str, dict] = {
+    # SDP CVXPY Formulation
+    "sdp_branchflow": {
+        "default_wrapper": "sdp",
+        "model_type": "sdp_branchflow",
+        "compatible_wrappers": ["sdp"],
+    },
     # Pyomo BranchFlow (nonlinear, IPOPT/MINLP)
     "branchflow": {
         "default_wrapper": "pyomo",
