@@ -87,7 +87,7 @@ class SdpWrapper(Wrapper):
 
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         solver_name = kwargs.pop("solver", None)
-        verbose = kwargs.pop("verbose", False)        
+        verbose = kwargs.pop("verbose", False)
         kwargs.pop("duals", None)
         kwargs.pop("model_type", None)
         # Remaining kwargs forwarded to cp.Problem.solve()
@@ -141,14 +141,14 @@ class SdpWrapper(Wrapper):
             return objective
 
         objective_map = {
-            "loss":               loss_objective_sdp,
-            "loss_min":           loss_objective_sdp,
-            "substation":         substation_power_objective_sdp,
-            "substation_power":   substation_power_objective_sdp,
-            "voltage_deviation":  voltage_deviation_objective_sdp,
-            "curtail":            generation_curtailment_objective_sdp,
-            "curtail_min":        generation_curtailment_objective_sdp,
-            "curtailment":        generation_curtailment_objective_sdp,
+            "loss": loss_objective_sdp,
+            "loss_min": loss_objective_sdp,
+            "substation": substation_power_objective_sdp,
+            "substation_power": substation_power_objective_sdp,
+            "voltage_deviation": voltage_deviation_objective_sdp,
+            "curtail": generation_curtailment_objective_sdp,
+            "curtail_min": generation_curtailment_objective_sdp,
+            "curtailment": generation_curtailment_objective_sdp,
         }
 
         obj_lower = objective.lower().strip()

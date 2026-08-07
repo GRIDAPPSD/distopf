@@ -28,17 +28,21 @@ from distopf.pyomo_models.nl_branchflow import ControlVariable
 # Balanced 3-phase slack bus voltage outer-product matrix at 1.0 p.u.
 # W_slack = V_slack · V_slack†  for V = [1, a², a] (a = e^{j2π/3})
 # Re(W_slack)
-_W_SLACK_RE_3PH = np.array([
-    [ 1.0,  -0.5,  -0.5],
-    [-0.5,   1.0,  -0.5],
-    [-0.5,  -0.5,   1.0],
-])
+_W_SLACK_RE_3PH = np.array(
+    [
+        [1.0, -0.5, -0.5],
+        [-0.5, 1.0, -0.5],
+        [-0.5, -0.5, 1.0],
+    ]
+)
 # Im(W_slack)
-_W_SLACK_IM_3PH = np.array([
-    [ 0.0,             -np.sqrt(3) / 2,  np.sqrt(3) / 2],
-    [ np.sqrt(3) / 2,   0.0,            -np.sqrt(3) / 2],
-    [-np.sqrt(3) / 2,   np.sqrt(3) / 2,  0.0           ],
-])
+_W_SLACK_IM_3PH = np.array(
+    [
+        [0.0, -np.sqrt(3) / 2, np.sqrt(3) / 2],
+        [np.sqrt(3) / 2, 0.0, -np.sqrt(3) / 2],
+        [-np.sqrt(3) / 2, np.sqrt(3) / 2, 0.0],
+    ]
+)
 
 
 def add_swing_bus_constraints(m: SdpModel) -> None:
@@ -72,12 +76,8 @@ def add_swing_bus_constraints(m: SdpModel) -> None:
 
             for i in range(n):
                 for j in range(n):
-                    new_constraints.append(
-                        m.W_re[bus, t][i, j] == W_re_ref[i, j]
-                    )
-                    new_constraints.append(
-                        m.W_im[bus, t][i, j] == W_im_ref[i, j]
-                    )
+                    new_constraints.append(m.W_re[bus, t][i, j] == W_re_ref[i, j])
+                    new_constraints.append(m.W_im[bus, t][i, j] == W_im_ref[i, j])
 
     m._add(m.swing_bus_constraints, new_constraints)
 
@@ -85,6 +85,7 @@ def add_swing_bus_constraints(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # Skew-symmetry  (structural constraint on W_im and L_im)
 # ---------------------------------------------------------------------------
+
 
 def add_hermitian_constraints(m: SdpModel) -> None:
     """
@@ -123,6 +124,7 @@ def add_hermitian_constraints(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # SDP PSD block constraint  (mirrors add_current_constraint1/2)
 # ---------------------------------------------------------------------------
+
 
 def add_psd_block_constraints(m: SdpModel) -> None:
     """
@@ -166,12 +168,14 @@ def add_psd_block_constraints(m: SdpModel) -> None:
             Li = m.L_im[fb, tb, t]
 
             # Build the 4n×4n real-valued representation of the complex PSD block
-            M = cp.bmat([
-                [Wf_re,  -Wf_im,  Sr,    -Si  ],
-                [Wf_im,   Wf_re,  Si,     Sr  ],
-                [Sr.T,    Si.T,   Lr,    -Li  ],
-                [-Si.T,   Sr.T,   Li,     Lr  ],
-            ])
+            M = cp.bmat(
+                [
+                    [Wf_re, -Wf_im, Sr, -Si],
+                    [Wf_im, Wf_re, Si, Sr],
+                    [Sr.T, Si.T, Lr, -Li],
+                    [-Si.T, Sr.T, Li, Lr],
+                ]
+            )
             new_constraints.append(M >> 0)
 
     m._add(m.psd_block_constraints, new_constraints)
@@ -180,6 +184,7 @@ def add_psd_block_constraints(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # Voltage drop  (mirrors add_voltage_drop_nlp_constraints)
 # ---------------------------------------------------------------------------
+
 
 def add_voltage_drop_sdp_constraints(m: SdpModel) -> None:
     """
@@ -246,20 +251,16 @@ def add_voltage_drop_sdp_constraints(m: SdpModel) -> None:
 
             # Z · L · Z†
             # First: A = Z·L = (Zr+jZi)(Lr+jLi) = (Zr·Lr - Zi·Li) + j(Zr·Li + Zi·Lr)
-            A_re = Zr @ Lr - Zi @ Li   # Re(Z·L)
-            A_im = Zr @ Li + Zi @ Lr   # Im(Z·L)
+            A_re = Zr @ Lr - Zi @ Li  # Re(Z·L)
+            A_im = Zr @ Li + Zi @ Lr  # Im(Z·L)
             # Then: A · Z†  = (A_re+jA_im)(Zr-jZi)' = A_re·Zr'+A_im·Zi' + j(A_im·Zr'-A_re·Zi')
             ZLZH_re = A_re @ Zr.T + A_im @ Zi.T
             ZLZH_im = A_im @ Zr.T - A_re @ Zi.T
 
             # Voltage drop equation (real part)
-            new_constraints.append(
-                m.W_re[tb, t] == Wf_re - SZH_re - ZSH_re + ZLZH_re
-            )
+            new_constraints.append(m.W_re[tb, t] == Wf_re - SZH_re - ZSH_re + ZLZH_re)
             # Voltage drop equation (imaginary part)
-            new_constraints.append(
-                m.W_im[tb, t] == Wf_im - SZH_im - ZSH_im + ZLZH_im
-            )
+            new_constraints.append(m.W_im[tb, t] == Wf_im - SZH_im - ZSH_im + ZLZH_im)
 
     m._add(m.voltage_drop_constraints, new_constraints)
 
@@ -267,6 +268,7 @@ def add_voltage_drop_sdp_constraints(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # Power balance  (mirrors add_p_flow_nlp_constraints + add_q_flow_nlp_constraints)
 # ---------------------------------------------------------------------------
+
 
 def add_power_balance_sdp_constraints(m: SdpModel) -> None:
     """
@@ -292,6 +294,8 @@ def add_power_balance_sdp_constraints(m: SdpModel) -> None:
     new_constraints: list[cp.Constraint] = []
 
     for bus in m.bus_set:
+        if bus in m.swing_bus_set:
+            continue
         ph_list = m.phase_map[bus]
         n = len(ph_list)
         if n == 0:
@@ -309,36 +313,21 @@ def add_power_balance_sdp_constraints(m: SdpModel) -> None:
         for t in m.time_set:
             # Build net injection expressions per phase
             for local_idx, ph in enumerate(ph_list):
-
                 # --- Generation ---
-                p_inj = (
-                    m.p_gen[bus, t][local_idx]
-                    if (bus, t) in m.p_gen
-                    else 0.0
-                )
-                q_inj = (
-                    m.q_gen[bus, t][local_idx]
-                    if (bus, t) in m.q_gen
-                    else 0.0
-                )
+                p_inj = m.p_gen[bus, t][local_idx] if (bus, t) in m.p_gen else 0.0
+                q_inj = m.q_gen[bus, t][local_idx] if (bus, t) in m.q_gen else 0.0
 
                 # --- Capacitor ---
                 q_inj = q_inj + (
-                    m.q_cap[bus, t][local_idx]
-                    if (bus, t) in m.q_cap
-                    else 0.0
+                    m.q_cap[bus, t][local_idx] if (bus, t) in m.q_cap else 0.0
                 )
 
                 # --- Battery ---
                 p_inj = p_inj - (
-                    m.p_bat[bus, t][local_idx]
-                    if (bus, t) in m.p_bat
-                    else 0.0
+                    m.p_bat[bus, t][local_idx] if (bus, t) in m.p_bat else 0.0
                 )
                 q_inj = q_inj - (
-                    m.q_bat[bus, t][local_idx]
-                    if (bus, t) in m.q_bat
-                    else 0.0
+                    m.q_bat[bus, t][local_idx] if (bus, t) in m.q_bat else 0.0
                 )
 
                 # --- Load ---
@@ -361,16 +350,15 @@ def add_power_balance_sdp_constraints(m: SdpModel) -> None:
                         Li = m.L_im[fb_inc, bus, t]
                         Sr = m.SF_re[fb_inc, bus, t]
                         Si = m.SF_im[fb_inc, bus, t]
+                        n_inc = len(inc_ph_list)
 
                         # Loss on incoming branch for phase k (diagonal element)
-                        ZL_re_kk = (
-                            sum(Zr_inc[k, jj] * Lr[jj, k] for jj in range(len(inc_ph_list)))
-                            - sum(Zi_inc[k, jj] * Li[jj, k] for jj in range(len(inc_ph_list)))
-                        )
-                        ZL_im_kk = (
-                            sum(Zr_inc[k, jj] * Li[jj, k] for jj in range(len(inc_ph_list)))
-                            + sum(Zi_inc[k, jj] * Lr[jj, k] for jj in range(len(inc_ph_list)))
-                        )
+                        ZL_re_kk = sum(
+                            Zr_inc[k, jj] * Lr[jj, k] for jj in range(n_inc)
+                        ) - sum(Zi_inc[k, jj] * Li[jj, k] for jj in range(n_inc))
+                        ZL_im_kk = sum(
+                            Zr_inc[k, jj] * Li[jj, k] for jj in range(n_inc)
+                        ) + sum(Zi_inc[k, jj] * Lr[jj, k] for jj in range(n_inc))
                         inc_P = Sr[k, k] - ZL_re_kk
                         inc_Q = Si[k, k] - ZL_im_kk
 
@@ -386,13 +374,9 @@ def add_power_balance_sdp_constraints(m: SdpModel) -> None:
 
                 # --- Power balance equations ---
                 # Active: p_gen - p_load - p_bat + P_inc_net = P_out
-                new_constraints.append(
-                    p_inj - p_load + inc_P == out_P
-                )
+                new_constraints.append(p_inj - p_load + inc_P == out_P)
                 # Reactive: q_gen + q_cap - q_load - q_bat + Q_inc_net = Q_out
-                new_constraints.append(
-                    q_inj - q_load + inc_Q == out_Q
-                )
+                new_constraints.append(q_inj - q_load + inc_Q == out_Q)
 
     m._add(m.power_balance_constraints, new_constraints)
 
@@ -400,6 +384,7 @@ def add_power_balance_sdp_constraints(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # Voltage limits  (mirrors add_voltage_limits)
 # ---------------------------------------------------------------------------
+
 
 def add_voltage_limits_sdp(m: SdpModel) -> None:
     """
@@ -421,12 +406,8 @@ def add_voltage_limits_sdp(m: SdpModel) -> None:
             for i, ph in enumerate(ph_list):
                 v_min_sq = m.v_min.get((bus, ph), 0.95) ** 2
                 v_max_sq = m.v_max.get((bus, ph), 1.05) ** 2
-                new_constraints.append(
-                    m.W_re[bus, t][i, i] >= v_min_sq
-                )
-                new_constraints.append(
-                    m.W_re[bus, t][i, i] <= v_max_sq
-                )
+                new_constraints.append(m.W_re[bus, t][i, i] >= v_min_sq)
+                new_constraints.append(m.W_re[bus, t][i, i] <= v_max_sq)
 
     m._add(m.voltage_limit_constraints, new_constraints)
 
@@ -434,6 +415,7 @@ def add_voltage_limits_sdp(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # Generator constraints  (mirrors add_generator_limits + constant p/q)
 # ---------------------------------------------------------------------------
+
 
 def add_generator_limits_sdp(m: SdpModel) -> None:
     """
@@ -461,55 +443,28 @@ def add_generator_limits_sdp(m: SdpModel) -> None:
 
                 if ct == ControlVariable.NONE:
                     # Fix both p and q to nominal
-                    new_constraints.append(
-                        m.p_gen[bus, t][i] == p_nom
-                    )
-                    new_constraints.append(
-                        m.q_gen[bus, t][i] == q_nom
-                    )
+                    new_constraints.append(m.p_gen[bus, t][i] == p_nom)
+                    new_constraints.append(m.q_gen[bus, t][i] == q_nom)
                 elif ct == ControlVariable.Q:
                     # Fix p, bound q
-                    new_constraints.append(
-                        m.p_gen[bus, t][i] == p_nom
-                    )
-                    q_bound = float(
-                        np.sqrt(max(0.0, s_rated**2 - p_nom**2))
-                    )
-                    new_constraints.append(
-                        m.q_gen[bus, t][i] >= max(-q_bound, q_min)
-                    )
-                    new_constraints.append(
-                        m.q_gen[bus, t][i] <= min(q_bound, q_max)
-                    )
+                    new_constraints.append(m.p_gen[bus, t][i] == p_nom)
+                    q_bound = float(np.sqrt(max(0.0, s_rated**2 - p_nom**2)))
+                    new_constraints.append(m.q_gen[bus, t][i] >= max(-q_bound, q_min))
+                    new_constraints.append(m.q_gen[bus, t][i] <= min(q_bound, q_max))
                 elif ct == ControlVariable.P:
                     # Fix q, bound p
-                    new_constraints.append(
-                        m.q_gen[bus, t][i] == q_nom
-                    )
-                    new_constraints.append(
-                        m.p_gen[bus, t][i] >= 0.0
-                    )
-                    new_constraints.append(
-                        m.p_gen[bus, t][i] <= min(p_nom, s_rated)
-                    )
+                    new_constraints.append(m.q_gen[bus, t][i] == q_nom)
+                    new_constraints.append(m.p_gen[bus, t][i] >= 0.0)
+                    new_constraints.append(m.p_gen[bus, t][i] <= min(p_nom, s_rated))
                 elif ct == ControlVariable.PQ:
                     # Circular SOC constraint: p² + q² ≤ s_rated²
+                    new_constraints.append(m.p_gen[bus, t][i] >= 0.0)
+                    new_constraints.append(m.p_gen[bus, t][i] <= min(p_nom, s_rated))
+                    new_constraints.append(m.q_gen[bus, t][i] >= max(-s_rated, q_min))
+                    new_constraints.append(m.q_gen[bus, t][i] <= min(s_rated, q_max))
                     new_constraints.append(
-                        m.p_gen[bus, t][i] >= 0.0
-                    )
-                    new_constraints.append(
-                        m.p_gen[bus, t][i] <= min(p_nom, s_rated)
-                    )
-                    new_constraints.append(
-                        m.q_gen[bus, t][i] >= max(-s_rated, q_min)
-                    )
-                    new_constraints.append(
-                        m.q_gen[bus, t][i] <= min(s_rated, q_max)
-                    )
-                    new_constraints.append(
-                        cp.norm(
-                            cp.hstack([m.p_gen[bus, t][i], m.q_gen[bus, t][i]]), 2
-                        ) <= s_rated
+                        cp.norm(cp.hstack([m.p_gen[bus, t][i], m.q_gen[bus, t][i]]), 2)
+                        <= s_rated
                     )
 
     m._add(m.generator_limit_constraints, new_constraints)
@@ -518,6 +473,7 @@ def add_generator_limits_sdp(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # Capacitor constraints  (mirrors add_capacitor_constraints)
 # ---------------------------------------------------------------------------
+
 
 def add_capacitor_constraints_sdp(m: SdpModel) -> None:
     """
@@ -550,6 +506,7 @@ def add_capacitor_constraints_sdp(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # Battery constraints  (mirrors battery constraints in constraints_nlp.py)
 # ---------------------------------------------------------------------------
+
 
 def add_battery_constraints_sdp(m: SdpModel) -> None:
     """
@@ -584,15 +541,13 @@ def add_battery_constraints_sdp(m: SdpModel) -> None:
         eta_d = m.discharge_efficiency.get(bat_id, 1.0)
 
         for t in m.time_set:
-            s_rated_phase = m.s_bat_rated.get((bat_id, ph_list[0]), 1000.0) if ph_list else 1000.0
+            s_rated_phase = (
+                m.s_bat_rated.get((bat_id, ph_list[0]), 1000.0) if ph_list else 1000.0
+            )
 
             # Charge / discharge bounds (already nonneg from variable declaration)
-            new_constraints.append(
-                m.p_charge[bat_id, t] <= s_rated_phase * n_phases
-            )
-            new_constraints.append(
-                m.p_discharge[bat_id, t] <= s_rated_phase * n_phases
-            )
+            new_constraints.append(m.p_charge[bat_id, t] <= s_rated_phase * n_phases)
+            new_constraints.append(m.p_discharge[bat_id, t] <= s_rated_phase * n_phases)
 
             # SOC dynamics
             if t == m.start_step:
@@ -607,12 +562,8 @@ def add_battery_constraints_sdp(m: SdpModel) -> None:
             )
 
             # SOC bounds
-            new_constraints.append(
-                m.soc[bat_id, t] >= m.soc_min.get(bat_id, 0.0)
-            )
-            new_constraints.append(
-                m.soc[bat_id, t] <= m.soc_max.get(bat_id, 1.0)
-            )
+            new_constraints.append(m.soc[bat_id, t] >= m.soc_min.get(bat_id, 0.0))
+            new_constraints.append(m.soc[bat_id, t] <= m.soc_max.get(bat_id, 1.0))
 
             # Per-phase net power (equal split)
             for ph in ph_list:
@@ -631,12 +582,8 @@ def add_battery_constraints_sdp(m: SdpModel) -> None:
                 else:
                     q_max_ph = m.q_bat_max.get((bat_id, ph), s_rated_phase)
                     q_min_ph = m.q_bat_min.get((bat_id, ph), -s_rated_phase)
-                    new_constraints.append(
-                        m.q_bat[bat_id, t][i] >= q_min_ph
-                    )
-                    new_constraints.append(
-                        m.q_bat[bat_id, t][i] <= q_max_ph
-                    )
+                    new_constraints.append(m.q_bat[bat_id, t][i] >= q_min_ph)
+                    new_constraints.append(m.q_bat[bat_id, t][i] <= q_max_ph)
 
     m._add(m.battery_constraints, new_constraints)
 
@@ -644,6 +591,7 @@ def add_battery_constraints_sdp(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # Thermal limits  (mirrors add_circular_thermal_constraints)
 # ---------------------------------------------------------------------------
+
 
 def add_thermal_constraints_sdp(m: SdpModel) -> None:
     """
@@ -669,9 +617,11 @@ def add_thermal_constraints_sdp(m: SdpModel) -> None:
         for ph, col in thermal_cols.items():
             if col in m.case.branch_data.columns:
                 val = getattr(row, col, None)
-                if val is not None and not (
-                    isinstance(val, float) and np.isnan(val)
-                ) and float(val) > 0:
+                if (
+                    val is not None
+                    and not (isinstance(val, float) and np.isnan(val))
+                    and float(val) > 0
+                ):
                     branch_limits[fb, tb, ph] = float(val)
 
     if not branch_limits:
@@ -686,10 +636,12 @@ def add_thermal_constraints_sdp(m: SdpModel) -> None:
                     continue
                 new_constraints.append(
                     cp.norm(
-                        cp.hstack([
-                            m.SF_re[fb, tb, t][i, i],
-                            m.SF_im[fb, tb, t][i, i],
-                        ]),
+                        cp.hstack(
+                            [
+                                m.SF_re[fb, tb, t][i, i],
+                                m.SF_im[fb, tb, t][i, i],
+                            ]
+                        ),
                         2,
                     )
                     <= s_max
@@ -701,6 +653,7 @@ def add_thermal_constraints_sdp(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # Main entry point  (mirrors add_nlp_constraints)
 # ---------------------------------------------------------------------------
+
 
 def add_sdp_constraints(
     m: SdpModel,

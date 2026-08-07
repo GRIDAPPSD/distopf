@@ -108,6 +108,7 @@ def _phase_list_to_idx(phase_list: list[str]) -> list[int]:
 # SDP Model dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SdpModel:
     """
@@ -126,84 +127,88 @@ class SdpModel:
     # CVXPY decision variables                                             #
     # ------------------------------------------------------------------ #
     # Voltage outer-product matrices  W = V·V†
-    W_re: dict = field(default_factory=dict)   # (bus, t) -> cp.Variable (n×n sym)
-    W_im: dict = field(default_factory=dict)   # (bus, t) -> cp.Variable (n×n)
+    W_re: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n×n sym)
+    W_im: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n×n)
 
     # Current outer-product matrices  L = I·I†
-    L_re: dict = field(default_factory=dict)   # (fb, tb, t) -> cp.Variable (n×n sym)
-    L_im: dict = field(default_factory=dict)   # (fb, tb, t) -> cp.Variable (n×n)
+    L_re: dict = field(default_factory=dict)  # (fb, tb, t) -> cp.Variable (n×n sym)
+    L_im: dict = field(default_factory=dict)  # (fb, tb, t) -> cp.Variable (n×n)
 
     # Branch power-flow matrices  SF = V_f · I†
     SF_re: dict = field(default_factory=dict)  # (fb, tb, t) -> cp.Variable (n×n)
     SF_im: dict = field(default_factory=dict)  # (fb, tb, t) -> cp.Variable (n×n)
 
     # Per-bus injection vectors (length = number of active phases at bus)
-    p_gen: dict = field(default_factory=dict)   # (bus, t) -> cp.Variable (n,)
-    q_gen: dict = field(default_factory=dict)   # (bus, t) -> cp.Variable (n,)
-    q_cap: dict = field(default_factory=dict)   # (bus, t) -> cp.Variable (n,)
-    p_bat: dict = field(default_factory=dict)   # (bus, t) -> cp.Variable (n,)
-    q_bat: dict = field(default_factory=dict)   # (bus, t) -> cp.Variable (n,)
+    p_gen: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n,)
+    q_gen: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n,)
+    q_cap: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n,)
+    p_bat: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n,)
+    q_bat: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n,)
 
     # Battery state variables (per battery id)
-    p_charge: dict = field(default_factory=dict)     # (bat_id, t) -> cp.Variable scalar
+    p_charge: dict = field(default_factory=dict)  # (bat_id, t) -> cp.Variable scalar
     p_discharge: dict = field(default_factory=dict)  # (bat_id, t) -> cp.Variable scalar
-    soc: dict = field(default_factory=dict)          # (bat_id, t) -> cp.Variable scalar
+    soc: dict = field(default_factory=dict)  # (bat_id, t) -> cp.Variable scalar
 
     # ------------------------------------------------------------------ #
     # Parameters (numpy arrays / plain Python dicts — read-only)          #
     # ------------------------------------------------------------------ #
     # Impedance sub-matrices per branch (phase-reduced)
-    Z_re: dict = field(default_factory=dict)   # (fb, tb) -> np.ndarray (n×n)
-    Z_im: dict = field(default_factory=dict)   # (fb, tb) -> np.ndarray (n×n)
+    Z_re: dict = field(default_factory=dict)  # (fb, tb) -> np.ndarray (n×n)
+    Z_im: dict = field(default_factory=dict)  # (fb, tb) -> np.ndarray (n×n)
 
     # Scalar impedance look-up (mirrors DistOPF m.r / m.x)
-    r: dict = field(default_factory=dict)      # (fb, tb, phase_pair) -> float
-    x: dict = field(default_factory=dict)      # (fb, tb, phase_pair) -> float
+    r: dict = field(default_factory=dict)  # (fb, tb, phase_pair) -> float
+    x: dict = field(default_factory=dict)  # (fb, tb, phase_pair) -> float
 
     # Load parameters
     p_load_nom: dict = field(default_factory=dict)  # (bus, ph, t) -> float
     q_load_nom: dict = field(default_factory=dict)  # (bus, ph, t) -> float
 
     # Generator parameters
-    p_gen_nom: dict = field(default_factory=dict)   # (bus, ph, t) -> float
-    q_gen_nom: dict = field(default_factory=dict)   # (bus, ph, t) -> float
-    s_rated: dict = field(default_factory=dict)     # (bus, ph) -> float
-    q_gen_max: dict = field(default_factory=dict)   # (bus, ph) -> float
-    q_gen_min: dict = field(default_factory=dict)   # (bus, ph) -> float
+    p_gen_nom: dict = field(default_factory=dict)  # (bus, ph, t) -> float
+    q_gen_nom: dict = field(default_factory=dict)  # (bus, ph, t) -> float
+    s_rated: dict = field(default_factory=dict)  # (bus, ph) -> float
+    q_gen_max: dict = field(default_factory=dict)  # (bus, ph) -> float
+    q_gen_min: dict = field(default_factory=dict)  # (bus, ph) -> float
     gen_control_type: dict = field(default_factory=dict)  # (bus, ph) -> int
 
+    # Regulator parameters
+    reg_ratio: dict = field(default_factory=dict)  # (fb, tb, ph) -> float
+
     # Capacitor parameters
-    q_cap_nom: dict = field(default_factory=dict)   # (bus, ph) -> float
+    q_cap_nom: dict = field(default_factory=dict)  # (bus, ph) -> float
 
     # Voltage limits
-    v_min: dict = field(default_factory=dict)       # (bus, ph) -> float
-    v_max: dict = field(default_factory=dict)       # (bus, ph) -> float
-    v_swing: dict = field(default_factory=dict)     # (bus, ph, t) -> float
+    v_min: dict = field(default_factory=dict)  # (bus, ph) -> float
+    v_max: dict = field(default_factory=dict)  # (bus, ph) -> float
+    v_swing: dict = field(default_factory=dict)  # (bus, ph, t) -> float
 
     # Battery parameters
-    energy_capacity: dict = field(default_factory=dict)      # bat_id -> float
-    soc_min: dict = field(default_factory=dict)              # bat_id -> float
-    soc_max: dict = field(default_factory=dict)              # bat_id -> float
-    start_soc: dict = field(default_factory=dict)            # bat_id -> float
-    charge_efficiency: dict = field(default_factory=dict)    # bat_id -> float
-    discharge_efficiency: dict = field(default_factory=dict) # bat_id -> float
-    s_bat_rated: dict = field(default_factory=dict)          # (bat_id, ph) -> float
-    q_bat_max: dict = field(default_factory=dict)            # (bat_id, ph) -> float
-    q_bat_min: dict = field(default_factory=dict)            # (bat_id, ph) -> float
-    bat_control_type: dict = field(default_factory=dict)     # bat_id -> int
-    battery_n_phases: dict = field(default_factory=dict)     # bat_id -> int
+    energy_capacity: dict = field(default_factory=dict)  # bat_id -> float
+    soc_min: dict = field(default_factory=dict)  # bat_id -> float
+    soc_max: dict = field(default_factory=dict)  # bat_id -> float
+    start_soc: dict = field(default_factory=dict)  # bat_id -> float
+    charge_efficiency: dict = field(default_factory=dict)  # bat_id -> float
+    discharge_efficiency: dict = field(default_factory=dict)  # bat_id -> float
+    s_bat_rated: dict = field(default_factory=dict)  # (bat_id, ph) -> float
+    q_bat_max: dict = field(default_factory=dict)  # (bat_id, ph) -> float
+    q_bat_min: dict = field(default_factory=dict)  # (bat_id, ph) -> float
+    bat_control_type: dict = field(default_factory=dict)  # bat_id -> int
+    battery_n_phases: dict = field(default_factory=dict)  # bat_id -> int
 
     # ------------------------------------------------------------------ #
     # Topology / index sets (mirrors DistOPF m.bus_set, m.phase_map …)   #
     # ------------------------------------------------------------------ #
-    bus_set: list = field(default_factory=list)        # [bus_id, ...]
-    branch_set: list = field(default_factory=list)     # [(fb, tb), ...]
-    gen_set: list = field(default_factory=list)        # [bus_id, ...]  buses with gens
-    cap_set: list = field(default_factory=list)        # [bus_id, ...]
-    bat_set: list = field(default_factory=list)        # [bat_id, ...]
+    bus_set: list = field(default_factory=list)  # [bus_id, ...]
+    branch_set: list = field(default_factory=list)  # [(fb, tb), ...]
+    gen_set: list = field(default_factory=list)  # [bus_id, ...]  buses with gens
+    cap_set: list = field(default_factory=list)  # [bus_id, ...]
+    bat_set: list = field(default_factory=list)  # [bat_id, ...]
+    reg_set: list = field(default_factory=list)  # [(fb, tb), ...]  regulator branches
+    reg_phase_map: dict = field(default_factory=dict)  # (fb, tb) -> [0, 1, 2]
     swing_bus_set: list = field(default_factory=list)  # [bus_id, ...]  (usually 1 bus)
     time_set: range = field(default_factory=lambda: range(1))
-
     # Phase maps
     phase_map: dict = field(default_factory=dict)
     # bus -> ['a','b','c'] (only abc phases, no triplex)
@@ -270,9 +275,8 @@ class SdpModel:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _get_Z_sub(
-    m: SdpModel, fb: int, tb: int
-) -> tuple[np.ndarray, np.ndarray]:
+
+def _get_Z_sub(m: SdpModel, fb: int, tb: int) -> tuple[np.ndarray, np.ndarray]:
     """Return the (n×n) real and imaginary impedance sub-matrices for a branch.
 
     The sub-matrix is indexed by the branch's active phases only.
@@ -280,7 +284,9 @@ def _get_Z_sub(
     return m.Z_re[fb, tb], m.Z_im[fb, tb]
 
 
-def _get_W_parent_sub_idx(m: SdpModel, parent_bus: int, child_phases: list[str]) -> list[int]:
+def _get_W_parent_sub_idx(
+    m: SdpModel, parent_bus: int, child_phases: list[str]
+) -> list[int]:
     """Return the local indices in parent_bus's phase list that correspond to child_phases.
 
     Used to extract the matching sub-block of W[parent_bus] that aligns with
@@ -299,6 +305,7 @@ def _get_W_parent_sub_idx(m: SdpModel, parent_bus: int, child_phases: list[str])
 # ---------------------------------------------------------------------------
 # Parameter creation helpers  (mirror _create_*_parameters in nl_branchflow)
 # ---------------------------------------------------------------------------
+
 
 def _create_impedance_parameters(m: SdpModel, case: Case) -> None:
     """Build full 3×3 R/X dicts AND phase-reduced Z sub-matrices per branch."""
@@ -341,18 +348,13 @@ def _create_load_parameters(m: SdpModel, case: Case) -> None:
             load_shape = getattr(row, "load_shape", "default")
             for t in m.time_set:
                 mult = 1.0
-                if (
-                    not case.schedules.empty
-                    and load_shape in case.schedules.columns
-                ):
+                if not case.schedules.empty and load_shape in case.schedules.columns:
                     mult = float(case.schedules.at[t, load_shape])
                 m.p_load_nom[row.id, ph, t] = float(p_load) * mult
                 m.q_load_nom[row.id, ph, t] = float(q_load) * mult
 
 
-def _get_gen_schedule_mult(
-    gen_shape: str, t: int, schedules: pd.DataFrame
-) -> float:
+def _get_gen_schedule_mult(gen_shape: str, t: int, schedules: pd.DataFrame) -> float:
     """Schedule multiplier for a generator at time t (mirrors nl_branchflow)."""
     if not gen_shape or pd.isna(gen_shape):
         return 1.0
@@ -403,7 +405,7 @@ def _create_capacitor_parameters(m: SdpModel, case: Case) -> None:
 def _create_voltage_parameters(m: SdpModel, case: Case) -> None:
     """Populate voltage limit and swing bus parameters."""
     swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
-    for _, row in case.bus_data.iterrows():
+    for row in case.bus_data.itertuples(index=False):
         for ph in _parse_phases_abc(str(row.phases)):
             m.v_min[row.id, ph] = float(getattr(row, "v_min", 0.95) or 0.95)
             m.v_max[row.id, ph] = float(getattr(row, "v_max", 1.05) or 1.05)
@@ -425,7 +427,9 @@ def _create_battery_parameters(m: SdpModel, case: Case) -> None:
         m.soc_max[row.id] = float(getattr(row, "max_soc", 1.0))
         m.start_soc[row.id] = float(getattr(row, "start_soc", 0.5))
         m.charge_efficiency[row.id] = float(getattr(row, "charge_efficiency", 1.0))
-        m.discharge_efficiency[row.id] = float(getattr(row, "discharge_efficiency", 1.0))
+        m.discharge_efficiency[row.id] = float(
+            getattr(row, "discharge_efficiency", 1.0)
+        )
         m.bat_control_type[row.id] = CONTROL_VARIABLE_MAP[
             getattr(row, "control_variable", "P") or "P"
         ]
@@ -441,9 +445,35 @@ def _create_battery_parameters(m: SdpModel, case: Case) -> None:
             m.q_bat_min[row.id, ph] = q_bat_min_val / n_phases
 
 
+def _create_regulator_parameters(m: SdpModel, case: Case) -> None:
+    """
+    Populate reg_ratio dict keyed by (fb, tb, ph).
+
+    A regulator branch is identified by having a 'reg_ratio' column in
+    branch_data with a non-null, non-zero value.
+    """
+
+    def _is_valid(v) -> bool:
+        return v is not None and v == v  # None / NaN guard
+
+    if "reg_ratio" not in case.branch_data.columns:
+        return
+
+    for row in case.branch_data.itertuples(index=False):
+        fb, tb = int(row.fb), int(row.tb)
+        for pidx in m.branch_phase_map.get((fb, tb), []):
+            ph = IDX_TO_PHASE[pidx]
+            val = getattr(row, f"reg_ratio_{ph}", None)
+            if not _is_valid(val):
+                val = getattr(row, "reg_ratio", None)
+            if _is_valid(val) and float(val) != 0.0:
+                m.reg_ratio[fb, tb, pidx] = float(val)
+
+
 # ---------------------------------------------------------------------------
 # Model factory
 # ---------------------------------------------------------------------------
+
 
 def create_sdp_branchflow_model(case: Case) -> SdpModel:
     """
@@ -475,9 +505,7 @@ def create_sdp_branchflow_model(case: Case) -> SdpModel:
     # Build index sets / topology maps                                     #
     # ------------------------------------------------------------------ #
     m.bus_set = case.bus_data.id.tolist()
-    m.swing_bus_set = (
-        case.bus_data[case.bus_data.bus_type == "SWING"].id.tolist()
-    )
+    m.swing_bus_set = case.bus_data[case.bus_data.bus_type == "SWING"].id.tolist()
     m.branch_set = [
         (int(fb), int(tb))
         for fb, tb in case.branch_data.loc[:, ["fb", "tb"]].to_numpy()
@@ -517,8 +545,7 @@ def create_sdp_branchflow_model(case: Case) -> SdpModel:
 
     # Topology helpers
     m.from_bus_map = {
-        int(tb): int(fb)
-        for fb, tb in case.branch_data.loc[:, ["fb", "tb"]].to_numpy()
+        int(tb): int(fb) for fb, tb in case.branch_data.loc[:, ["fb", "tb"]].to_numpy()
     }
     m.to_bus_map = {
         int(bus_id): [
@@ -529,7 +556,23 @@ def create_sdp_branchflow_model(case: Case) -> SdpModel:
         ]
         for bus_id in case.bus_data.id.to_numpy()
     }
-
+    # Regulator sets and phase maps
+    m.reg_set = []
+    m.reg_phase_map = {}
+    if "reg_ratio" in case.branch_data.columns:
+        for _, row in case.branch_data.iterrows():
+            fb, tb = int(row.fb), int(row.tb)
+            ph_list = m.branch_phase_map.get((fb, tb), [])
+            # A branch is a regulator if any phase has a non-null reg_ratio
+            is_reg = any(
+                _is_valid_float(getattr(row, f"reg_ratio_{IDX_TO_PHASE[p]}", None))
+                or _is_valid_float(getattr(row, "reg_ratio", None))
+                for p in ph_list
+            )
+            if is_reg:
+                m.reg_set.append((fb, tb))
+                m.reg_phase_map[fb, tb] = ph_list
+    _create_regulator_parameters(m, case)
     # ------------------------------------------------------------------ #
     # Parameters                                                           #
     # ------------------------------------------------------------------ #
@@ -582,8 +625,12 @@ def create_sdp_branchflow_model(case: Case) -> SdpModel:
 
     for bat_id in m.bat_set:
         for t in m.time_set:
-            m.p_charge[bat_id, t] = cp.Variable(nonneg=True, name=f"p_charge_{bat_id}_{t}")
-            m.p_discharge[bat_id, t] = cp.Variable(nonneg=True, name=f"p_discharge_{bat_id}_{t}")
+            m.p_charge[bat_id, t] = cp.Variable(
+                nonneg=True, name=f"p_charge_{bat_id}_{t}"
+            )
+            m.p_discharge[bat_id, t] = cp.Variable(
+                nonneg=True, name=f"p_discharge_{bat_id}_{t}"
+            )
             m.soc[bat_id, t] = cp.Variable(name=f"soc_{bat_id}_{t}")
 
     return m

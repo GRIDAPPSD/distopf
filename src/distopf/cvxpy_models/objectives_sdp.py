@@ -33,9 +33,7 @@ def loss_objective_sdp(m: SdpModel) -> cp.Expression:
             continue
         Zr, Zi = _get_Z_sub(m, fb, tb)
         for t in m.time_set:
-            loss = loss + cp.trace(
-                Zr @ m.L_re[fb, tb, t] - Zi @ m.L_im[fb, tb, t]
-            )
+            loss = loss + cp.trace(Zr @ m.L_re[fb, tb, t] - Zi @ m.L_im[fb, tb, t])
     return loss
 
 
