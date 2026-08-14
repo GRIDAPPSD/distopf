@@ -763,7 +763,7 @@ wheels = [
 
 [[package]]
 name = "distopf"
-version = "1.1.0.dev1"
+version = "1.1.0.dev2"
 source = { editable = "." }
 dependencies = [
     { name = "altdss", extra = ["all"] },
@@ -774,6 +774,7 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "opendssdirect-py" },
+    { name = "openpyxl" },
     { name = "pandas" },
     { name = "plotly" },
     { name = "pyomo" },
@@ -819,6 +820,7 @@ requires-dist = [
     { name = "networkx", specifier = ">=3.4.2" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "opendssdirect-py", specifier = ">=0.9.4" },
+    { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "plotly", specifier = ">=6.3.0" },
     { name = "pyomo", specifier = ">=6.9.4" },
@@ -912,6 +914,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b9/13/f6b7576d0d4fea9aba079816ce00ca67f784f0cbd9e2c418f50fcf00b06b/dss_python_backend-0.14.5-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:ac31301222f58f148c145847fa08bfcea934b4ea1097e5788d164d4dcf0a09d1", size = 22036908, upload-time = "2024-03-29T04:55:36.169Z" },
     { url = "https://files.pythonhosted.org/packages/59/58/c0c48259f73c83fec75873a968589ff79b29d142a12e199689c1d7230180/dss_python_backend-0.14.5-cp37-abi3-win32.whl", hash = "sha256:873f5fe904034bb5b11e44b74841cc92ddae2101a16e68592a4725b93b546e27", size = 17365863, upload-time = "2024-03-29T04:55:41.549Z" },
     { url = "https://files.pythonhosted.org/packages/b1/d5/c71c498c0cca35018691af448fdc792703d3e36146edfe840bba2ba26700/dss_python_backend-0.14.5-cp37-abi3-win_amd64.whl", hash = "sha256:503ff6f15c6037863848a127244e090dbf246eeafcb71a31b35c2d35f13efae8", size = 18778503, upload-time = "2024-03-29T04:55:46.615Z" },
+]
+
+[[package]]
+name = "et-xmlfile"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/38/af70d7ab1ae9d4da450eeec1fa3918940a5fafb9055e934af8d6eb0c2313/et_xmlfile-2.0.0.tar.gz", hash = "sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54", size = 17234, upload-time = "2024-10-25T17:25:40.039Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl", hash = "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa", size = 18059, upload-time = "2024-10-25T17:25:39.051Z" },
 ]
 
 [[package]]
@@ -2536,6 +2547,18 @@ extras = [
     { name = "pandas" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.16.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+
+[[package]]
+name = "openpyxl"
+version = "3.1.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "et-xmlfile" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/f9/88d94a75de065ea32619465d2f77b29a0469500e99012523b91cc4141cd1/openpyxl-3.1.5.tar.gz", hash = "sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050", size = 186464, upload-time = "2024-06-28T14:03:44.161Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl", hash = "sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2", size = 250910, upload-time = "2024-06-28T14:03:41.161Z" },
 ]
 
 [[package]]
