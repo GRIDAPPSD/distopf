@@ -129,7 +129,10 @@ class SdpModel:
     # Voltage outer-product matrices  W = V·V†
     W_re: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n×n sym)
     W_im: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n×n)
-
+    # Regulator intermediate voltage matrices  W_reg = α·W_f·α
+    # (voltage after tap transform, before impedance drop)
+    W_reg_re: dict = field(default_factory=dict)  # (fb, tb, t) -> cp.Variable (n×n sym)
+    W_reg_im: dict = field(default_factory=dict)  # (fb, tb, t) -> cp.Variable (n×n)
     # Current outer-product matrices  L = I·I†
     L_re: dict = field(default_factory=dict)  # (fb, tb, t) -> cp.Variable (n×n sym)
     L_im: dict = field(default_factory=dict)  # (fb, tb, t) -> cp.Variable (n×n)
@@ -139,6 +142,8 @@ class SdpModel:
     SF_im: dict = field(default_factory=dict)  # (fb, tb, t) -> cp.Variable (n×n)
 
     # Per-bus injection vectors (length = number of active phases at bus)
+    p_load: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n,)
+    q_load: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n,)
     p_gen: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n,)
     q_gen: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n,)
     q_cap: dict = field(default_factory=dict)  # (bus, t) -> cp.Variable (n,)
@@ -164,6 +169,10 @@ class SdpModel:
     # Load parameters
     p_load_nom: dict = field(default_factory=dict)  # (bus, ph, t) -> float
     q_load_nom: dict = field(default_factory=dict)  # (bus, ph, t) -> float
+
+    # CVR (Conservation Voltage Reduction) factors
+    cvr_p: dict = field(default_factory=dict)  # (bus, ph) -> float
+    cvr_q: dict = field(default_factory=dict)  # (bus, ph) -> float
 
     # Generator parameters
     p_gen_nom: dict = field(default_factory=dict)  # (bus, ph, t) -> float
@@ -196,6 +205,9 @@ class SdpModel:
     q_bat_min: dict = field(default_factory=dict)  # (bat_id, ph) -> float
     bat_control_type: dict = field(default_factory=dict)  # bat_id -> int
     battery_n_phases: dict = field(default_factory=dict)  # bat_id -> int
+
+    # Electricity price
+    price: dict = field(default_factory=dict)  # t -> float
 
     # ------------------------------------------------------------------ #
     # Topology / index sets (mirrors DistOPF m.bus_set, m.phase_map …)   #
@@ -260,6 +272,8 @@ class SdpModel:
     capacitor_constraints: list = field(default_factory=list)
     battery_constraints: list = field(default_factory=list)
     thermal_limit_constraints: list = field(default_factory=list)
+    regulator_constraints: list = field(default_factory=list)
+    load_constraints: list = field(default_factory=list)
 
     def _add(self, group: list, c: cp.Constraint | list) -> None:
         """Append constraint(s) to a named group AND the master list."""
@@ -339,10 +353,16 @@ def _create_impedance_parameters(m: SdpModel, case: Case) -> None:
 
 
 def _create_load_parameters(m: SdpModel, case: Case) -> None:
-    """Populate p_load_nom and q_load_nom (mirrors _create_load_parameters)."""
+    """Populate p_load_nom, q_load_nom, and CVR factors (mirrors _create_load_parameters)."""
     for _, row in case.bus_data.iterrows():
         phases = _parse_phases_abc(str(row.phases))
         for ph in phases:
+            # CVR factors for voltage-dependent loads
+            cvr_p = getattr(row, "cvr_p", 0.0) or 0.0
+            cvr_q = getattr(row, "cvr_q", 0.0) or 0.0
+            m.cvr_p[row.id, ph] = float(cvr_p)
+            m.cvr_q[row.id, ph] = float(cvr_q)
+
             p_load = getattr(row, f"pl_{ph}", 0.0) or 0.0
             q_load = getattr(row, f"ql_{ph}", 0.0) or 0.0
             load_shape = getattr(row, "load_shape", "default")
@@ -352,6 +372,16 @@ def _create_load_parameters(m: SdpModel, case: Case) -> None:
                     mult = float(case.schedules.at[t, load_shape])
                 m.p_load_nom[row.id, ph, t] = float(p_load) * mult
                 m.q_load_nom[row.id, ph, t] = float(q_load) * mult
+
+
+def _create_price_parameters(m: SdpModel, case: Case) -> None:
+    """Create electricity price parameters from schedules (mirrors _create_price_parameters)."""
+    if not case.schedules.empty and "price" in case.schedules.columns:
+        for t in m.time_set:
+            m.price[t] = float(case.schedules.at[t, "price"])
+    else:
+        for t in m.time_set:
+            m.price[t] = 0.0
 
 
 def _get_gen_schedule_mult(gen_shape: str, t: int, schedules: pd.DataFrame) -> float:
@@ -447,27 +477,18 @@ def _create_battery_parameters(m: SdpModel, case: Case) -> None:
 
 def _create_regulator_parameters(m: SdpModel, case: Case) -> None:
     """
-    Populate reg_ratio dict keyed by (fb, tb, ph).
+    Populate reg_ratio dict keyed by (fb, tb, ph) from case.reg_data.
 
-    A regulator branch is identified by having a 'reg_ratio' column in
-    branch_data with a non-null, non-zero value.
+    Mirrors _create_regulator_parameters in lindist.py which reads the
+    ratio_{ph} columns from case.reg_data.
     """
-
-    def _is_valid(v) -> bool:
-        return v is not None and v == v  # None / NaN guard
-
-    if "reg_ratio" not in case.branch_data.columns:
+    if case.reg_data.empty:
         return
 
-    for row in case.branch_data.itertuples(index=False):
+    for _, row in case.reg_data.iterrows():
         fb, tb = int(row.fb), int(row.tb)
-        for pidx in m.branch_phase_map.get((fb, tb), []):
-            ph = IDX_TO_PHASE[pidx]
-            val = getattr(row, f"reg_ratio_{ph}", None)
-            if not _is_valid(val):
-                val = getattr(row, "reg_ratio", None)
-            if _is_valid(val) and float(val) != 0.0:
-                m.reg_ratio[fb, tb, pidx] = float(val)
+        for ph in _parse_phases_abc(str(row.phases)):
+            m.reg_ratio[fb, tb, ph] = float(getattr(row, f"ratio_{ph}", 1.0) or 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -559,19 +580,12 @@ def create_sdp_branchflow_model(case: Case) -> SdpModel:
     # Regulator sets and phase maps
     m.reg_set = []
     m.reg_phase_map = {}
-    if "reg_ratio" in case.branch_data.columns:
-        for _, row in case.branch_data.iterrows():
+    if not case.reg_data.empty:
+        for _, row in case.reg_data.iterrows():
             fb, tb = int(row.fb), int(row.tb)
-            ph_list = m.branch_phase_map.get((fb, tb), [])
-            # A branch is a regulator if any phase has a non-null reg_ratio
-            is_reg = any(
-                _is_valid_float(getattr(row, f"reg_ratio_{IDX_TO_PHASE[p]}", None))
-                or _is_valid_float(getattr(row, "reg_ratio", None))
-                for p in ph_list
-            )
-            if is_reg:
-                m.reg_set.append((fb, tb))
-                m.reg_phase_map[fb, tb] = ph_list
+            ph_list = _parse_phases_abc(str(row.phases))
+            m.reg_set.append((fb, tb))
+            m.reg_phase_map[fb, tb] = ph_list
     _create_regulator_parameters(m, case)
     # ------------------------------------------------------------------ #
     # Parameters                                                           #
@@ -582,7 +596,7 @@ def create_sdp_branchflow_model(case: Case) -> SdpModel:
     _create_capacitor_parameters(m, case)
     _create_voltage_parameters(m, case)
     _create_battery_parameters(m, case)
-
+    _create_price_parameters(m, case)
     # ------------------------------------------------------------------ #
     # CVXPY decision variables                                             #
     # ------------------------------------------------------------------ #
@@ -593,6 +607,8 @@ def create_sdp_branchflow_model(case: Case) -> SdpModel:
         for t in m.time_set:
             m.W_re[bus, t] = cp.Variable((n, n), symmetric=True, name=f"W_re_{bus}_{t}")
             m.W_im[bus, t] = cp.Variable((n, n), name=f"W_im_{bus}_{t}")
+            m.p_load[bus, t] = cp.Variable(n, name=f"p_load_{bus}_{t}")
+            m.q_load[bus, t] = cp.Variable(n, name=f"q_load_{bus}_{t}")
 
     for fb, tb in m.branch_set:
         n = len(m.branch_phase_map[fb, tb])
@@ -605,6 +621,14 @@ def create_sdp_branchflow_model(case: Case) -> SdpModel:
             m.L_im[fb, tb, t] = cp.Variable((n, n), name=f"L_im_{fb}_{tb}_{t}")
             m.SF_re[fb, tb, t] = cp.Variable((n, n), name=f"SF_re_{fb}_{tb}_{t}")
             m.SF_im[fb, tb, t] = cp.Variable((n, n), name=f"SF_im_{fb}_{tb}_{t}")
+            # Regulator intermediate voltage matrices (only for regulator branches)
+            if (fb, tb) in m.reg_phase_map:
+                m.W_reg_re[fb, tb, t] = cp.Variable(
+                    (n, n), symmetric=True, name=f"W_reg_re_{fb}_{tb}_{t}"
+                )
+                m.W_reg_im[fb, tb, t] = cp.Variable(
+                    (n, n), name=f"W_reg_im_{fb}_{tb}_{t}"
+                )
 
     for bus in m.bus_set:
         n = len(m.phase_map[bus])

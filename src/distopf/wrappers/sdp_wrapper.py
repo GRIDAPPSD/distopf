@@ -64,7 +64,7 @@ class SdpWrapper(Wrapper):
         """
         import warnings
 
-        from distopf.cvxpy_models.sdp_branchflow import create_sdp_branchflow_model
+        from distopf.cvxpy_models.branchflow_sdp import create_sdp_branchflow_model
         from distopf.cvxpy_models.constraints_sdp import add_sdp_constraints
         from distopf.cvxpy_models.solvers_sdp import solve_sdp
 

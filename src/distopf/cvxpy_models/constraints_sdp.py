@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 import cvxpy as cp
 
-from distopf.cvxpy_models.sdp_branchflow import (
+from distopf.cvxpy_models.branchflow_sdp import (
     SdpModel,
     _get_Z_sub,
     _get_W_parent_sub_idx,
@@ -49,13 +49,12 @@ def add_swing_bus_constraints(m: SdpModel) -> None:
     """
     Fix swing bus voltage outer-product matrix.
 
-    For a balanced 3-phase source at v_swing p.u., W = v_swing² · W_nominal
-    where W_nominal is the unit balanced 3-phase matrix.
+    For a source at per-phase voltages v_swing[ph], the matrix entry
+    W[i,j] = v_i * v_j * W_nominal[i,j], where W_nominal is the unit
+    balanced 3-phase matrix and v_i is the per-phase swing magnitude.
 
-    For partial-phase swing buses (e.g. single-phase), the appropriate
-    sub-matrix is extracted.
-
-    Mirrors ``add_swing_bus_constraints`` in constraints_nlp.py.
+    Mirrors ``add_swing_bus_constraints`` in constraints.py, which fixes
+    v2[id, ph] = v_swing[id, ph]^2 per phase.
     """
     new_constraints: list[cp.Constraint] = []
 
@@ -65,14 +64,15 @@ def add_swing_bus_constraints(m: SdpModel) -> None:
         if n == 0:
             continue
 
-        for t in m.time_set:
-            # Scale by swing voltage squared (per phase — use phase 'a' as reference)
-            v_sq = m.v_swing.get((bus, ph_list[0], t), 1.0) ** 2
+        ph_idx = [{"a": 0, "b": 1, "c": 2}[ph] for ph in ph_list]
 
-            # Extract phase-reduced sub-matrices from the 3-phase reference
-            ph_idx = [{"a": 0, "b": 1, "c": 2}[ph] for ph in ph_list]
-            W_re_ref = _W_SLACK_RE_3PH[np.ix_(ph_idx, ph_idx)] * v_sq
-            W_im_ref = _W_SLACK_IM_3PH[np.ix_(ph_idx, ph_idx)] * v_sq
+        for t in m.time_set:
+            # Per-phase swing voltage magnitudes
+            v = np.array([m.v_swing.get((bus, ph, t), 1.0) for ph in ph_list])
+            # Outer product of per-phase magnitudes scales the unit matrix
+            v_outer = np.outer(v, v)
+            W_re_ref = _W_SLACK_RE_3PH[np.ix_(ph_idx, ph_idx)] * v_outer
+            W_im_ref = _W_SLACK_IM_3PH[np.ix_(ph_idx, ph_idx)] * v_outer
 
             for i in range(n):
                 for j in range(n):
@@ -146,10 +146,12 @@ def add_psd_block_constraints(m: SdpModel) -> None:
     When the relaxation is tight (rank = 1), this is equivalent to
     the exact nonlinear constraint P² + Q² = V² · L used in the NLP model.
 
-    Mirrors the combination of add_current_constraint1 and
-    add_current_constraint2_relaxed in constraints_nlp.py.
+    For regulator branches, the post-tap intermediate voltage matrix W_reg
+    is used in place of the raw parent voltage sub-block, consistent with
+    the regulator voltage drop formulation.
     """
     new_constraints: list[cp.Constraint] = []
+    reg_set = set(m.reg_set)
 
     for fb, tb in m.branch_set:
         ph_list = m.branch_phase_map[fb, tb]
@@ -157,17 +159,23 @@ def add_psd_block_constraints(m: SdpModel) -> None:
         if n == 0:
             continue
 
-        parent_idx = _get_W_parent_sub_idx(m, fb, ph_list)
+        is_regulator = (fb, tb) in reg_set
+        if not is_regulator:
+            parent_idx = _get_W_parent_sub_idx(m, fb, ph_list)
 
         for t in m.time_set:
-            Wf_re = m.W_re[fb, t][np.ix_(parent_idx, parent_idx)]
-            Wf_im = m.W_im[fb, t][np.ix_(parent_idx, parent_idx)]
+            if is_regulator:
+                Wf_re = m.W_reg_re[fb, tb, t]
+                Wf_im = m.W_reg_im[fb, tb, t]
+            else:
+                Wf_re = m.W_re[fb, t][np.ix_(parent_idx, parent_idx)]
+                Wf_im = m.W_im[fb, t][np.ix_(parent_idx, parent_idx)]
+
             Sr = m.SF_re[fb, tb, t]
             Si = m.SF_im[fb, tb, t]
             Lr = m.L_re[fb, tb, t]
             Li = m.L_im[fb, tb, t]
 
-            # Build the 4n×4n real-valued representation of the complex PSD block
             M = cp.bmat(
                 [
                     [Wf_re, -Wf_im, Sr, -Si],
@@ -184,31 +192,25 @@ def add_psd_block_constraints(m: SdpModel) -> None:
 # ---------------------------------------------------------------------------
 # Voltage drop  (mirrors add_voltage_drop_nlp_constraints)
 # ---------------------------------------------------------------------------
-
-
 def add_voltage_drop_sdp_constraints(m: SdpModel) -> None:
     """
-    Add SDP voltage drop constraints for each branch (non-swing only):
+    Add SDP voltage drop constraints for each non-regulator branch:
 
-        W_t = W_f_sub - SF·Z† - Z·SF† + Z·L·Z†
+        W_tb = W_fb_sub - SF·Z† - Z·SF† + Z·L·Z†
 
-    In real-valued form:
-        W_t_re = W_f_re - (SF_re·Zr' + SF_im·Zi') - (Zr·SF_re' + Zi·SF_im')
-                        + (Zr·L_re·Zr' + Zi·L_re·Zi' - Zr·L_im·Zi' + Zi·L_im·Zr')
-                        ... (see implementation)
+    Regulator branches are skipped and handled by
+    add_regulator_voltage_drop_sdp_constraints (mirrors how
+    add_voltage_drop_constraints skips m.reg_phase_set in constraints.py).
 
-        W_t_im = W_f_im - (SF_im·Zr' - SF_re·Zi') - (Zi·SF_re' - Zr·SF_im')
-                        + (cross terms for imaginary part of Z·L·Z†)
-
-    This is the SDP equivalent of the LinDistFlow / NLP voltage drop equations.
-
-    Mirrors ``add_voltage_drop_nlp_constraints`` in constraints_nlp.py.
+    Mirrors ``add_voltage_drop_constraints`` in constraints.py.
     """
     new_constraints: list[cp.Constraint] = []
+    reg_set = set(m.reg_set)
 
     for fb, tb in m.branch_set:
-        # Skip if this is a regulator branch
-        # (regulator SDP constraints would be handled separately)
+        if (fb, tb) in reg_set:
+            continue  # handled by add_regulator_voltage_drop_sdp_constraints
+
         ph_list = m.branch_phase_map[fb, tb]
         n = len(ph_list)
         if n == 0:
@@ -216,6 +218,7 @@ def add_voltage_drop_sdp_constraints(m: SdpModel) -> None:
 
         Zr, Zi = _get_Z_sub(m, fb, tb)
         parent_idx = _get_W_parent_sub_idx(m, fb, ph_list)
+
         n_child = len(m.phase_map[tb])
         n_branch = len(ph_list)
         if n_branch != n_child:
@@ -231,8 +234,8 @@ def add_voltage_drop_sdp_constraints(m: SdpModel) -> None:
                 f"Parent bus {fb} phases={m.phase_map[fb]}, "
                 f"branch phases={ph_list}."
             )
+
         for t in m.time_set:
-            # Parent bus W sub-block aligned with child phases
             Wf_re = m.W_re[fb, t][np.ix_(parent_idx, parent_idx)]
             Wf_im = m.W_im[fb, t][np.ix_(parent_idx, parent_idx)]
 
@@ -241,25 +244,17 @@ def add_voltage_drop_sdp_constraints(m: SdpModel) -> None:
             Lr = m.L_re[fb, tb, t]
             Li = m.L_im[fb, tb, t]
 
-            # SF · Z†  (complex: (Sr + jSi)(Zr - jZi)' = Sr·Zr'+Si·Zi' + j(Si·Zr'-Sr·Zi'))
             SZH_re = Sr @ Zr.T + Si @ Zi.T
             SZH_im = Si @ Zr.T - Sr @ Zi.T
-
-            # Z · SF†  (complex: (Zr+jZi)(Sr-jSi)' = Zr·Sr'+Zi·Si' + j(Zi·Sr'-Zr·Si'))
             ZSH_re = Zr @ Sr.T + Zi @ Si.T
             ZSH_im = Zi @ Sr.T - Zr @ Si.T
 
-            # Z · L · Z†
-            # First: A = Z·L = (Zr+jZi)(Lr+jLi) = (Zr·Lr - Zi·Li) + j(Zr·Li + Zi·Lr)
-            A_re = Zr @ Lr - Zi @ Li  # Re(Z·L)
-            A_im = Zr @ Li + Zi @ Lr  # Im(Z·L)
-            # Then: A · Z†  = (A_re+jA_im)(Zr-jZi)' = A_re·Zr'+A_im·Zi' + j(A_im·Zr'-A_re·Zi')
+            A_re = Zr @ Lr - Zi @ Li
+            A_im = Zr @ Li + Zi @ Lr
             ZLZH_re = A_re @ Zr.T + A_im @ Zi.T
             ZLZH_im = A_im @ Zr.T - A_re @ Zi.T
 
-            # Voltage drop equation (real part)
             new_constraints.append(m.W_re[tb, t] == Wf_re - SZH_re - ZSH_re + ZLZH_re)
-            # Voltage drop equation (imaginary part)
             new_constraints.append(m.W_im[tb, t] == Wf_im - SZH_im - ZSH_im + ZLZH_im)
 
     m._add(m.voltage_drop_constraints, new_constraints)
@@ -312,27 +307,27 @@ def add_power_balance_sdp_constraints(m: SdpModel) -> None:
 
         for t in m.time_set:
             # Build net injection expressions per phase
-            for local_idx, ph in enumerate(ph_list):
+            for ph_idx, ph in enumerate(ph_list):
                 # --- Generation ---
-                p_inj = m.p_gen[bus, t][local_idx] if (bus, t) in m.p_gen else 0.0
-                q_inj = m.q_gen[bus, t][local_idx] if (bus, t) in m.q_gen else 0.0
+                p_inj = m.p_gen[bus, t][ph_idx] if (bus, t) in m.p_gen else 0.0
+                q_inj = m.q_gen[bus, t][ph_idx] if (bus, t) in m.q_gen else 0.0
 
                 # --- Capacitor ---
                 q_inj = q_inj + (
-                    m.q_cap[bus, t][local_idx] if (bus, t) in m.q_cap else 0.0
+                    m.q_cap[bus, t][ph_idx] if (bus, t) in m.q_cap else 0.0
                 )
 
                 # --- Battery ---
                 p_inj = p_inj - (
-                    m.p_bat[bus, t][local_idx] if (bus, t) in m.p_bat else 0.0
+                    m.p_bat[bus, t][ph_idx] if (bus, t) in m.p_bat else 0.0
                 )
                 q_inj = q_inj - (
-                    m.q_bat[bus, t][local_idx] if (bus, t) in m.q_bat else 0.0
+                    m.q_bat[bus, t][ph_idx] if (bus, t) in m.q_bat else 0.0
                 )
 
                 # --- Load ---
-                p_load = m.p_load_nom.get((bus, ph, t), 0.0)
-                q_load = m.q_load_nom.get((bus, ph, t), 0.0)
+                p_load = m.p_load[bus, t][ph_idx]
+                q_load = m.q_load[bus, t][ph_idx]
 
                 # --- Incoming power (net of line losses on incoming branch) ---
                 # Net power delivered = SF_diag - diag(Z · L)
@@ -413,6 +408,47 @@ def add_voltage_limits_sdp(m: SdpModel) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Load constraints
+# ---------------------------------------------------------------------------
+
+
+def add_load_constraints_sdp(m: SdpModel) -> None:
+    """
+    Add voltage-dependent load constraints (mirrors add_cvr_load_constraints).
+
+    p_load = p_nom + cvr_p * (p_nom / 2) * (v2 - 1)
+    q_load = q_nom + cvr_q * (q_nom / 2) * (v2 - 1)
+
+    With cvr_p = cvr_q = 0 (default) this reduces to constant power loads:
+        p_load = p_nom,  q_load = q_nom
+
+    Uses W_re[bus,t][i,i] as the voltage magnitude squared (v2).
+    """
+    new_constraints: list[cp.Constraint] = []
+
+    for bus in m.bus_set:
+        ph_list = m.phase_map[bus]
+        n = len(ph_list)
+        if n == 0:
+            continue
+        for t in m.time_set:
+            for i, ph in enumerate(ph_list):
+                p_nom = m.p_load_nom.get((bus, ph, t), 0.0)
+                q_nom = m.q_load_nom.get((bus, ph, t), 0.0)
+                cvr_p = m.cvr_p.get((bus, ph), 0.0)
+                cvr_q = m.cvr_q.get((bus, ph), 0.0)
+                v2 = m.W_re[bus, t][i, i]
+                new_constraints.append(
+                    m.p_load[bus, t][i] == p_nom + cvr_p * p_nom / 2 * (v2 - 1)
+                )
+                new_constraints.append(
+                    m.q_load[bus, t][i] == q_nom + cvr_q * q_nom / 2 * (v2 - 1)
+                )
+
+    m._add(m.load_constraints, new_constraints)
+
+
+# ---------------------------------------------------------------------------
 # Generator constraints  (mirrors add_generator_limits + constant p/q)
 # ---------------------------------------------------------------------------
 
@@ -477,13 +513,12 @@ def add_generator_limits_sdp(m: SdpModel) -> None:
 
 def add_capacitor_constraints_sdp(m: SdpModel) -> None:
     """
-    Add voltage-dependent capacitor reactive power constraints:
+    Add voltage-dependent capacitor reactive power constraints (mirrors
+    add_capacitor_constraints in constraints.py):
 
-        q_cap[bus, ph, t] = q_cap_nom[bus, ph] * W_re[bus, t][i, i]
+        q_cap[bus, ph, t] = q_cap_nom[bus, ph] * v2[bus, ph, t]
 
-    (q_cap is proportional to voltage squared — same model as NLP).
-
-    Mirrors ``add_capacitor_constraints`` in constraints_nlp.py.
+    where v2 = W_re[bus, t][i, i].
     """
     new_constraints: list[cp.Constraint] = []
 
@@ -589,6 +624,99 @@ def add_battery_constraints_sdp(m: SdpModel) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Regulator constraints
+# ---------------------------------------------------------------------------
+
+
+def add_regulator_ratio_sdp_constraints(m: SdpModel) -> None:
+    """
+    Add the regulator tap transform constraint (mirrors regulator_rule in
+    constraints.py):
+
+        v_reg = v_i * reg_ratio^2
+
+    In SDP form the from-bus voltage matrix is scaled by the diagonal tap
+    ratio matrix α:
+
+        W_reg = α · W_f_sub · α
+
+    where α = diag(reg_ratio_ph).  For the diagonal this gives
+    W_reg[i,i] = ratio_i^2 * W_f[i,i], matching v_reg = v_i * ratio^2.
+    """
+    new_constraints: list[cp.Constraint] = []
+
+    for fb, tb in m.reg_set:
+        ph_list = m.reg_phase_map[fb, tb]
+        n = len(ph_list)
+        if n == 0:
+            continue
+
+        parent_idx = _get_W_parent_sub_idx(m, fb, ph_list)
+        alpha = np.diag([m.reg_ratio.get((fb, tb, ph), 1.0) for ph in ph_list])
+
+        for t in m.time_set:
+            Wf_re = m.W_re[fb, t][np.ix_(parent_idx, parent_idx)]
+            Wf_im = m.W_im[fb, t][np.ix_(parent_idx, parent_idx)]
+
+            new_constraints.append(m.W_reg_re[fb, tb, t] == alpha @ Wf_re @ alpha)
+            new_constraints.append(m.W_reg_im[fb, tb, t] == alpha @ Wf_im @ alpha)
+
+    m._add(m.regulator_constraints, new_constraints)
+
+
+def add_regulator_voltage_drop_sdp_constraints(m: SdpModel) -> None:
+    """
+    Add the regulator impedance voltage drop constraint (mirrors
+    regulator_v_drop in constraints.py):
+
+        v_j = v_reg - 2*r*p_ij - 2*x*q_ij
+
+    In SDP form, using the post-tap intermediate voltage matrix W_reg:
+
+        W_tb = W_reg - SF·Z† - Z·SF† + Z·L·Z†
+
+    Mirrors ``add_regulator_constraints`` in constraints.py.
+    """
+    new_constraints: list[cp.Constraint] = []
+
+    for fb, tb in m.reg_set:
+        ph_list = m.reg_phase_map[fb, tb]
+        n = len(ph_list)
+        if n == 0:
+            continue
+
+        Zr, Zi = _get_Z_sub(m, fb, tb)
+
+        for t in m.time_set:
+            W_reg_re = m.W_reg_re[fb, tb, t]
+            W_reg_im = m.W_reg_im[fb, tb, t]
+
+            Sr = m.SF_re[fb, tb, t]
+            Si = m.SF_im[fb, tb, t]
+            Lr = m.L_re[fb, tb, t]
+            Li = m.L_im[fb, tb, t]
+
+            SZH_re = Sr @ Zr.T + Si @ Zi.T
+            SZH_im = Si @ Zr.T - Sr @ Zi.T
+            ZSH_re = Zr @ Sr.T + Zi @ Si.T
+            ZSH_im = Zi @ Sr.T - Zr @ Si.T
+
+            A_re = Zr @ Lr - Zi @ Li
+            A_im = Zr @ Li + Zi @ Lr
+            ZLZH_re = A_re @ Zr.T + A_im @ Zi.T
+            ZLZH_im = A_im @ Zr.T - A_re @ Zi.T
+
+            new_constraints.append(
+                m.W_re[tb, t] == W_reg_re - SZH_re - ZSH_re + ZLZH_re
+            )
+            new_constraints.append(
+                m.W_im[tb, t] == W_reg_im - SZH_im - ZSH_im + ZLZH_im
+            )
+
+    m._add(m.regulator_constraints, new_constraints)
+
+
+# ---------------------------------------------------------------------------
 # Thermal limits  (mirrors add_circular_thermal_constraints)
 # ---------------------------------------------------------------------------
 
@@ -662,33 +790,29 @@ def add_sdp_constraints(
     """
     Add all constraints for the SDP BranchFlow model.
 
-    This is the main entry point for constraint attachment, mirroring
-    ``add_nlp_constraints`` in constraints_nlp.py.
-
-    Parameters
-    ----------
-    m : SdpModel
-        Model created by :func:`create_sdp_branchflow_model`.
-    thermal_constraints : bool, default False
-        If True, add branch thermal limit constraints.
-
-    Constraint order
-    ----------------
-    1. Hermitian structure (skew-symmetry of imaginary parts)
-    2. Swing bus voltage fix
-    3. SDP PSD block (relaxed rank-1)
-    4. Voltage drop (W propagation)
-    5. Power balance (per bus per phase)
-    6. Voltage magnitude limits
-    7. Generator limits
-    8. Capacitor constraints
-    9. Battery constraints
-    10. Thermal limits (optional)
+    Constraint order (mirrors add_constraints in lindist.py)
+    -------------------------------------------------------
+    1.  Hermitian structure (skew-symmetry of imaginary parts)
+    2.  Swing bus voltage fix
+    3.  SDP PSD block (relaxed rank-1)
+    4.  Voltage drop (non-regulator branches)
+    5.  Regulator tap transform  (W_reg = α·W_f·α)
+    6.  Regulator voltage drop   (W_tb = W_reg - impedance drop)
+    7.  Load constraints (voltage-dependent / CVR-ready)
+    8.  Power balance (per bus per phase)
+    9.  Voltage magnitude limits
+    10. Generator limits
+    11. Capacitor constraints
+    12. Battery constraints
+    13. Thermal limits (optional)
     """
     add_hermitian_constraints(m)
     add_swing_bus_constraints(m)
     add_psd_block_constraints(m)
     add_voltage_drop_sdp_constraints(m)
+    add_regulator_ratio_sdp_constraints(m)
+    add_regulator_voltage_drop_sdp_constraints(m)
+    add_load_constraints_sdp(m)
     add_power_balance_sdp_constraints(m)
     add_voltage_limits_sdp(m)
     add_generator_limits_sdp(m)

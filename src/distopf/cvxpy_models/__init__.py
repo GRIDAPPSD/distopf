@@ -1,6 +1,6 @@
 """CVXPY-based optimization models for DistOPF."""
 
-from distopf.cvxpy_models.sdp_branchflow import (
+from distopf.cvxpy_models.branchflow_sdp import (
     SdpModel,
     create_sdp_branchflow_model,
 )

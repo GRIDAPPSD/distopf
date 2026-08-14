@@ -12,7 +12,7 @@ from __future__ import annotations
 import cvxpy as cp
 import numpy as np
 
-from distopf.cvxpy_models.sdp_branchflow import SdpModel, _get_Z_sub
+from distopf.cvxpy_models.branchflow_sdp import SdpModel, _get_Z_sub
 
 
 def loss_objective_sdp(m: SdpModel) -> cp.Expression:

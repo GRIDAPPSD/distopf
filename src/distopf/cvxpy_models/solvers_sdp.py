@@ -15,7 +15,7 @@ import cvxpy as cp
 import numpy as np
 import pandas as pd
 
-from distopf.cvxpy_models.sdp_branchflow import SdpModel
+from distopf.cvxpy_models.branchflow_sdp import SdpModel
 from distopf.results import PowerFlowResult
 
 
