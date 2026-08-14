@@ -294,6 +294,7 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         doc="Generation cost per unit active power per hour",
     )
 
+
 def _create_capacitor_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     q_cap_data = {}
     for _, row in case.cap_data.iterrows():
@@ -605,6 +606,7 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_schedule_parameters(m, case)
 
     _create_price_parameters(m, case)
+
 
 def create_lindist_model(
     case: Case,

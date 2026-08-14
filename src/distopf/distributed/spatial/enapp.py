@@ -383,6 +383,7 @@ def send_s_down(models: dict[str, Case], boundaries: dict[str, BoundaryVars]):
 #         schedules.loc[schedules.time == t, ["v_a", "v_b", "v_c"]] = v_t.to_numpy()
 #     return schedules
 
+
 def add_v_swing_to_schedules(schedules, v, receiving_area):
     v_swing = (
         v.loc[v.name == receiving_area, ["t", "a", "b", "c"]]
@@ -391,10 +392,9 @@ def add_v_swing_to_schedules(schedules, v, receiving_area):
         .set_index("time")
     )
     schedules = schedules.set_index("time")
-    schedules.loc[v_swing.index, ["v_a", "v_b", "v_c"]] = v_swing[
-        ["v_a", "v_b", "v_c"]
-    ]
+    schedules.loc[v_swing.index, ["v_a", "v_b", "v_c"]] = v_swing[["v_a", "v_b", "v_c"]]
     return schedules.reset_index()
+
 
 def add_v_down_to_schedules(schedules, v, sending_area):
     v = deepcopy(v)
@@ -438,27 +438,29 @@ def add_v_down_to_schedules(schedules, v, sending_area):
 #         ] = q_t.to_numpy()
 #     return schedules
 
+
 def add_s_to_schedules(schedules, s, sending_area):
     p_cols = [f"{sending_area}.{ph}.p" for ph in "abc"]
     q_cols = [f"{sending_area}.{ph}.q" for ph in "abc"]
-    
+
     s_prep = (
         s.loc[:, ["t", "a", "b", "c"]]
         .drop_duplicates(subset=["t"], keep="first")
         .rename(columns={"t": "time"})
         .set_index("time")
     )
-    
+
     # Extract real and imaginary parts
     p_data = s_prep[["a", "b", "c"]].apply(np.real)
     p_data.columns = p_cols
     q_data = s_prep[["a", "b", "c"]].apply(np.imag)
     q_data.columns = q_cols
-    
+
     schedules = schedules.set_index("time")
     schedules.loc[s_prep.index, p_cols] = p_data
     schedules.loc[s_prep.index, q_cols] = q_data
     return schedules.reset_index()
+
 
 def local_to_global(results: dict, x_map_to_global: dict, n_x: int):
     x = np.ones(n_x) * np.inf

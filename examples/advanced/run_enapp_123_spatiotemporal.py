@@ -67,13 +67,13 @@ def main() -> None:
     ) -> None:
         print("ENAPP iteration ", it)
         # for area_name, boundary_vars in boundaries.items():
-            # print(area_name)
-            # print(f"objective value: {all_results[area_name].objective_value}")
-            # print(f"{area_name} s_up")
-            # print(boundary_vars.s_up)
-            # print(f"{area_name} v_down")
-            # print(boundary_vars.v_down)
-            # all_results[area_name].plot_network().show(renderer="browser")
+        # print(area_name)
+        # print(f"objective value: {all_results[area_name].objective_value}")
+        # print(f"{area_name} s_up")
+        # print(boundary_vars.s_up)
+        # print(f"{area_name} v_down")
+        # print(boundary_vars.v_down)
+        # all_results[area_name].plot_network().show(renderer="browser")
         # print()
 
     result_enapp = solve_enapp(

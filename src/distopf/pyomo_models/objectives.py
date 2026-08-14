@@ -131,8 +131,6 @@ def substation_cost_objective_rule(model: LindistModelProtocol):
     return total_cost
 
 
-
-
 def gen_cost_rule(model: LindistModelProtocol):
     generation_cost = 0
     for _id, ph in model.gen_phase_set:
@@ -141,6 +139,7 @@ def gen_cost_rule(model: LindistModelProtocol):
                 model.p_gen[_id, ph, t] * model.gen_cost[_id, ph] * model.delta_t
             )
     return generation_cost
+
 
 def total_cost_rule(model: LindistModelProtocol):
     return gen_cost_rule(model) + substation_cost_objective_rule(model)
@@ -186,8 +185,6 @@ def generation_cost_with_substation_quadratic_penalty_objective_rule(
                 substation_penalty += model.p_flow[_id, ph, t] ** 2
 
     return gen_cost_rule(model) + 1e6 * substation_penalty
-
-
 
 
 def demand_charge_objective_rule(model: LindistModelProtocol):

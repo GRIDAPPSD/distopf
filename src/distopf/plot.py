@@ -183,10 +183,12 @@ def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
     id_vars1 = ["id", "name"] + (["t"] if "t" in v1.columns else [])
     id_vars2 = ["id", "name"] + (["t"] if "t" in v2.columns else [])
 
-    v1m = v1.melt(ignore_index=True, var_name="phase",
-                  id_vars=id_vars1, value_name="v1")
-    v2m = v2.melt(ignore_index=True, var_name="phase",
-                  id_vars=id_vars2, value_name="v2")
+    v1m = v1.melt(
+        ignore_index=True, var_name="phase", id_vars=id_vars1, value_name="v1"
+    )
+    v2m = v2.melt(
+        ignore_index=True, var_name="phase", id_vars=id_vars2, value_name="v2"
+    )
 
     merge_keys = ["id", "name", "phase"]
     if "t" in v1m.columns and "t" in v2m.columns:
@@ -206,8 +208,12 @@ def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
     if "t" in v.columns and v["t"].nunique() > 1:
         v = v.sort_values(by=["t", "id", "phase"])
         fig = px.line(
-            v, x="name", facet_col="phase", y="v",
-            color="value", markers=True,
+            v,
+            x="name",
+            facet_col="phase",
+            y="v",
+            color="value",
+            markers=True,
             animation_frame="t",
         )
         # Fix y-axis range so it doesn't jump between frames
@@ -216,8 +222,12 @@ def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
         fig.update_yaxes(range=[ymin - pad, ymax + pad])
     else:
         fig = px.line(
-            v, x="name", facet_col="phase", y="v",
-            color="value", markers=True,
+            v,
+            x="name",
+            facet_col="phase",
+            y="v",
+            color="value",
+            markers=True,
         )
 
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))

@@ -1,6 +1,9 @@
 from pathlib import Path
 import distopf as opf
-from distopf.pyomo_models.objectives import substation_cost_objective_rule, loss_objective_rule
+from distopf.pyomo_models.objectives import (
+    substation_cost_objective_rule,
+    loss_objective_rule,
+)
 
 from distopf.distributed.spatial.enapp import Case, solve_enapp, PowerFlowResult
 from distopf.distributed.temporal import solve_tenapp_aprx, energy_cost_min
@@ -71,13 +74,13 @@ def main() -> None:
     ) -> None:
         print("ENAPP iteration ", it)
         # for area_name, boundary_vars in boundaries.items():
-            # print(area_name)
-            # print(f"objective value: {all_results[area_name].objective_value}")
-            # print(f"{area_name} s_up")
-            # print(boundary_vars.s_up)
-            # print(f"{area_name} v_down")
-            # print(boundary_vars.v_down)
-            # all_results[area_name].plot_network().show(renderer="browser")
+        # print(area_name)
+        # print(f"objective value: {all_results[area_name].objective_value}")
+        # print(f"{area_name} s_up")
+        # print(boundary_vars.s_up)
+        # print(f"{area_name} v_down")
+        # print(boundary_vars.v_down)
+        # all_results[area_name].plot_network().show(renderer="browser")
         # print()
 
     result_enapp = solve_enapp(

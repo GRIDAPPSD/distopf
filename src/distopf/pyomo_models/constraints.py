@@ -14,7 +14,6 @@ sqrt2 = sqrt(2)
 sqrt3 = sqrt(3)
 
 
-
 def add_p_flow_constraints(m: LindistModelProtocol) -> None:
     """
     Add LinDistFlow power balance constraints.
@@ -407,11 +406,6 @@ def add_octagonal_thermal_constraints(m: LindistModelProtocol) -> None:
         return
 
     c = sqrt2 - 1  # ≈ 0.4142
-
-    # def _has_thermal_limit(m, _id, ph):
-    #     """Check if branch has a valid thermal limit."""
-    #     limit = pyo.value(m.s_branch_max.get((_id, ph), None))
-    #     return limit is not None and limit > 0
 
     def _has_thermal_limit(m, fb, tb, ph):
         """Check if branch has a valid thermal limit."""

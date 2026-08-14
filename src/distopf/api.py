@@ -737,7 +737,6 @@ class Case:
 
         return plot_schedules(self.schedules)
 
-
     # -------------------------------------------------------------------------
     # Case Modification Methods
     # -------------------------------------------------------------------------
@@ -1083,6 +1082,7 @@ def replay(run_config_path: Path | str):
         If the run was marked non-replayable (e.g. a custom Callable objective).
     """
     import json
+
     run_config_path = Path(run_config_path)
     with open(run_config_path) as f:
         config = json.load(f)
@@ -1097,7 +1097,8 @@ def replay(run_config_path: Path | str):
     call = config["call"]
     if not call.get("replayable", True):
         bad = [
-            k for k, v in call["arguments"].items()
+            k
+            for k, v in call["arguments"].items()
             if isinstance(v, dict) and v.get("__nonserializable__")
         ]
         raise ValueError(f"Run is not replayable (non-serializable args: {bad})")
