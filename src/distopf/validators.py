@@ -120,7 +120,7 @@ class CaseValidator:
 
         # Non-negative ratings validation
         if self.case.gen_data is not None and len(self.case.gen_data) > 0:
-            for col in ["sa_max", "sb_max", "sc_max"]:
+            for col in ["s_a_max", "s_b_max", "s_c_max"]:
                 if col in self.case.gen_data.columns:
                     neg_mask = self.case.gen_data[col] < 0
                     if neg_mask.any():

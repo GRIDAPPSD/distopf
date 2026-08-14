@@ -364,12 +364,12 @@ class RegulatorProcessor(BaseProcessor):
         # Apply impedance to all phases
         data.update(
             {
-                "raa": r_pu,
-                "rbb": r_pu,
-                "rcc": r_pu,
-                "xaa": x_pu,
-                "xbb": x_pu,
-                "xcc": x_pu,
+                "r_aa": r_pu,
+                "r_bb": r_pu,
+                "r_cc": r_pu,
+                "x_aa": x_pu,
+                "x_bb": x_pu,
+                "x_cc": x_pu,
             }
         )
 
@@ -384,12 +384,12 @@ class RegulatorProcessor(BaseProcessor):
 
         data.update(
             {
-                "raa": r_pu,
-                "rbb": r_pu,
-                "rcc": r_pu,
-                "xaa": x_pu,
-                "xbb": x_pu,
-                "xcc": x_pu,
+                "r_aa": r_pu,
+                "r_bb": r_pu,
+                "r_cc": r_pu,
+                "x_aa": x_pu,
+                "x_bb": x_pu,
+                "x_cc": x_pu,
             }
         )
 

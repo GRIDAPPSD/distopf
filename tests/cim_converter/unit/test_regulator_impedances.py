@@ -46,8 +46,8 @@ def test_regulator_impedance_from_mesh_on_powertransformerend():
     z_base = v_ln_base**2 / reg_proc.s_base
     expected_r = float(mesh_imp.r) / z_base
     expected_x = float(mesh_imp.x) / z_base
-    assert pytest.approx(data["raa"], rel=1e-9) == expected_r
-    assert pytest.approx(data["xaa"], rel=1e-9) == expected_x
+    assert pytest.approx(data["r_aa"], rel=1e-9) == expected_r
+    assert pytest.approx(data["x_aa"], rel=1e-9) == expected_x
 
 
 def test_regulator_impedance_from_starimpedance_on_powertransformerend():
@@ -77,8 +77,8 @@ def test_regulator_impedance_from_starimpedance_on_powertransformerend():
     z_base = v_ln_base**2 / reg_proc.s_base
     expected_r = float(star_imp.r) / z_base
     expected_x = float(star_imp.x) / z_base
-    assert pytest.approx(data["raa"], rel=1e-9) == expected_r
-    assert pytest.approx(data["xaa"], rel=1e-9) == expected_x
+    assert pytest.approx(data["r_aa"], rel=1e-9) == expected_r
+    assert pytest.approx(data["x_aa"], rel=1e-9) == expected_x
 
 
 def test_regulator_impedance_from_direct_r_x_on_powertransformerend():
@@ -107,8 +107,8 @@ def test_regulator_impedance_from_direct_r_x_on_powertransformerend():
     z_base = v_ln_base**2 / reg_proc.s_base
     expected_r = float(pte.r) / z_base
     expected_x = float(pte.x) / z_base
-    assert pytest.approx(data["raa"], rel=1e-9) == expected_r
-    assert pytest.approx(data["xaa"], rel=1e-9) == expected_x
+    assert pytest.approx(data["r_aa"], rel=1e-9) == expected_r
+    assert pytest.approx(data["x_aa"], rel=1e-9) == expected_x
 
 
 def test_regulator_tank_impedance_fallback_and_phases_and_names():
@@ -130,7 +130,7 @@ def test_regulator_tank_impedance_fallback_and_phases_and_names():
     z_base = v_ln**2 / reg_proc.s_base
     expected_r = float(mesh_imp.r) / z_base
     expected_x = float(mesh_imp.x) / z_base
-    assert pytest.approx(data["raa"], rel=1e-9) == expected_r
-    assert pytest.approx(data["xaa"], rel=1e-9) == expected_x
+    assert pytest.approx(data["r_aa"], rel=1e-9) == expected_r
+    assert pytest.approx(data["x_aa"], rel=1e-9) == expected_x
     assert isinstance(data["phases"], str)
     assert "from_name" in data and "to_name" in data

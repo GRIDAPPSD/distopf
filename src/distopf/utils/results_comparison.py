@@ -9,7 +9,6 @@ result container for all solver backends.
 """
 
 import pandas as pd
-import numpy as np
 from dataclasses import dataclass, asdict
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -268,7 +267,7 @@ def format_detailed_report(comparisons: list[ComparisonResult]) -> str:
                     lines.append(f"- Std: {stats['std']:.6e} p.u.\n")
 
             if comp.objective_delta is not None:
-                lines.append(f"\n### Objective Comparison\n")
+                lines.append("\n### Objective Comparison\n")
                 lines.append(f"- **Δ Objective:** {comp.objective_delta:.6e}\n")
                 if comp.objective_delta_pct is not None:
                     lines.append(

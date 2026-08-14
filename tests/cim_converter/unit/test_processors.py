@@ -63,7 +63,7 @@ def test_base_processor_create_and_terminals_and_voltage():
     bp = ConcreteBase(1e6)
     base = bp._create_base_branch_dict()
     # Keys existence
-    assert "name" in base and "raa" in base and "xaa" in base
+    assert "name" in base and "r_aa" in base and "x_aa" in base
     # Test terminals info raises with insufficient terminals; use a real object with a name attribute
     equip = cim.ConductingEquipment()
     equip.name = "equip1"
@@ -85,10 +85,10 @@ def test_line_processor_impedance_mapping_and_scaling():
     # z_base = v_ln^2 / s_base => check raa = length * r / z_base
     z_base = data["z_base"]
     expected_raa = 100.0 * 0.1 / z_base
-    assert pytest.approx(data["raa"], rel=1e-9) == expected_raa
+    assert pytest.approx(data["r_aa"], rel=1e-9) == expected_raa
     # check ab value present
     expected_rab = 100.0 * 0.01 / z_base
-    assert pytest.approx(data["rab"], rel=1e-9) == expected_rab
+    assert pytest.approx(data["r_ab"], rel=1e-9) == expected_rab
     assert data["length"] == 100.0
     assert data["type"] == "ACLineSegment"
 
@@ -109,9 +109,9 @@ def test_switch_processor_impedance_and_status(monkeypatch):
     data = sp._process_switch(switch)
     # Check phases applied and only aa/cc filled (a and c), bb remains zero
     assert data["phases"] == "ac"
-    assert data["raa"] > 0
-    assert data["rcc"] > 0
-    assert data["rbb"] == 0.0
+    assert data["r_aa"] > 0
+    assert data["r_cc"] > 0
+    assert data["r_bb"] == 0.0
     assert data["status"] == "open"
 
 
@@ -130,9 +130,9 @@ def test_capacitor_processor_shunt_phases(monkeypatch):
     )
     cap_data = cap_proc._process_single_capacitor(cap)
     assert cap_data["phases"] == "a"
-    assert cap_data["qa"] >= 0.0
-    assert cap_data["qb"] == 0.0
-    assert cap_data["qc"] == 0.0
+    assert cap_data["q_a"] >= 0.0
+    assert cap_data["q_b"] == 0.0
+    assert cap_data["q_c"] == 0.0
 
 
 def test_generator_processor_power_electronics_phases(monkeypatch):
@@ -168,5 +168,5 @@ def test_generator_processor_power_electronics_phases(monkeypatch):
     if "p" in gen:
         assert pytest.approx(gen["p"], rel=1e-9) == expected_total_pu
     else:
-        sum_abc = sum(gen.get(k, 0.0) for k in ("pa", "pb", "pc"))
+        sum_abc = sum(gen.get(k, 0.0) for k in ("p_a", "p_b", "p_c"))
         assert pytest.approx(sum_abc, rel=1e-6) == expected_total_pu

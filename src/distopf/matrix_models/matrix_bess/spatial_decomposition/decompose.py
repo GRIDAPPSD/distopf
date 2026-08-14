@@ -274,9 +274,9 @@ def make_new_node(template_data, name, bus_id, load_shape, bus_type):
 
 def make_new_edge(template_data, from_name, to_name, fb, tb, name):
     data = deepcopy(template_data)
-    r_names = ["raa", "rab", "rac", "rbb", "rbc", "rcc"]
-    x_names = ["xaa", "xab", "xac", "xbb", "xbc", "xcc"]
-    diag = ["raa", "rbb", "rcc", "xaa", "xbb", "xcc"]
+    r_names = ["r_aa", "r_ab", "r_ac", "r_bb", "r_bc", "r_cc"]
+    x_names = ["x_aa", "x_ab", "x_ac", "x_bb", "x_bc", "x_cc"]
+    diag = ["r_aa", "r_bb", "r_cc", "x_aa", "x_bb", "x_cc"]
     data["branch_data"].loc[:, ["fb"]] = fb
     data["branch_data"].loc[:, ["tb"]] = tb
     data["branch_data"].loc[:, ["from_name"]] = from_name

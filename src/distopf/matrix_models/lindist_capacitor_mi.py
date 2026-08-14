@@ -4,7 +4,7 @@ import pandas as pd
 from numpy import zeros
 from scipy.sparse import csr_array, lil_array, vstack
 from distopf.matrix_models.base import LinDistBase
-from distopf.utils import get
+from distopf.utils.input_handlers import get
 
 
 class LinDistModelCapMI(LinDistBase):
@@ -74,7 +74,7 @@ class LinDistModelCapMI(LinDistBase):
         qij = self.idx("qij", j, a)
         q_cap_nom = 0
         if self.cap is not None:
-            q_cap_nom = get(self.cap[f"q{a}"], j, 0)
+            q_cap_nom = get(self.cap[f"q_{a}"], j, 0)
         # equation indexes
         zc = self.idx("zc", j, a)
         qc = self.idx("q_cap", j, a)

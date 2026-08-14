@@ -83,7 +83,7 @@ def test_branch_impedances_against_reference(tmp_path):
     conv.save(results, output_dir=str(out_dir))
     conv_branch_df = results["branch_data"]
 
-    impedance_cols = ["raa", "rbb", "rcc", "xaa", "xbb", "xcc"]
+    impedance_cols = ["r_aa", "r_bb", "r_cc", "x_aa", "x_bb", "x_cc"]
     matches = 0
     total = 0
     failures = []

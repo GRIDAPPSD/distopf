@@ -85,7 +85,7 @@ class TopologyValidator:
     def _check_electrical_consistency(self, branch_data: pd.DataFrame, result: Dict):
         """Check for electrical parameter consistency."""
         issues = []
-        impedance_cols = ["raa", "rbb", "rcc", "xaa", "xbb", "xcc"]
+        impedance_cols = ["r_aa", "r_bb", "r_cc", "x_aa", "x_bb", "x_cc"]
 
         for col in impedance_cols:
             if col in branch_data.columns:
@@ -97,13 +97,13 @@ class TopologyValidator:
 
         if (
             "type" in branch_data.columns
-            and "raa" in branch_data.columns
-            and "xaa" in branch_data.columns
+            and "r_aa" in branch_data.columns
+            and "x_aa" in branch_data.columns
         ):
             non_switch_types = ["ACLineSegment", "transformer"]
             for _, row in branch_data.iterrows():
                 if row.get("type") in non_switch_types:
-                    total_z = (row.get("raa", 0) ** 2 + row.get("xaa", 0) ** 2) ** 0.5
+                    total_z = (row.get("r_aa", 0) ** 2 + row.get("x_aa", 0) ** 2) ** 0.5
                     if total_z < self.tolerance:
                         issues.append(
                             f"Branch {row.get('name', 'unknown')} has zero impedance"

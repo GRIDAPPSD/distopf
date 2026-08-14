@@ -23,19 +23,18 @@ from distopf.plot import plot_voltage_vs_distance, plot_line_flow_vs_distance
 
 # Configuration
 start_step = 12
-case_path = opf.CASES_DIR / "dss/ieee123_dss/Run_IEEE123Bus.DSS"
-
+case_path = opf.CASES_DIR / "dss/ieee13_dss/IEEE13Nodeckt.dss"
 # Create case
 case = create_case(case_path, start_step=start_step)
 print("Case loaded:")
 print(case.bus_data)
 
 # Configure case
-case.gen_data.control_variable = "P"
+case.gen_data.control_variable = ""
 case.bus_data.v_max = 2.0
 case.bus_data.v_min = 0.0
-case.gen_data = case.gen_data.iloc[0:0]  # Remove generators
-case.bat_data = case.bat_data.iloc[0:0]  # Remove batteries
+# case.gen_data = case.gen_data.iloc[0:0]  # Remove generators
+# case.bat_data = case.bat_data.iloc[0:0]  # Remove batteries
 
 # Get DSS reference solution
 print("\nExtracting DSS reference solution...")
@@ -87,6 +86,7 @@ try:
         initialize="fbs",  # Initialize from FBS results
         solver="ipopt",
         raw_result=False,
+        verbose=True,
     )
     print("Nonlinear OPF completed successfully!")
     v_nlp = result_nlp.voltages
@@ -191,7 +191,7 @@ if p_fbs is not None and p_linear is not None:
         print("-" * 60)
         # FBS uses tb column, Linear uses id column - they should correspond
         p_fbs_sorted = p_fbs.sort_values(["tb", "t"]).reset_index(drop=True)
-        p_linear_sorted = p_linear.sort_values(["id", "t"]).reset_index(drop=True)
+        p_linear_sorted = p_linear.sort_values(["tb", "t"]).reset_index(drop=True)
 
         for phase in ["a", "b", "c"]:
             if phase in p_fbs_sorted.columns and phase in p_linear_sorted.columns:
@@ -209,7 +209,7 @@ if p_fbs is not None and p_nlp is not None:
         print("-" * 60)
         # FBS uses tb column, NLP uses id column - they should correspond
         p_fbs_sorted = p_fbs.sort_values(["tb", "t"]).reset_index(drop=True)
-        p_nlp_sorted = p_nlp.sort_values(["id", "t"]).reset_index(drop=True)
+        p_nlp_sorted = p_nlp.sort_values(["tb", "t"]).reset_index(drop=True)
 
         for phase in ["a", "b", "c"]:
             if phase in p_fbs_sorted.columns and phase in p_nlp_sorted.columns:
@@ -225,107 +225,131 @@ print("\n" + "=" * 60)
 print("Generating Visualization Plots")
 print("=" * 60)
 
-# Plot voltage comparison
-if len(v_list) > 1:
+opf.compare_voltages(v_dss, v_nlp).show(renderer="browser")
+# Extract reactive power flows
+q_fbs = None
+q_linear = None
+q_nlp = None
+q_dss = None
+
+try:
+    q_fbs = fbs_results.q_flows
+    q_fbs["algorithm"] = "fbs"
+except Exception as e:
+    print(f"Could not extract FBS reactive power flows: {e}")
+
+if result_linear is not None:
     try:
-        print("\nGenerating voltage vs distance plot...")
-
-        # Transform voltage data from wide format (a, b, c columns) to tidy format (phase, value columns)
-        v_tidy_list = []
-        for v_df in v_list:
-            if v_df is not None:
-                # Melt the dataframe to convert phase columns to rows
-                v_melted = v_df.melt(
-                    id_vars=["id", "name", "algorithm"],
-                    value_vars=["a", "b", "c"],
-                    var_name="phase",
-                    value_name="value",
-                )
-                v_tidy_list.append(v_melted)
-
-        if v_tidy_list:
-            v_tidy_combined = pd.concat(v_tidy_list, ignore_index=True)
-            fig_voltage = plot_voltage_vs_distance(
-                case,
-                v_tidy_combined,
-                title="Voltage Comparison: Linear vs Nonlinear OPF",
-                color_by="algorithm",
-            )
-            fig_voltage.show(renderer="browser")
-            print("Voltage plot generated successfully!")
+        q_linear = result_linear.q_flows
+        q_linear["algorithm"] = "linear"
     except Exception as e:
-        print(f"Could not generate voltage plot: {e}")
+        print(f"Could not extract Linear OPF reactive power flows: {e}")
 
-# Plot power flow comparison
-if p_fbs is not None or p_dss is not None:
+if result_nlp is not None:
     try:
-        print("\nGenerating power flow vs distance plot...")
+        q_nlp = result_nlp.q_flows
+        q_nlp["algorithm"] = "nlp"
+    except Exception as e:
+        print(f"Could not extract Nonlinear OPF reactive power flows: {e}")
 
-        # Prepare power flow data for plotting
-        # DSS and FBS already have fb, tb, from_name, to_name columns
-        # Linear and NLP need to be joined with branch data
-        p_plot_list = []
+try:
+    dss_parser = DSSToCSVConverter(case_path)
+    q_dss = dss_parser.get_q_flows()
+    q_dss["algorithm"] = "dss"
+except Exception as e:
+    print(f"Could not extract DSS reactive power flows: {e}")
 
-        # Add DSS data (already has the required columns)
-        if p_dss is not None:
-            p_dss_plot = p_dss.copy()
-            p_plot_list.append(p_dss_plot)
-
-        # Add FBS data (already has the required columns)
-        if p_fbs is not None:
-            p_fbs_plot = p_fbs.copy()
-            p_plot_list.append(p_fbs_plot)
-
-        # Add Linear OPF data (needs to be joined with branch data)
-        if p_linear is not None:
-            branch_data_for_merge = case.branch_data.reset_index()[
-                ["fb", "tb", "from_name", "to_name"]
-            ]
-            p_linear_with_branches = p_linear.merge(
-                branch_data_for_merge,
-                left_on="id",
-                right_on="tb",
-                how="left",
-            )
-            p_plot_list.append(p_linear_with_branches)
-
-        # Add NLP data (needs to be joined with branch data)
-        if p_nlp is not None:
-            branch_data_for_merge = case.branch_data.reset_index()[
-                ["fb", "tb", "from_name", "to_name"]
-            ]
-            p_nlp_with_branches = p_nlp.merge(
-                branch_data_for_merge,
-                left_on="id",
-                right_on="tb",
-                how="left",
-            )
-            p_plot_list.append(p_nlp_with_branches)
-
-        if len(p_plot_list) > 1:
-            # Combine all power flow data
-            p_combined = pd.concat(p_plot_list, ignore_index=True)
-
-            # Melt the dataframe to convert phase columns to rows
-            # Need columns: fb, from_name, tb, to_name, algorithm, phase, value
-            p_tidy = p_combined.melt(
-                id_vars=["fb", "from_name", "tb", "to_name", "algorithm"],
+# Plot voltage comparison
+print("\nGenerating voltage comparison plots...")
+try:
+    # Transform voltage data to tidy format (phase as rows)
+    v_tidy_list = []
+    for v_df in v_list:
+        if v_df is not None:
+            v_melted = v_df.melt(
+                id_vars=["id", "name", "algorithm"],
                 value_vars=["a", "b", "c"],
                 var_name="phase",
                 value_name="value",
             )
+            v_tidy_list.append(v_melted)
 
-            fig_flow = plot_line_flow_vs_distance(
-                case,
-                p_tidy,
-                flow_name="Active Power",
-                title="Power Flow Comparison: DSS vs FBS vs Linear vs Nonlinear OPF",
-                color_by="algorithm",
-            )
-            fig_flow.show(renderer="browser")
-            print("Power flow plot generated successfully!")
-    except Exception as e:
-        print(f"Could not generate power flow plot: {e}")
+    if v_tidy_list:
+        v_tidy = pd.concat(v_tidy_list, ignore_index=True)
+        fig_v = plot_voltage_vs_distance(
+            case,
+            v_tidy,
+            title="Voltage Comparison: FBS vs Linear OPF vs Nonlinear OPF",
+        )
+        fig_v.show(renderer="browser")
+        print("✓ Voltage plot generated")
+except Exception as e:
+    print(f"✗ Could not generate voltage plot: {e}")
+
+# Plot active power flow comparison
+print("\nGenerating active power flow comparison plots...")
+try:
+    # Prepare power flow data for plotting
+    p_plot_list = []
+
+    if p_dss is not None:
+        p_plot_list.append(p_dss)
+    if p_fbs is not None:
+        p_plot_list.append(p_fbs)
+    if p_linear is not None:
+        p_plot_list.append(p_linear)
+    if p_nlp is not None:
+        p_plot_list.append(p_nlp)
+
+    if len(p_plot_list) > 1:
+        p_combined = pd.concat(p_plot_list, ignore_index=True)
+        p_tidy = p_combined.melt(
+            id_vars=["fb", "tb", "from_name", "to_name", "algorithm"],
+            value_vars=["a", "b", "c"],
+            var_name="phase",
+            value_name="value",
+        )
+        fig_p = plot_line_flow_vs_distance(
+            case,
+            p_tidy,
+            title="Active Power Flow Comparison",
+        )
+        fig_p.show(renderer="browser")
+        print("✓ Active power flow plot generated")
+except Exception as e:
+    print(f"✗ Could not generate active power flow plot: {e}")
+
+# Plot reactive power flow comparison
+print("\nGenerating reactive power flow comparison plots...")
+try:
+    q_plot_list = []
+
+    if q_dss is not None:
+        q_plot_list.append(q_dss)
+    if q_fbs is not None:
+        q_plot_list.append(q_fbs)
+    if q_linear is not None:
+        q_plot_list.append(q_linear)
+    if q_nlp is not None:
+        q_plot_list.append(q_nlp)
+
+    if len(q_plot_list) > 1:
+        q_combined = pd.concat(q_plot_list, ignore_index=True)
+        q_tidy = q_combined.melt(
+            id_vars=["fb", "tb", "from_name", "to_name", "algorithm"],
+            value_vars=["a", "b", "c"],
+            var_name="phase",
+            value_name="value",
+        )
+        fig_q = plot_line_flow_vs_distance(
+            case,
+            q_tidy,
+            title="Reactive Power Flow Comparison",
+        )
+        fig_q.show(renderer="browser")
+        print("✓ Reactive power flow plot generated")
+except Exception as e:
+    print(f"✗ Could not generate reactive power flow plot: {e}")
 
 print("\n" + "=" * 60)
 print("Comparison completed!")

@@ -1,4 +1,4 @@
-id,name,pa,pb,pc,qa,qb,qc,s_base,sa_max,sb_max,sc_max,phases,qa_max,qb_max,qc_max,qa_min,qb_min,qc_min
+id,name,p_a,p_b,p_c,q_a,q_b,q_c,s_base,s_a_max,s_b_max,s_c_max,phases,q_a_max,q_b_max,q_c_max,q_a_min,q_b_min,q_c_min
 3,3,0.01,0.01,0.01,0,0,0,1000000.0,0.012,0.012,0.012,abc,100,100,100,-100,-100,-100
 9,9,0.01,0.01,0.01,0,0,0,1000000.0,0.012,0.012,0.012,abc,100,100,100,-100,-100,-100
 15,15,0.01,0.01,0.01,0,0,0,1000000.0,0.012,0.012,0.012,abc,100,100,100,-100,-100,-100

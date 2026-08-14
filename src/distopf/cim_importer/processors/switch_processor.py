@@ -70,8 +70,8 @@ class SwitchProcessor(BaseProcessor):
         # Apply impedance only to active phases
         for phase in phases:
             if phase in ["a", "b", "c"]:
-                data[f"r{phase}{phase}"] = r
-                data[f"x{phase}{phase}"] = x
+                data[f"r_{phase}{phase}"] = r
+                data[f"x_{phase}{phase}"] = x
 
     def _get_switch_status(self, switch) -> str:
         """Get switch status (open/closed)."""

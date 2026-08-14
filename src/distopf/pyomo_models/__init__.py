@@ -77,6 +77,7 @@ from distopf.pyomo_models.objectives import (
     add_generation_cost_with_substation_quadratic_penalty_objective,
     create_penalized_objective,
     set_objective,
+    cost_minimization_rule,
 )
 
 # Solver
@@ -127,6 +128,7 @@ __all__ = [
     "add_generation_cost_with_substation_quadratic_penalty_objective",
     "create_penalized_objective",
     "set_objective",
+    "cost_minimization_rule",
     # Solver
     "solve",
 ]

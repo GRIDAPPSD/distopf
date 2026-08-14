@@ -51,7 +51,15 @@ class TestDualExtractionHighLevel:
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
-        expected_columns = {"id", "name", "t", "phase", "dual"}
+        expected_columns = {
+            "fb",
+            "tb",
+            "from_name",
+            "to_name",
+            "t",
+            "phase",
+            "dual",
+        }
         actual_columns = set(result.dual_power_balance_p.columns)
         assert actual_columns == expected_columns
 
@@ -74,14 +82,18 @@ class TestDualExtractionHighLevel:
         assert not result.dual_voltage_drop.isnull().any().any()
 
     def test_dual_id_name_consistency(self):
-        """Test that id and name columns are consistent"""
+        """Test that from/to id and name columns are consistent"""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         result = case.run_opf(objective="loss", wrapper="pyomo", duals=True)
 
         df = result.dual_power_balance_p
-        for bus_id in df["id"].unique():
-            names = df[df["id"] == bus_id]["name"].unique()
-            assert len(names) == 1, f"Bus {bus_id} has multiple names: {names}"
+        for from_bus in df["fb"].unique():
+            names = df[df["fb"] == from_bus]["from_name"].unique()
+            assert len(names) == 1, f"From bus {from_bus} has multiple names: {names}"
+
+        for to_bus in df["tb"].unique():
+            names = df[df["tb"] == to_bus]["to_name"].unique()
+            assert len(names) == 1, f"To bus {to_bus} has multiple names: {names}"
 
     def test_dual_time_index_consistency(self):
         """Test that time indices are consistent"""
@@ -117,7 +129,15 @@ class TestDualExtractionHighLevel:
         duals_df = result.raw_result.get_dual("power_balance_p")
         assert isinstance(duals_df, pd.DataFrame)
         assert not duals_df.empty
-        assert set(duals_df.columns) == {"id", "name", "t", "phase", "dual"}
+        assert set(duals_df.columns) == {
+            "fb",
+            "tb",
+            "from_name",
+            "to_name",
+            "t",
+            "phase",
+            "dual",
+        }
 
     def test_get_dual_nonexistent_constraint(self):
         """Test get_dual() for nonexistent constraint returns empty DataFrame"""

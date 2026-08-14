@@ -53,7 +53,7 @@ def test_result_save_and_summary(tmp_path):
     outdir = tmp_path / "results"
     res.save(outdir)
     assert (outdir / "voltages.csv").exists()
-    assert (outdir / "metadata.csv").exists()
+    assert (outdir / "run_config.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -116,21 +116,22 @@ class TestPowerFlowResultMethods:
         assert "voltages:" in s
 
     def test_save_creates_files(self, tmp_path):
-        """save() should create CSV files and metadata."""
+        """save() should create CSV files and metrics."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         result = case.run_pf()
         result.save(tmp_path / "results")
 
-        assert (tmp_path / "results" / "metadata.csv").exists()
+        assert (tmp_path / "results" / "run_config.json").exists()
         assert (tmp_path / "results" / "voltages.csv").exists()
         assert (tmp_path / "results" / "active_power_flows.csv").exists()
         assert (tmp_path / "results" / "reactive_power_flows.csv").exists()
+        assert (tmp_path / "results" / "solver_metrics.json").exists()
 
-    def test_save_empty_result_creates_metadata_only(self, tmp_path):
-        """save() on empty result should still create metadata."""
+    def test_save_empty_result_creates_metrics_only(self, tmp_path):
+        """save() on empty result should still create metrics."""
         result = PowerFlowResult()
         result.save(tmp_path / "empty_results")
-        assert (tmp_path / "empty_results" / "metadata.csv").exists()
+        assert (tmp_path / "empty_results" / "solver_metrics.json").exists()
 
     def test_plot_voltages_raises_without_data(self):
         """plot_voltages() should raise if no voltage data."""

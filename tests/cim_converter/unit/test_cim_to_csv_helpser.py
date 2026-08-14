@@ -47,46 +47,46 @@ def test_aggregate_generators_basic():
                 "mrid": "m1",
                 "id": 2,
                 "name": "G1",
-                "pa": 0.1,
-                "pb": 0.0,
-                "pc": 0.0,
-                "qa": 0.01,
-                "qb": 0.0,
-                "qc": 0.0,
+                "p_a": 0.1,
+                "p_b": 0.0,
+                "p_c": 0.0,
+                "q_a": 0.01,
+                "q_b": 0.0,
+                "q_c": 0.0,
                 "s_base": 100.0,
-                "sa_max": 0.1,
-                "sb_max": 0.0,
-                "sc_max": 0.0,
+                "s_a_max": 0.1,
+                "s_b_max": 0.0,
+                "s_c_max": 0.0,
                 "phases": "a",
-                "qa_max": 0.01,
-                "qb_max": 0.0,
-                "qc_max": 0.0,
-                "qa_min": -0.01,
-                "qb_min": 0.0,
-                "qc_min": 0.0,
+                "q_a_max": 0.01,
+                "q_b_max": 0.0,
+                "q_c_max": 0.0,
+                "q_a_min": -0.01,
+                "q_b_min": 0.0,
+                "q_c_min": 0.0,
                 "control_variable": "PQ",
             },
             {
                 "mrid": "m2",
                 "id": 2,
                 "name": "G1",
-                "pa": 0.05,
-                "pb": 0.0,
-                "pc": 0.0,
-                "qa": 0.005,
-                "qb": 0.0,
-                "qc": 0.0,
+                "p_a": 0.05,
+                "p_b": 0.0,
+                "p_c": 0.0,
+                "q_a": 0.005,
+                "q_b": 0.0,
+                "q_c": 0.0,
                 "s_base": 50.0,
-                "sa_max": 0.05,
-                "sb_max": 0.0,
-                "sc_max": 0.0,
+                "s_a_max": 0.05,
+                "s_b_max": 0.0,
+                "s_c_max": 0.0,
                 "phases": "a",
-                "qa_max": 0.005,
-                "qb_max": 0.0,
-                "qc_max": 0.0,
-                "qa_min": -0.005,
-                "qb_min": 0.0,
-                "qc_min": 0.0,
+                "q_a_max": 0.005,
+                "q_b_max": 0.0,
+                "q_c_max": 0.0,
+                "q_a_min": -0.005,
+                "q_b_min": 0.0,
+                "q_c_min": 0.0,
                 "control_variable": "PQ",
             },
         ]
@@ -100,7 +100,7 @@ def test_aggregate_generators_basic():
     # Name should indicate aggregation since >1 units
     assert "AggGen" in row["name"]
     # pa sums
-    assert pytest.approx(row["pa"], rel=1e-12) == 0.15
+    assert pytest.approx(row["p_a"], rel=1e-12) == 0.15
 
 
 def test_correct_generators_without_phases_and_distribution():
@@ -119,18 +119,18 @@ def test_correct_generators_without_phases_and_distribution():
                 "phases": "",
                 "p": 0.06,
                 "q": 0.006,
-                "pa": 0.0,
-                "pb": 0.0,
-                "pc": 0.0,
-                "qa": 0.0,
-                "qb": 0.0,
-                "qc": 0.0,
+                "p_a": 0.0,
+                "p_b": 0.0,
+                "p_c": 0.0,
+                "q_a": 0.0,
+                "q_b": 0.0,
+                "q_c": 0.0,
             }
         ]
     )
     corrected = conv._correct_generators_without_phases(bus_df, gen_df.copy())
     # Since bus 2 has phases 'a' only, pa should equal p (0.06)
-    assert pytest.approx(corrected.loc[0, "pa"], rel=1e-12) == pytest.approx(0.06)
+    assert pytest.approx(corrected.loc[0, "p_a"], rel=1e-12) == pytest.approx(0.06)
     assert corrected.loc[0, "phases"] == "a" or corrected.loc[0, "phases"] == ""
 
 

@@ -4,6 +4,7 @@ import warnings
 import pandas as pd
 from typing import Optional, TYPE_CHECKING
 from collections.abc import Callable
+from distopf.utils.call_recorder import record_call
 
 logger = logging.getLogger("distopf")
 
@@ -12,7 +13,7 @@ logger = logging.getLogger("distopf")
 if TYPE_CHECKING:
     from distopf.matrix_models.base import LinDistBase
 
-from distopf.utils import (
+from distopf.utils.input_handlers import (
     handle_branch_input,
     handle_bus_input,
     handle_gen_input,
@@ -358,7 +359,7 @@ class Case:
     # -------------------------------------------------------------------------
     # Analysis Methods
     # -------------------------------------------------------------------------
-
+    @record_call
     def run_pf(self, raw_result: bool = False):
         """
         Run unconstrained power flow analysis.
@@ -392,6 +393,7 @@ class Case:
         fbs = FBS(self)
         return fbs.solve(max_iterations=100, tolerance=1e-6, verbose=False)
 
+    @record_call
     def run_fbs(
         self, max_iterations: int = 100, tolerance: float = 1e-6, verbose: bool = False
     ):
@@ -449,6 +451,7 @@ class Case:
             if handler:
                 self._disable_verbose(handler)
 
+    @record_call
     def run_opf(
         self,
         objective: Optional[str | Callable] = None,
@@ -558,6 +561,7 @@ class Case:
                 control_capacitors=control_capacitors,
                 raw_result=raw_result,
                 duals=duals,
+                verbose=verbose,
                 **kwargs,
             )
 
@@ -711,6 +715,29 @@ class Case:
             show_reactive_power=show_reactive_power,
         )
 
+    def plot_schedules(self):
+        """Plot time-series schedules as faceted line plots.
+
+        Each schedule column is plotted as a separate facet row with its own
+        independent y-axis scale and colored line.
+
+        Returns
+        -------
+        fig : Plotly figure object
+            Faceted line plot with one row per schedule variable
+
+        Raises
+        ------
+        RuntimeError
+            If no schedules are available in the case
+        """
+        if self.schedules is None or self.schedules.empty:
+            raise RuntimeError("No schedules available in this case.")
+        from distopf.plot import plot_schedules
+
+        return plot_schedules(self.schedules)
+
+
     # -------------------------------------------------------------------------
     # Case Modification Methods
     # -------------------------------------------------------------------------
@@ -831,21 +858,23 @@ class Case:
         q_phase = round(q / n_phases, 9)
         s_rated_phase = round(s_rated / n_phases, 9)
         gen.loc[i, "phases"] = phases
-        gen.loc[i, [f"s{ph}_max" for ph in phases]] = s_rated_phase  # unlimited
-        gen.loc[i, [f"p{ph}" for ph in phases]] = p_phase  # unlimited
-        gen.loc[i, [f"q{ph}" for ph in phases]] = q_phase  # unlimited
+        gen.loc[i, [f"s_{ph}_max" for ph in phases]] = s_rated_phase  # unlimited
+        gen.loc[i, [f"p_{ph}" for ph in phases]] = p_phase  # unlimited
+        gen.loc[i, [f"q_{ph}" for ph in phases]] = q_phase  # unlimited
         if q_max is None:
             q_max = s_rated
         if q_min is None:
             q_min = -s_rated
-        gen.loc[i, ["qa_max", "qb_max", "qc_max"]] = q_max  # unlimited
-        gen.loc[i, ["qa_min", "qb_min", "qc_min"]] = q_min  # unlimited
+        gen.loc[i, ["q_a_max", "q_b_max", "q_c_max"]] = q_max  # unlimited
+        gen.loc[i, ["q_a_min", "q_b_min", "q_c_min"]] = q_min  # unlimited
 
-        gen.loc[:, ["pa", "pb", "pc", "qa", "qb", "qc"]] = (
-            gen.loc[:, ["pa", "pb", "pc", "qa", "qb", "qc"]].astype(float).fillna(0.0)
+        gen.loc[:, ["p_a", "p_b", "p_c", "q_a", "q_b", "q_c"]] = (
+            gen.loc[:, ["p_a", "p_b", "p_c", "q_a", "q_b", "q_c"]]
+            .astype(float)
+            .fillna(0.0)
         )
-        gen.loc[:, [f"s{a}_max" for a in "abc"]] = (
-            gen.loc[:, [f"s{a}_max" for a in "abc"]].astype(float).fillna(0.0)
+        gen.loc[:, [f"s_{a}_max" for a in "abc"]] = (
+            gen.loc[:, [f"s_{a}_max" for a in "abc"]].astype(float).fillna(0.0)
         )
         self.gen_data = gen
 
@@ -864,9 +893,9 @@ class Case:
         if _id in cap.loc[:, "id"].to_numpy():
             i = self.cap_data.loc[self.cap_data.id == _id, "id"].index[0]
         print(cap.name.dtype)
-        cap.at[i, "name"] = name
+        cap.at[i, "name"] = str(name)
         cap.at[i, "id"] = _id
-        bus_phases = self.bus_data.loc[self.bus_data.name == "13", "phases"].to_numpy()[
+        bus_phases = self.bus_data.loc[self.bus_data.name == name, "phases"].to_numpy()[
             0
         ]
         if phases is None:
@@ -874,9 +903,9 @@ class Case:
         n_phases = len(phases)
         q_phase = round(q / n_phases, 9)
         cap.loc[i, "phases"] = phases
-        cap.loc[i, [f"q{ph}" for ph in phases]] = q_phase  # unlimited
-        cap.loc[i, [f"q{ph}" for ph in phases]] = (
-            cap.loc[i, [f"q{ph}" for ph in phases]].astype(float).fillna(0.0)
+        cap.loc[i, [f"q_{ph}" for ph in phases]] = q_phase  # unlimited
+        cap.loc[i, [f"q_{ph}" for ph in phases]] = (
+            cap.loc[i, [f"q_{ph}" for ph in phases]].astype(float).fillna(0.0)
         )
         self.cap_data = cap
 
@@ -929,6 +958,24 @@ class Case:
             "generator_controls": gen_controls,
             "schedule_columns": sched_cols,
             "schedule_summary": sched_summary,
+        }
+
+    def _construction_kwargs(self) -> dict:
+        """Kwargs needed by ``create_case`` to reconstruct this Case from CSVs.
+
+        These are the time-series and ``ignore_*`` flags that aren't captured in
+        the saved CSV input files themselves but are required for an identical
+        reconstruction via ``create_case``.
+        """
+        return {
+            "start_step": self.start_step,
+            "n_steps": self.n_steps,
+            "delta_t": self.delta_t,
+            "ignore_schedule": self.ignore_schedule,
+            "ignore_gen": self.ignore_gen,
+            "ignore_bat": self.ignore_bat,
+            "ignore_cap": self.ignore_cap,
+            "ignore_reg": self.ignore_reg,
         }
 
     def describe(self) -> str:
@@ -1011,6 +1058,62 @@ class Case:
 
         with open(output_dir / "case_metadata.json", "w") as f:
             json.dump(self._metadata(), f, indent=2)
+
+
+def replay(run_config_path: Path | str):
+    """Reproduce a previous analysis run from a unified ``run_config.json``.
+
+    The config contains the case source path (resolved relative to the config
+    file's location), the construction kwargs for ``create_case``, and the
+    original method call with its arguments.
+
+    Parameters
+    ----------
+    run_config_path : Path or str
+        Path to a ``run_config.json`` file written by ``PowerFlowResult.save()``.
+
+    Returns
+    -------
+    PowerFlowResult
+        The result of re-executing the recorded call.
+
+    Raises
+    ------
+    ValueError
+        If the run was marked non-replayable (e.g. a custom Callable objective).
+    """
+    import json
+    run_config_path = Path(run_config_path)
+    with open(run_config_path) as f:
+        config = json.load(f)
+
+    schema_version = config.get("schema_version")
+    if schema_version != 1:
+        raise ValueError(
+            f"Unsupported run_config schema_version: {schema_version} "
+            f"(this distopf supports version 1)"
+        )
+
+    call = config["call"]
+    if not call.get("replayable", True):
+        bad = [
+            k for k, v in call["arguments"].items()
+            if isinstance(v, dict) and v.get("__nonserializable__")
+        ]
+        raise ValueError(f"Run is not replayable (non-serializable args: {bad})")
+
+    case_info = config["case"]
+    case_path = Path(case_info["path"])
+    if not case_path.is_absolute():
+        case_path = (run_config_path.parent / case_path).resolve()
+
+    case = create_case(
+        case_path,
+        model_type=case_info.get("source"),
+        **case_info.get("kwargs", {}),
+    )
+
+    return getattr(case, call["method"])(**call["arguments"])
 
 
 def create_case(
@@ -1451,15 +1554,35 @@ def modify_case(
         case.bus_data.loc[:, ["pl_a", "ql_a", "pl_b", "ql_b", "pl_c", "ql_c"]] *= (
             load_mult
         )
+        if "pl_s1" in case.bus_data.columns:
+            case.bus_data.loc[:, ["pl_s1"]] *= load_mult
+        if "pl_s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["pl_s2"]] *= load_mult
+        if "pl_s1s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["pl_s1s2"]] *= load_mult
+        if "ql_s1" in case.bus_data.columns:
+            case.bus_data.loc[:, ["ql_s1"]] *= load_mult
+        if "ql_s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["ql_s2"]] *= load_mult
+        if "ql_s1s2" in case.bus_data.columns:
+            case.bus_data.loc[:, ["ql_s1s2"]] *= load_mult
     # Modify generation multiplier
     if gen_mult is not None and case.gen_data is not None:
-        case.gen_data.loc[:, ["pa", "pb", "pc"]] *= gen_mult
-        case.gen_data.loc[:, ["qa", "qb", "qc"]] *= gen_mult
-        case.gen_data.loc[:, ["sa_max", "sb_max", "sc_max"]] *= gen_mult
+        case.gen_data.loc[:, ["p_a", "p_b", "p_c"]] *= gen_mult
+        case.gen_data.loc[:, ["q_a", "q_b", "q_c"]] *= gen_mult
+        case.gen_data.loc[:, ["s_a_max", "s_b_max", "s_c_max"]] *= gen_mult
+        if "p_s1" in case.gen_data.columns:
+            case.gen_data.loc[:, ["p_s1"]] *= gen_mult
+        if "p_s2" in case.gen_data.columns:
+            case.gen_data.loc[:, ["p_s2"]] *= gen_mult
+        if "s_s1_max" in case.gen_data.columns:
+            case.gen_data.loc[:, ["s_s1_max"]] *= gen_mult
+        if "s_s2_max" in case.gen_data.columns:
+            case.gen_data.loc[:, ["s_s2_max"]] *= gen_mult
     # Modify control_variable
     if control_variable is not None and case.gen_data is not None:
         if control_variable == "":
-            case.gen_data.control_variable = "P"
+            case.gen_data.control_variable = ""
         if control_variable.upper() == "P":
             case.gen_data.control_variable = "P"
         if control_variable.upper() == "Q":

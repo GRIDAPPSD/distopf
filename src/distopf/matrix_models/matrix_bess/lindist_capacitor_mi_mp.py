@@ -5,7 +5,7 @@ from numpy import zeros
 from scipy.sparse import csr_array, lil_array, vstack
 
 from distopf.matrix_models.matrix_bess.base_mp import LinDistBaseMP
-from distopf.utils import get
+from distopf.utils.input_handlers import get
 
 
 class LinDistModelCapMI_MP(LinDistBaseMP):
@@ -241,7 +241,7 @@ class LinDistModelCapMI_MP(LinDistBaseMP):
 
         q_cap_nom = 0
         if self.cap is not None:
-            q_cap_nom = get(self.cap[f"q{a}"], j, 0)
+            q_cap_nom = get(self.cap[f"q_{a}"], j, 0)
 
         # Get variable indices
         qij = self.idx("qij", j, a, t=t)

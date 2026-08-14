@@ -1,0 +1,90 @@
+! triplex_pv.dss — center-tap services with PV on the secondary side
+Clear
+
+New Circuit.triplex_pv basekv=12.47 pu=1.0 phases=3 bus1=sourcebus
+~ MVAsc3=20000 MVAsc1=21000
+
+! --- Primary: three-phase trunk and single-phase laterals ---
+New Linecode.pri_3ph nphases=3 basefreq=60
+~ rmatrix=[0.3  | 0.05  0.3  | 0.05  0.05  0.3]
+~ xmatrix=[0.6  | 0.1   0.6  | 0.1   0.1   0.6]
+~ units=mi
+New Line.trunk bus1=sourcebus.1.2.3 bus2=pribus.1.2.3 linecode=pri_3ph length=0.1 units=mi
+
+! Single-phase lateral to phase-B bus
+New Linecode.pri_1ph nphases=1 basefreq=60 r1=0.3 x1=0.6 units=mi
+New Line.lat_b bus1=pribus.2 bus2=pribus_b.2 linecode=pri_1ph length=0.05 units=mi
+
+! Single-phase lateral to phase-C bus
+New Line.lat_c bus1=pribus.3 bus2=pribus_c.3 linecode=pri_1ph length=0.05 units=mi
+
+! ===================== Transformer 1 — phase A =====================
+New Transformer.xfm1 phases=1 windings=3 xhl=2.04 xht=2.04 xlt=1.36
+~ wdg=1 bus=pribus.1.0      conn=wye kv=7.2  kva=25 %r=0.6
+~ wdg=2 bus=secbus.1.0      conn=wye kv=0.12 kva=25 %r=1.2
+~ wdg=3 bus=secbus.0.2      conn=wye kv=0.12 kva=25 %r=1.2
+
+! --- Triplex service drop (house 1) ---
+New Linecode.tpx nphases=2 basefreq=60
+~ rmatrix=[0.77  | 0.15  0.77]
+~ xmatrix=[0.38  | 0.22  0.38]
+~ units=kft
+New Line.drop1 bus1=secbus.1.2 bus2=loadbus.1.2 linecode=tpx length=0.05 units=kft
+
+! --- Triplex service drop (house 2) ---
+New Line.drop2 bus1=secbus.1.2 bus2=house2.1.2 linecode=tpx length=0.08 units=kft
+
+! --- House 1 loads (120 V leg-to-neutral) ---
+New Load.L1 bus1=loadbus.1.0 phases=1 kv=0.12 kw=2.0 kvar=0.5 model=1
+New Load.L2 bus1=loadbus.2.0 phases=1 kv=0.12 kw=1.5 kvar=0.3 model=1
+! 240 V phase-to-phase load (e.g. dryer)
+New Load.L12 bus1=loadbus.1.2 phases=1 kv=0.24 kw=4.5 kvar=0.8 model=1
+
+! --- House 2 loads (120 V leg-to-neutral on both legs) ---
+New Load.H2_L1 bus1=house2.1.0 phases=1 kv=0.12 kw=1.8 kvar=0.4 model=1
+New Load.H2_L2 bus1=house2.2.0 phases=1 kv=0.12 kw=1.2 kvar=0.2 model=1
+
+! --- House 1 PV: 240 V across s1-s2 (phase-to-phase on the secondary) ---
+New PVSystem.pv1 bus1=loadbus.1.2 phases=1 kv=0.24 kVA=5.0 Pmpp=4.0 pf=1.0
+
+! --- House 2 PV: 120 V on s1 only (single-leg) ---
+New PVSystem.pv2 bus1=house2.1.0 phases=1 kv=0.12 kVA=3.0 Pmpp=2.5 pf=1.0
+
+! ===================== Transformer 2 — phase B =====================
+New Transformer.xfm2 phases=1 windings=3 xhl=2.04 xht=2.04 xlt=1.36
+~ wdg=1 bus=pribus_b.2.0    conn=wye kv=7.2  kva=25 %r=0.6
+~ wdg=2 bus=secbus2.1.0     conn=wye kv=0.12 kva=25 %r=1.2
+~ wdg=3 bus=secbus2.0.2     conn=wye kv=0.12 kva=25 %r=1.2
+
+! --- Triplex service drop (house 3) ---
+New Line.drop3 bus1=secbus2.1.2 bus2=house3.1.2 linecode=tpx length=0.06 units=kft
+
+! --- House 3 loads (120 V leg-to-neutral on both legs) ---
+New Load.H3_L1 bus1=house3.1.0 phases=1 kv=0.12 kw=2.2 kvar=0.6 model=1
+New Load.H3_L2 bus1=house3.2.0 phases=1 kv=0.12 kw=1.0 kvar=0.15 model=1
+! 240 V phase-to-phase load (e.g. water heater)
+New Load.H3_L12 bus1=house3.1.2 phases=1 kv=0.24 kw=3.0 kvar=0.4 model=1
+
+! --- House 3 PV: 120 V on s2 only (the other leg) ---
+New PVSystem.pv3 bus1=house3.2.0 phases=1 kv=0.12 kVA=4.0 Pmpp=3.5 pf=1.0
+
+! ===================== Transformer 3 — phase C =====================
+New Transformer.xfm3 phases=1 windings=3 xhl=2.04 xht=2.04 xlt=1.36
+~ wdg=1 bus=pribus_c.3.0    conn=wye kv=7.2  kva=25 %r=0.6
+~ wdg=2 bus=secbus3.1.0     conn=wye kv=0.12 kva=25 %r=1.2
+~ wdg=3 bus=secbus3.0.2     conn=wye kv=0.12 kva=25 %r=1.2
+
+! --- Triplex service drop (house 4) ---
+New Line.drop4 bus1=secbus3.1.2 bus2=house4.1.2 linecode=tpx length=0.07 units=kft
+
+! --- House 4 loads (120 V leg-to-neutral on both legs + 240 V) ---
+New Load.H4_L1 bus1=house4.1.0 phases=1 kv=0.12 kw=1.6 kvar=0.3 model=1
+New Load.H4_L2 bus1=house4.2.0 phases=1 kv=0.12 kw=2.0 kvar=0.5 model=1
+New Load.H4_L12 bus1=house4.1.2 phases=1 kv=0.24 kw=2.5 kvar=0.35 model=1
+
+! --- House 4 PV: 240 V across s1-s2 ---
+New PVSystem.pv4 bus1=house4.1.2 phases=1 kv=0.24 kVA=6.0 Pmpp=5.0 pf=1.0
+
+Set voltagebases=[12.47, 0.24]
+Calcvoltagebases
+Solve

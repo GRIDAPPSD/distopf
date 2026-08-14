@@ -102,12 +102,12 @@ class TransformerProcessor(BaseProcessor):
         z_base = v_ln_base**2 / self.s_base
         data.update(
             {
-                "raa": r,
-                "rbb": r,
-                "rcc": r,
-                "xaa": x,
-                "xbb": x,
-                "xcc": x,
+                "r_aa": r,
+                "r_bb": r,
+                "r_cc": r,
+                "x_aa": x,
+                "x_bb": x,
+                "x_cc": x,
                 "phases": "abc",
                 "v_ln_base": v_ln_base,
                 "z_base": z_base,
@@ -226,12 +226,12 @@ class TransformerProcessor(BaseProcessor):
 
         data.update(
             {
-                "raa": r_pu,
-                "rbb": r_pu,
-                "rcc": r_pu,
-                "xaa": x_pu,
-                "xbb": x_pu,
-                "xcc": x_pu,
+                "r_aa": r_pu,
+                "r_bb": r_pu,
+                "r_cc": r_pu,
+                "x_aa": x_pu,
+                "x_bb": x_pu,
+                "x_cc": x_pu,
                 "phases": phases,
                 "v_ln_base": v_ln_base,
                 "z_base": z_base,
@@ -396,12 +396,12 @@ class TransformerProcessor(BaseProcessor):
 
         data.update(
             {
-                "raa": r_pu,
-                "rbb": r_pu,
-                "rcc": r_pu,
-                "xaa": x_pu,
-                "xbb": x_pu,
-                "xcc": x_pu,
+                "r_aa": r_pu,
+                "r_bb": r_pu,
+                "r_cc": r_pu,
+                "x_aa": x_pu,
+                "x_bb": x_pu,
+                "x_cc": x_pu,
                 "phases": "abc",
                 "v_ln_base": v_ln_base,
                 "z_base": z_base,

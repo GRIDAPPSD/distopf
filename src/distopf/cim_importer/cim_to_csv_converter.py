@@ -225,25 +225,25 @@ class CIMToCSVConverter:
             "name": lambda x: f"AggGen_{x.iloc[0]}_{len(x)}units"
             if len(x) > 1
             else x.iloc[0],
-            "pa": "sum",
-            "pb": "sum",
-            "pc": "sum",
-            "qa": "sum",
-            "qb": "sum",
-            "qc": "sum",
+            "p_a": "sum",
+            "p_b": "sum",
+            "p_c": "sum",
+            "q_a": "sum",
+            "q_b": "sum",
+            "q_c": "sum",
             "s_base": "sum",  # Sum the individual capacities
-            "sa_max": "sum",
-            "sb_max": "sum",
-            "sc_max": "sum",
+            "s_a_max": "sum",
+            "s_b_max": "sum",
+            "s_c_max": "sum",
             "phases": lambda x: "".join(
                 sorted(set("".join(x)))
             ),  # Combine unique phases
-            "qa_max": "sum",
-            "qb_max": "sum",
-            "qc_max": "sum",
-            "qa_min": "sum",
-            "qb_min": "sum",
-            "qc_min": "sum",  # Note: sums minimums (typically negative)
+            "q_a_max": "sum",
+            "q_b_max": "sum",
+            "q_c_max": "sum",
+            "q_a_min": "sum",
+            "q_b_min": "sum",
+            "q_c_min": "sum",  # Note: sums minimums (typically negative)
             "control_variable": "first",  # Use first control variable
         }
         # Only aggregate columns that exist in the dataframe
@@ -263,33 +263,33 @@ class CIMToCSVConverter:
             "mrid",
             "id",
             "name",
-            "pa",
-            "pb",
-            "pc",
-            "qa",
-            "qb",
-            "qc",
+            "p_a",
+            "p_b",
+            "p_c",
+            "q_a",
+            "q_b",
+            "q_c",
             "s_base",
-            "sa_max",
-            "sb_max",
-            "sc_max",
+            "s_a_max",
+            "s_b_max",
+            "s_c_max",
             "phases",
-            "qa_max",
-            "qb_max",
-            "qc_max",
-            "qa_min",
-            "qb_min",
-            "qc_min",
-            "ps1",
-            "ps2",
-            "qs1",
-            "qs2",
-            "ss1_max",
-            "ss2_max",
-            "qs1_max",
-            "qs2_max",
-            "qs1_min",
-            "qs2_min",
+            "q_a_max",
+            "q_b_max",
+            "q_c_max",
+            "q_a_min",
+            "q_b_min",
+            "q_c_min",
+            "p_s1",
+            "p_s2",
+            "q_s1",
+            "q_s2",
+            "s_s1_max",
+            "s_s2_max",
+            "q_s1_max",
+            "q_s2_max",
+            "q_s1_min",
+            "q_s2_min",
             "control_variable",
         ]
 
@@ -312,12 +312,12 @@ class CIMToCSVConverter:
         mask_a = mask & gen_df.phases.str.contains("a")
         mask_b = mask & gen_df.phases.str.contains("b")
         mask_c = mask & gen_df.phases.str.contains("c")
-        gen_df.loc[mask_a, "pa"] = gen_df.loc[mask_a, "p"] / num_phases
-        gen_df.loc[mask_b, "pb"] = gen_df.loc[mask_b, "p"] / num_phases
-        gen_df.loc[mask_c, "pc"] = gen_df.loc[mask_c, "p"] / num_phases
-        gen_df.loc[mask_a, "qa"] = gen_df.loc[mask_a, "q"] / num_phases
-        gen_df.loc[mask_b, "qb"] = gen_df.loc[mask_b, "q"] / num_phases
-        gen_df.loc[mask_c, "qc"] = gen_df.loc[mask_c, "q"] / num_phases
+        gen_df.loc[mask_a, "p_a"] = gen_df.loc[mask_a, "p"] / num_phases
+        gen_df.loc[mask_b, "p_b"] = gen_df.loc[mask_b, "p"] / num_phases
+        gen_df.loc[mask_c, "p_c"] = gen_df.loc[mask_c, "p"] / num_phases
+        gen_df.loc[mask_a, "q_a"] = gen_df.loc[mask_a, "q"] / num_phases
+        gen_df.loc[mask_b, "q_b"] = gen_df.loc[mask_b, "q"] / num_phases
+        gen_df.loc[mask_c, "q_c"] = gen_df.loc[mask_c, "q"] / num_phases
         return gen_df
 
     def _distribute_phase_parameters(self, gen_df: pd.DataFrame):
@@ -327,25 +327,25 @@ class CIMToCSVConverter:
         mask_a = gen_df.phases.str.contains("a")
         mask_b = gen_df.phases.str.contains("b")
         mask_c = gen_df.phases.str.contains("c")
-        gen_df.loc[mask_a, "sa_max"] = gen_df.loc[mask_a, "s_max"] / num_phases
-        gen_df.loc[mask_b, "sb_max"] = gen_df.loc[mask_b, "s_max"] / num_phases
-        gen_df.loc[mask_c, "sc_max"] = gen_df.loc[mask_c, "s_max"] / num_phases
-        gen_df.loc[mask_a, "qa_max"] = gen_df.loc[mask_a, "q_max"] / num_phases
-        gen_df.loc[mask_b, "qb_max"] = gen_df.loc[mask_b, "q_max"] / num_phases
-        gen_df.loc[mask_c, "qc_max"] = gen_df.loc[mask_c, "q_max"] / num_phases
-        gen_df.loc[mask_a, "qa_min"] = gen_df.loc[mask_a, "q_min"] / num_phases
-        gen_df.loc[mask_b, "qb_min"] = gen_df.loc[mask_b, "q_min"] / num_phases
-        gen_df.loc[mask_c, "qc_min"] = gen_df.loc[mask_c, "q_min"] / num_phases
+        gen_df.loc[mask_a, "s_a_max"] = gen_df.loc[mask_a, "s_max"] / num_phases
+        gen_df.loc[mask_b, "s_b_max"] = gen_df.loc[mask_b, "s_max"] / num_phases
+        gen_df.loc[mask_c, "s_c_max"] = gen_df.loc[mask_c, "s_max"] / num_phases
+        gen_df.loc[mask_a, "q_a_max"] = gen_df.loc[mask_a, "q_max"] / num_phases
+        gen_df.loc[mask_b, "q_b_max"] = gen_df.loc[mask_b, "q_max"] / num_phases
+        gen_df.loc[mask_c, "q_c_max"] = gen_df.loc[mask_c, "q_max"] / num_phases
+        gen_df.loc[mask_a, "q_a_min"] = gen_df.loc[mask_a, "q_min"] / num_phases
+        gen_df.loc[mask_b, "q_b_min"] = gen_df.loc[mask_b, "q_min"] / num_phases
+        gen_df.loc[mask_c, "q_c_min"] = gen_df.loc[mask_c, "q_min"] / num_phases
         return gen_df
 
     def _convert_secondary_gens(self, bus_df: pd.DataFrame, gen_df: pd.DataFrame):
         if len(gen_df) == 0:
             return gen_df
         if not (
-            "ps1" in gen_df.keys()
-            and "ps2" in gen_df.keys()
-            and "qs1" in gen_df.keys()
-            and "qs2" in gen_df.keys()
+            "p_s1" in gen_df.keys()
+            and "p_s2" in gen_df.keys()
+            and "q_s1" in gen_df.keys()
+            and "q_s2" in gen_df.keys()
         ):
             return gen_df
         mask = (
@@ -362,12 +362,12 @@ class CIMToCSVConverter:
         mask_a = mask & gen_df.phases.str.contains("a")
         mask_b = mask & gen_df.phases.str.contains("b")
         mask_c = mask & gen_df.phases.str.contains("c")
-        gen_df.loc[mask_a, "pa"] = gen_df.loc[mask_a, ["ps1", "ps2"]].sum(axis=1)
-        gen_df.loc[mask_b, "pb"] = gen_df.loc[mask_b, ["ps1", "ps2"]].sum(axis=1)
-        gen_df.loc[mask_c, "pc"] = gen_df.loc[mask_c, ["ps1", "ps2"]].sum(axis=1)
-        gen_df.loc[mask_a, "qa"] = gen_df.loc[mask_a, ["qs1", "qs2"]].sum(axis=1)
-        gen_df.loc[mask_b, "qb"] = gen_df.loc[mask_b, ["qs1", "qs2"]].sum(axis=1)
-        gen_df.loc[mask_c, "qc"] = gen_df.loc[mask_c, ["qs1", "qs2"]].sum(axis=1)
+        gen_df.loc[mask_a, "p_a"] = gen_df.loc[mask_a, ["p_s1", "p_s2"]].sum(axis=1)
+        gen_df.loc[mask_b, "p_b"] = gen_df.loc[mask_b, ["p_s1", "p_s2"]].sum(axis=1)
+        gen_df.loc[mask_c, "p_c"] = gen_df.loc[mask_c, ["p_s1", "p_s2"]].sum(axis=1)
+        gen_df.loc[mask_a, "q_a"] = gen_df.loc[mask_a, ["q_s1", "q_s2"]].sum(axis=1)
+        gen_df.loc[mask_b, "q_b"] = gen_df.loc[mask_b, ["q_s1", "q_s2"]].sum(axis=1)
+        gen_df.loc[mask_c, "q_c"] = gen_df.loc[mask_c, ["q_s1", "q_s2"]].sum(axis=1)
         return gen_df
 
     def _convert_secondary_loads(self, bus_df: pd.DataFrame):
@@ -437,18 +437,18 @@ class CIMToCSVConverter:
             "tb",
             "from_name",
             "to_name",
-            "raa",
-            "rab",
-            "rac",
-            "rbb",
-            "rbc",
-            "rcc",
-            "xaa",
-            "xab",
-            "xac",
-            "xbb",
-            "xbc",
-            "xcc",
+            "r_aa",
+            "r_ab",
+            "r_ac",
+            "r_bb",
+            "r_bc",
+            "r_cc",
+            "x_aa",
+            "x_ab",
+            "x_ac",
+            "x_bb",
+            "x_bc",
+            "x_cc",
             "type",
             "status",
             "s_base",

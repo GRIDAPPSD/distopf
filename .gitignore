@@ -4,7 +4,7 @@ build/*
 **/.mypy_cache/
 .idea/*
 *.zip
-*.ipynb
+# *.ipynb
 .coverage
 .python-version
 */__marimo__/*
@@ -14,3 +14,4 @@ examples/layouts/*
 /.vscode/
 *.code-workspace
 scratch/*
+*/.ipynb_checkpoints/*
