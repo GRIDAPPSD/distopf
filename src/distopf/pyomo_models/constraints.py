@@ -14,7 +14,6 @@ sqrt2 = sqrt(2)
 sqrt3 = sqrt(3)
 
 
-
 def add_p_flow_constraints(m: LindistModelProtocol) -> None:
     """
     Add LinDistFlow power balance constraints.

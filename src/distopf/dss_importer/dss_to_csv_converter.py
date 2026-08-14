@@ -1,4 +1,3 @@
-
 from typing import Optional
 from functools import cache
 from pathlib import Path
@@ -131,8 +130,7 @@ class DSSToCSVConverter:
             switch_status = (
                 "OPEN"
                 if (
-                    self.dss.CktElement.IsOpen(1, 1)
-                    or self.dss.CktElement.IsOpen(2, 1)
+                    self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(2, 1)
                 )
                 else "CLOSED"
             )
@@ -178,8 +176,7 @@ class DSSToCSVConverter:
             switch_status = (
                 "OPEN"
                 if (
-                    self.dss.CktElement.IsOpen(1, 1)
-                    or self.dss.CktElement.IsOpen(2, 1)
+                    self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(2, 1)
                 )
                 else "CLOSED"
             )
@@ -712,7 +709,7 @@ class DSSToCSVConverter:
                 )
             pq_in = pq[:n_phases, :]
             pq_out = -pq[n_cond : n_cond + n_phases, :]
-            
+
             if element_type == "Transformer" and element_name in self.center_taps:
                 # pq_in = pq[0, :]
                 # for center tap transformers we will always use the secondary side
@@ -1006,8 +1003,7 @@ class DSSToCSVConverter:
             switch_status = (
                 "OPEN"
                 if (
-                    self.dss.CktElement.IsOpen(1, 1)
-                    or self.dss.CktElement.IsOpen(2, 1)
+                    self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(2, 1)
                 )
                 else "CLOSED"
             )
@@ -1040,8 +1036,7 @@ class DSSToCSVConverter:
             switch_status = (
                 "OPEN"
                 if (
-                    self.dss.CktElement.IsOpen(1, 1)
-                    or self.dss.CktElement.IsOpen(2, 1)
+                    self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(2, 1)
                 )
                 else "CLOSED"
             )

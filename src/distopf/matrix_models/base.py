@@ -777,9 +777,9 @@ class LinDistBase(BaseModel):
                 j = tb - 1
                 if not self.phase_exists(a, j):
                     continue
-                s_rated = self.branch.loc[self.branch.tb == tb, f"s_{a}_max"].to_numpy()[
-                    0
-                ]
+                s_rated = self.branch.loc[
+                    self.branch.tb == tb, f"s_{a}_max"
+                ].to_numpy()[0]
                 if np.isnan(s_rated):
                     continue
                 pij = self.idx("pij", j, a)

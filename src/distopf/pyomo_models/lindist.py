@@ -590,6 +590,7 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_branch_thermal_parameters(m, case)
     _create_price_parameters(m, case)
 
+
 def create_lindist_model(
     case: Case,
     control_capacitors: bool = False,

@@ -99,7 +99,7 @@ def add_q_flow_nlp_constraints(m: LindistModelProtocol) -> None:
             for fb2, tb2 in m.to_bus_map[tb]
             if (fb2, tb2, ph) in m.branch_phase_set
         )
-        
+
         # Center-tap transformer: primary phase feeds secondary s1+s2 flows
         if ph not in ("s1", "s2"):
             for fb2, tb2 in m.to_bus_map[tb]:
@@ -133,7 +133,8 @@ def add_q_flow_nlp_constraints(m: LindistModelProtocol) -> None:
             [
                 m.l_flow[fb, tb, "".join(sorted([ph, ph2])), t]
                 * (
-                    m.x[fb, tb, "".join(sorted([ph, ph2]))] * pyo.cos(m.d[fb, tb, ph2 + ph])
+                    m.x[fb, tb, "".join(sorted([ph, ph2]))]
+                    * pyo.cos(m.d[fb, tb, ph2 + ph])
                     + m.r[fb, tb, "".join(sorted([ph, ph2]))]
                     * pyo.sin(m.d[fb, tb, ph2 + ph])
                 )
@@ -251,8 +252,10 @@ def add_voltage_drop_nlp_constraints(m: LindistModelProtocol) -> None:
                     * m.r[fb, tb, "".join(sorted(a + q2))]
                 )
                 # for q1, q2 in product("abc", repeat=2)
-                for q1, q2 in combinations("abc", 2)  
-                if q1 != q2 and q1 in m.phase_map[tb] and q2 in m.phase_map[tb]
+                for q1, q2 in combinations("abc", 2)
+                if q1 != q2
+                and q1 in m.phase_map[tb]
+                and q2 in m.phase_map[tb]
                 and (fb, tb, "".join(sorted(q1 + q2))) in m.branch_phase_pair_set
             ]
         )
@@ -333,7 +336,9 @@ def add_regulator_nlp_constraints(m: LindistModelProtocol) -> None:
                 )
                 # for q1, q2 in product("abc", repeat=2)
                 for q1, q2 in combinations("abc", 2)
-                if q1 != q2 and q1 in m.phase_map[tb] and q2 in m.phase_map[tb]
+                if q1 != q2
+                and q1 in m.phase_map[tb]
+                and q2 in m.phase_map[tb]
                 and (fb, tb, "".join(sorted(q1 + q2))) in m.branch_phase_pair_set
             ]
         )
@@ -1082,13 +1087,16 @@ def add_regulator_mi_nlp_constraints(m: LindistModelProtocol) -> None:
             - voltage_drop_term2
             - voltage_drop_term3
         )
+
     m.reg_tap_upper = pyo.Constraint(
         m.reg_phase_set, m.tap_set, m.time_set, rule=reg_tap_upper
     )
     m.reg_tap_lower = pyo.Constraint(
         m.reg_phase_set, m.tap_set, m.time_set, rule=reg_tap_lower
     )
-    m.reg_v_drop_mi = pyo.Constraint(m.reg_phase_set, m.time_set, rule=regulator_v_drop_rule)
+    m.reg_v_drop_mi = pyo.Constraint(
+        m.reg_phase_set, m.time_set, rule=regulator_v_drop_rule
+    )
 
 
 def add_regulator_tap_change_limit_constraints(
@@ -1145,7 +1153,9 @@ def add_current_constraint1(m: LindistModelProtocol) -> None:
             m.p_flow[fb, tb, ph, t] ** 2 + m.q_flow[fb, tb, ph, t] ** 2
             == m.v2[fb, fb_ph, t] * m.l_flow[fb, tb, ph + ph, t]
         )
+
     m.current_constraint = pyo.Constraint(m.branch_phase_set, m.time_set, rule=_rule1)
+
 
 def add_current_constraint1_downstream_power(m: LindistModelProtocol) -> None:
     def _rule1(m: LindistModelProtocol, fb, tb, phases, t):
@@ -1154,6 +1164,7 @@ def add_current_constraint1_downstream_power(m: LindistModelProtocol) -> None:
             m.p_flow[fb, tb, ph, t] ** 2 + m.q_flow[fb, tb, ph, t] ** 2
             == m.v2[tb, ph, t] * m.l_flow[fb, tb, ph + ph, t]
         )
+
     m.current_constraint = pyo.Constraint(m.branch_phase_set, m.time_set, rule=_rule1)
 
 
@@ -1172,6 +1183,7 @@ def add_current_constraint2_relaxed(m: LindistModelProtocol) -> None:
         m.branch_phase_pair_set, m.time_set, rule=_rule2
     )
 
+
 def add_current_constraint2(m: LindistModelProtocol) -> None:
     def _rule2(m: LindistModelProtocol, fb, tb, phases, t):
         ph1 = _parse_phases(phases)[0]
@@ -1186,6 +1198,7 @@ def add_current_constraint2(m: LindistModelProtocol) -> None:
     m.current_sqr_constraint = pyo.Constraint(
         m.branch_phase_pair_set, m.time_set, rule=_rule2
     )
+
 
 def add_nlp_constraints(
     m: LindistModelProtocol,
@@ -1249,7 +1262,9 @@ def add_nlp_constraints(
         add_regulator_tap_sos1_constraints(m)
         add_regulator_mi_nlp_constraints(m)
         if reg_tap_change_limit is not None:
-            add_regulator_tap_change_limit_constraints(m, max_tap_change=reg_tap_change_limit)
+            add_regulator_tap_change_limit_constraints(
+                m, max_tap_change=reg_tap_change_limit
+            )
     else:
         add_regulator_nlp_constraints(m)
 
