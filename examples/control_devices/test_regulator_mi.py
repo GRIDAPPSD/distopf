@@ -6,7 +6,6 @@ to identify any issues.
 """
 
 import distopf as opf
-import numpy as np
 from distopf.matrix_models.lindist_regulator_mi import LinDistModelRegulatorMI
 
 # Load a case with regulators
@@ -32,10 +31,10 @@ try:
         cap_data=case.cap_data,
         reg_data=case.reg_data,
     )
-    print(f"Model created successfully")
+    print("Model created successfully")
     print(f"  n_x (number of variables): {model.n_x}")
     print(f"  reg_buses: {model.reg_buses}")
-    print(f"  Number of regulators per phase:")
+    print("  Number of regulators per phase:")
     print(f"    a: {len(model.reg_buses.get('a', []))}")
     print(f"    b: {len(model.reg_buses.get('b', []))}")
     print(f"    c: {len(model.reg_buses.get('c', []))}")
@@ -70,7 +69,7 @@ try:
     print("\nTrying solve with SCIP...")
     result = model.solve(loss_objective, solver="SCIP")
 
-    print(f"\nSolve result:")
+    print("\nSolve result:")
     print(f"  Success: {result.success}")
     print(f"  Status: {result.message}")
     print(f"  Objective: {result.fun}")

@@ -8,7 +8,6 @@ algorithm is independent of the underlying solver backend.
 from time import perf_counter
 from typing import Callable
 import pandas as pd
-import numpy as np
 import logging
 
 from distopf import Case

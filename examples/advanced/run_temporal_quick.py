@@ -36,6 +36,6 @@ print(f"✓ Converged: {result.converged}")
 print(f"✓ Total Cost: ${result.objective_value:.2f}")
 print(f"✓ Iterations: {result.iterations}")
 print(f"✓ Time: {result.solve_time:.3f}s")
-print(f"\nIteration History:")
+print("\nIteration History:")
 summaries = result.raw_result["iteration_summaries"]
 print(summaries[["iteration", "t", "objective"]].to_string())

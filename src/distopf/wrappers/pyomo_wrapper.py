@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional, Union
 from distopf.wrappers.base import Wrapper
+from distopf.pyomo_models import objectives
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -109,6 +110,8 @@ class PyomoWrapper(Wrapper):
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         equality_only = kwargs.pop("equality_only", False)
         reg_tap_change_limit = kwargs.pop("reg_tap_change_limit", None)
+        free_swing_voltage = kwargs.pop("free_swing_voltage", False)
+        swing_voltage_slack_penalty = kwargs.pop("swing_voltage_slack_penalty", 0)
         duals = kwargs.pop("duals", False)
         verbose = kwargs.pop("verbose", False)
 
@@ -133,10 +136,19 @@ class PyomoWrapper(Wrapper):
             control_capacitors=control_capacitors,
             control_regulators=control_regulators,
             reg_tap_change_limit=reg_tap_change_limit,
+            free_swing_voltage=free_swing_voltage,
         )
 
         obj_rule = self._resolve_objective(objective)
-        if equality_only:
+        if free_swing_voltage:
+            obj = pyo.Objective(
+                rule=lambda _m: obj_rule(_m)
+                + objectives.swing_voltage_slack_penalty(
+                    _m, weight=swing_voltage_slack_penalty
+                ),
+                sense=pyo.minimize,
+            )
+        elif equality_only:
             obj = create_penalized_objective(
                 obj_rule,
                 voltage_weight=voltage_weight,
@@ -145,9 +157,9 @@ class PyomoWrapper(Wrapper):
                 battery_weight=battery_weight,
                 soc_weight=soc_weight,
             )
-            set_objective(self.model, obj)
         else:
-            self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
+            obj = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
+        set_objective(self.model, obj)
 
         self.result = solve(self.model, solver=solver, duals=duals, verbose=verbose)
 
@@ -211,6 +223,7 @@ class PyomoWrapper(Wrapper):
 
         q_caps = getattr(self.result, "q_cap", None)
         tap_ratios = getattr(self.result, "reg_ratio", None)
+        reg_taps = getattr(self.result, "reg_taps", None)
         p_loads = getattr(self.result, "p_load", None)
         q_loads = getattr(self.result, "q_load", None)
         p_bats = getattr(self.result, "p_bat", None)
@@ -243,6 +256,7 @@ class PyomoWrapper(Wrapper):
             reactive_power_loads=q_loads,
             capacitor_reactive_power=q_caps,
             tap_ratios=tap_ratios,
+            reg_taps=reg_taps,
             battery_active_power=p_bats,
             battery_reactive_power=q_bats,
             p_charge=p_charge,
@@ -390,18 +404,18 @@ class PyomoWrapper(Wrapper):
 
     def _resolve_objective(self, objective: Any) -> Any:
         """Resolve objective string to Pyomo objective function."""
-        from distopf.pyomo_models.objectives import (
-            none_rule,
-            loss_objective_rule,
-            substation_power_objective_rule,
-            voltage_deviation_objective_rule,
-            generation_curtailment_objective_rule,
-            generation_cost_with_substation_quadratic_penalty_objective_rule,
-            cost_minimization_rule,
-        )
+        # from distopf.pyomo_models.objectives import (
+        #     none_rule,
+        #     loss_objective_rule,
+        #     substation_power_objective_rule,
+        #     voltage_deviation_objective_rule,
+        #     generation_curtailment_objective_rule,
+        #     generation_cost_with_substation_quadratic_penalty_objective_rule,
+        #     cost_minimization_rule,
+        # )
 
         if objective is None:
-            return none_rule
+            return objectives.none_rule
 
         if callable(objective):
             return objective
@@ -409,18 +423,18 @@ class PyomoWrapper(Wrapper):
         obj_lower = objective.lower().strip()
 
         objective_map = {
-            "loss": loss_objective_rule,
-            "loss_min": loss_objective_rule,
-            "substation": substation_power_objective_rule,
-            "substation_power": substation_power_objective_rule,
-            "voltage_deviation": voltage_deviation_objective_rule,
-            "curtail": generation_curtailment_objective_rule,
-            "curtail_min": generation_curtailment_objective_rule,
-            "curtailment": generation_curtailment_objective_rule,
-            "generation_cost_substation_penalty": generation_cost_with_substation_quadratic_penalty_objective_rule,
-            "gen_cost_substation_penalty": generation_cost_with_substation_quadratic_penalty_objective_rule,
-            "cost": cost_minimization_rule,
-            "cost_min": cost_minimization_rule,
+            "loss": objectives.loss_objective_rule,
+            "loss_min": objectives.loss_objective_rule,
+            "substation": objectives.substation_power_objective_rule,
+            "substation_power": objectives.substation_power_objective_rule,
+            "voltage_deviation": objectives.voltage_deviation_objective_rule,
+            "curtail": objectives.generation_curtailment_objective_rule,
+            "curtail_min": objectives.generation_curtailment_objective_rule,
+            "curtailment": objectives.generation_curtailment_objective_rule,
+            "generation_cost_substation_penalty": objectives.generation_cost_with_substation_quadratic_penalty_objective_rule,
+            "gen_cost_substation_penalty": objectives.generation_cost_with_substation_quadratic_penalty_objective_rule,
+            "cost": objectives.cost_minimization_rule,
+            "cost_min": objectives.cost_minimization_rule,
         }
 
         if obj_lower in objective_map:

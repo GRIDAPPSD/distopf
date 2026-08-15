@@ -209,7 +209,7 @@ def main():
     print("EXPERIMENT COMPLETE")
     print("=" * 70)
     print(f"\nAll results saved to: {OUTPUT_DIR}")
-    print(f"Number of algorithms compared: 3")
+    print("Number of algorithms compared: 3")
     print(f"Time periods solved: {case.n_steps}")
     print(f"Total buses: {len(case.bus_data)}")
     print(f"Total lines: {len(case.branch_data)}")

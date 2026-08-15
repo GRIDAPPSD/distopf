@@ -1,6 +1,3 @@
-from copy import deepcopy
-from pathlib import Path
-import pandas as pd
 import distopf as opf
 from distopf.matrix_models.matrix_bess.lindist_mp import LinDistMP
 from distopf.matrix_models.matrix_bess.objectives import cp_obj_cost_min
@@ -8,7 +5,6 @@ from distopf.matrix_models.matrix_bess.objectives import cp_obj_cost_min
 from distopf.distributed.spatial.enapp import solve_enapp
 from distopf.api import create_case
 from distopf import CASES_DIR
-import plotly.express as px
 import cvxpy as cp
 
 

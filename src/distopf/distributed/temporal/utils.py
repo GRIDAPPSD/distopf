@@ -1,7 +1,6 @@
 """Utility functions for temporal decomposition algorithms."""
 
 import pandas as pd
-import numpy as np
 from typing import Optional
 from distopf import Case
 from distopf.results import PowerFlowResult

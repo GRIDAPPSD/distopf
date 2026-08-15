@@ -665,6 +665,37 @@ def add_penalized_substation_power_objective(
     set_objective(model, obj)
 
 
+def voltage_slack_penalty(m, weight=1e3):
+    if not hasattr(m, "v2_slack"):
+        return 0
+    penalty = 0
+    for _id, ph in m.bus_phase_set:
+        for t in m.time_set:
+            penalty += m.v2_slack[_id, ph, t]
+    return weight * penalty
+
+
+def thermal_slack_penalty(m, weight=1e3):
+    if not hasattr(m, "thermal_slack"):
+        return 0
+
+    penalty = 0
+    for _id, ph in m.branch_phase_set:
+        for t in m.time_set:
+            penalty += m.thermal_slack[_id, ph, t]
+    return weight * penalty
+
+
+def swing_voltage_slack_penalty(m, weight=1e3):
+    if not hasattr(m, "swing_v2_slack"):
+        return 0
+    penalty = 0
+    for _id, ph in m.swing_phase_set:
+        for t in m.time_set:
+            penalty += m.swing_v2_slack[_id, ph, t]
+    return weight * penalty
+
+
 loss_objective = pyo.Objective(rule=loss_objective_rule, sense=pyo.minimize)
 
 substation_power_objective = pyo.Objective(

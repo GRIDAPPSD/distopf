@@ -1,12 +1,10 @@
 from pathlib import Path
 import distopf as opf
 from distopf.pyomo_models.objectives import (
-    substation_cost_objective_rule,
     loss_objective_rule,
 )
 
 from distopf.distributed.spatial.enapp import Case, solve_enapp, PowerFlowResult
-from distopf.distributed.temporal import solve_tenapp_aprx, energy_cost_min
 
 OUTPUT_DIR = Path("scratch/enapp_123_debug")
 PHASES = ("a", "b", "c")

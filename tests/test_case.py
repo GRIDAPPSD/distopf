@@ -4,7 +4,6 @@ describe/metadata, ignore flags, verbose logging, and backward compatibility."""
 import json
 import logging
 
-import numpy as np
 import pytest
 import pyomo.environ as pyo
 

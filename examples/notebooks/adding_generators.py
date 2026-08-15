@@ -22,7 +22,6 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     from distopf import create_case, CASES_DIR
-    import pandas as pd
 
     return CASES_DIR, create_case
 

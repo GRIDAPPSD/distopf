@@ -13,7 +13,6 @@ import distopf as opf
 import pyomo.environ as pyo
 from distopf.pyomo_models import create_lindist_model, add_constraints
 from distopf.pyomo_models.objectives import (
-    loss_objective_rule,
     substation_power_objective_rule,
 )
 from distopf.pyomo_models.results import PyoResult

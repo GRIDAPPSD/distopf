@@ -595,7 +595,7 @@ def plot_pq(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
     return fig
 
 
-def compare_flows(s1: pd.DataFrame, s2: pd.DataFrame) -> go.Figure:
+def compare_flows(s1: pd.DataFrame, s2: pd.DataFrame, t=None) -> go.Figure:
     """
     Similar to plot_power_flows but plots two results side by side.
     Parameters
@@ -620,48 +620,73 @@ def compare_flows(s1: pd.DataFrame, s2: pd.DataFrame) -> go.Figure:
     if "to_name" not in s2.columns:
         s2["to_name"] = s2.tb
 
-    s1 = s1.melt(
-        ignore_index=True,
-        id_vars=["fb", "tb", "from_name", "to_name"],
-        var_name="phase",
-        value_name="s",
+    has_t1 = "t" in s1.columns
+    has_t2 = "t" in s2.columns
+
+    # If user passed a specific t, filter to that single timestep
+    if t is not None:
+        if has_t1:
+            s1 = s1.loc[s1.t == t, :]
+        if has_t2:
+            s2 = s2.loc[s2.t == t, :]
+
+    id_vars1 = ["fb", "tb", "from_name", "to_name"] + (
+        ["t"] if "t" in s1.columns else []
     )
+    id_vars2 = ["fb", "tb", "from_name", "to_name"] + (
+        ["t"] if "t" in s2.columns else []
+    )
+    s1 = s1.melt(ignore_index=True, var_name="phase", id_vars=id_vars1, value_name="s")
     s1["p"] = s1.s.apply(np.real)
     s1["q"] = s1.s.apply(np.imag)
     del s1["s"]
-    s1 = s1.melt(
-        ignore_index=True,
-        id_vars=["fb", "tb", "from_name", "to_name", "phase"],
-        var_name="part",
-        value_name="s1",
-    )
-    s2 = s2.melt(
-        ignore_index=True,
-        id_vars=["fb", "tb", "from_name", "to_name"],
-        var_name="phase",
-        value_name="s",
-    )
+    id_vars1 = id_vars1 + ["phase"]
+    s1 = s1.melt(ignore_index=True, var_name="part", id_vars=id_vars1, value_name="s1")
+
+    s2 = s2.melt(ignore_index=True, var_name="phase", id_vars=id_vars2, value_name="s")
     s2["p"] = s2.s.apply(np.real)
     s2["q"] = s2.s.apply(np.imag)
     del s2["s"]
-    s2 = s2.melt(
-        ignore_index=True,
-        id_vars=["fb", "tb", "from_name", "to_name", "phase"],
-        var_name="part",
-        value_name="s2",
-    )
-    s = pd.merge(
-        s1, s2, on=["fb", "tb", "from_name", "to_name", "phase", "part"], how="outer"
-    )
-    fig = px.bar(
-        s,
-        x="to_name",
-        y=["s1", "s2"],
-        facet_col="phase",
-        facet_row="part",
-        barmode="group",
-        labels={"to_name": "To-Bus Name"},
-    )
+    id_vars2 = id_vars2 + ["phase"]
+    s2 = s2.melt(ignore_index=True, var_name="part", id_vars=id_vars2, value_name="s2")
+
+    merge_keys = ["fb", "tb", "from_name", "to_name", "phase", "part"]
+    if "t" in s1.columns and "t" in s2.columns:
+        merge_keys.append("t")
+
+    s = pd.merge(s1, s2, on=merge_keys, how="outer")
+
+    s = s.melt(
+        ignore_index=True, var_name="value", id_vars=merge_keys, value_name="power"
+    ).sort_values(by=["t", "tb", "phase", "part"])
+    # Build figure - use animation_frame if we have a time column
+    if "t" in s.columns and s["t"].nunique() > 1:
+        s = s.sort_values(by=["t", "tb", "phase", "part"])
+        fig = px.bar(
+            s,
+            x="to_name",
+            y="power",
+            color="value",
+            facet_col="phase",
+            facet_row="part",
+            barmode="group",
+            labels={"to_name": "To-Bus Name"},
+            animation_frame="t",
+        )
+        ymin, ymax = s["power"].min(), s["power"].max()
+        pad = (ymax - ymin) * 0.05 if ymax > ymin else 1
+        fig.update_yaxes(range=[ymin - pad, ymax + pad])
+    else:
+        fig = px.bar(
+            s,
+            x="to_name",
+            y="power",
+            color="value",
+            facet_col="phase",
+            facet_row="part",
+            barmode="group",
+            labels={"to_name": "To-Bus Name"},
+        )
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
     fig.update_layout(
         yaxis4_title="Active Power (p.u.)",

@@ -589,6 +589,29 @@ def _create_price_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     )
 
 
+def _create_schedule_parameters(m: pyo.ConcreteModel, case: Case) -> None:
+    """Create a Pyomo parameter for each column in schedules.csv except 'time', indexed by m.time_set."""
+    if not hasattr(case, "schedules") or case.schedules is None:
+        return
+    schedules = case.schedules
+    for col in schedules.columns:
+        if col == "time":
+            continue
+        param_data = {
+            t: float(schedules.at[t, col]) for t in m.time_set if t in schedules.index
+        }
+        setattr(
+            m,
+            f"schedule_{col}",
+            pyo.Param(
+                m.time_set,
+                initialize=param_data,
+                default=0.0,
+                doc=f"Schedule parameter for {col} from schedules.csv",
+            ),
+        )
+
+
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     """
     Create all parameters for the Pyomo model including impedances, loads,
@@ -755,6 +778,7 @@ def add_constraints(
     control_capacitors: bool = False,
     control_regulators: bool = False,
     reg_tap_change_limit: int | None = None,
+    free_swing_voltage: bool = False,
 ) -> None:
     """Add constraints to a LinDistFlow Pyomo model.
 
@@ -809,7 +833,10 @@ def add_constraints(
     if not equality_only:
         constraints.add_voltage_limits(model)
     constraints.add_voltage_drop_constraints(model)
-    constraints.add_swing_bus_constraints(model)
+    if not free_swing_voltage:
+        constraints.add_swing_bus_constraints(model)
+    else:
+        constraints.add_swing_bus_voltage_slack_constraints(model)
 
     # Loads
     constraints.add_cvr_load_constraints(model)

@@ -2,7 +2,6 @@ import multiprocessing as mp
 from copy import deepcopy
 import numpy as np
 import pandas as pd
-import warnings
 from distopf.distributed.spatial.decompose import decompose
 from distopf.api import Case
 from distopf.results import PowerFlowResult
@@ -10,6 +9,51 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 from time import perf_counter
 import distopf as opf
+import logging
+
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(name)s | %(message)s"))
+    logger.addHandler(_handler)
+
+
+def _validate_boundary_frame_pair(
+    current: pd.DataFrame,
+    previous: pd.DataFrame,
+    field_name: str,
+) -> None:
+    keys = ["name", "t"]
+
+    missing_current = set(keys) - set(current.columns)
+    missing_previous = set(keys) - set(previous.columns)
+    if missing_current or missing_previous:
+        raise ValueError(
+            f"{field_name} is missing boundary key columns: "
+            f"current={sorted(missing_current)}, "
+            f"previous={sorted(missing_previous)}"
+        )
+
+    if current.duplicated(keys).any():
+        raise ValueError(f"{field_name} contains duplicate boundary rows by {keys}")
+
+    if previous.duplicated(keys).any():
+        raise ValueError(
+            f"Previous {field_name} contains duplicate boundary rows by {keys}"
+        )
+
+    current_keys = pd.MultiIndex.from_frame(current[keys])
+    previous_keys = pd.MultiIndex.from_frame(previous[keys])
+
+    missing_from_current = previous_keys.difference(current_keys)
+    missing_from_previous = current_keys.difference(previous_keys)
+
+    if len(missing_from_current) or len(missing_from_previous):
+        raise ValueError(
+            f"{field_name} boundary rows do not match between iterations. "
+            f"Missing from current: {missing_from_current.tolist()}; "
+            f"missing from previous: {missing_from_previous.tolist()}"
+        )
 
 
 @dataclass
@@ -18,6 +62,17 @@ class BoundaryVars:
     v_down: pd.DataFrame
 
     def __sub__(self, other):
+        _validate_boundary_frame_pair(
+            self.v_down,
+            other.v_down,
+            "v_down",
+        )
+        _validate_boundary_frame_pair(
+            self.s_up,
+            other.s_up,
+            "s_up",
+        )
+
         dv = pd.merge(
             self.v_down,
             other.v_down,
@@ -29,33 +84,57 @@ class BoundaryVars:
         dv.b = dv.b - dv.b_prev
         dv.c = dv.c - dv.c_prev
         dv = dv.loc[:, ["name", "t", "a", "b", "c"]]
+
         ds = pd.merge(
-            self.s_up, other.s_up, how="left", on=["name", "t"], suffixes=("", "_prev")
+            self.s_up,
+            other.s_up,
+            how="left",
+            on=["name", "t"],
+            suffixes=("", "_prev"),
         )
         ds.a = ds.a - ds.a_prev
         ds.b = ds.b - ds.b_prev
         ds.c = ds.c - ds.c_prev
         ds = ds.loc[:, ["name", "t", "a", "b", "c"]]
+
         return BoundaryVars(ds, dv)
 
     def __abs__(self):
         s = deepcopy(self.s_up)
         s.loc[:, ["a", "b", "c"]] = self.s_up.loc[:, ["a", "b", "c"]].apply(abs)
+
         v = deepcopy(self.v_down)
         v.loc[:, ["a", "b", "c"]] = self.v_down.loc[:, ["a", "b", "c"]].apply(abs)
+
         return BoundaryVars(s, v)
 
 
+def _get_swing_name(case: Case) -> str:
+    if case.bus_data is None:
+        raise ValueError("Case has no bus_data")
+
+    swing_names = case.bus_data.loc[
+        case.bus_data.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE]),
+        "name",
+    ].tolist()
+
+    if len(swing_names) != 1:
+        raise ValueError(f"Expected exactly one swing bus, found {len(swing_names)}")
+
+    return str(swing_names[0])
+
+
 def parse_v_up(case: Case, result: PowerFlowResult):
-    assert case.bus_data is not None
-    swing = case.bus_data.loc[
-        case.bus_data.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE]), "name"
-    ].to_list()[0]
+    swing = _get_swing_name(case)
     v = result.voltages
+
     if v is None:
         return pd.DataFrame(columns=["name", "t", "a", "b", "c"])
-    v = v.loc[v.name == swing, ["name", "t", "a", "b", "c"]]
-    return v
+
+    return v.loc[
+        v.name.astype(str) == swing,
+        ["name", "t", "a", "b", "c"],
+    ]
 
 
 def parse_s_dn(case: Case, result: PowerFlowResult, down_buses: list):
@@ -83,22 +162,28 @@ def parse_v_dn(case: Case, result: PowerFlowResult, down_buses: list):
 
 
 def parse_s_up(case: Case, result: PowerFlowResult):
-    assert case.bus_data is not None
-    swing = case.bus_data.loc[
-        case.bus_data.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE]), "name"
-    ].to_list()[0]
+    swing = _get_swing_name(case)
     p = result.active_power_flows
     q = result.reactive_power_flows
+
     if p is None or q is None:
         return pd.DataFrame(columns=["name", "t", "a", "b", "c"])
-    p = p.loc[p["from_name"] == swing, ["from_name", "t", "a", "b", "c"]]
-    q = q.loc[q["from_name"] == swing, ["from_name", "t", "a", "b", "c"]]
+
+    p = p.loc[
+        p["from_name"].astype(str) == swing,
+        ["from_name", "t", "a", "b", "c"],
+    ]
+    q = q.loc[
+        q["from_name"].astype(str) == swing,
+        ["from_name", "t", "a", "b", "c"],
+    ]
+
     s = p.copy()
-    for ph in ["a", "b", "c"]:
-        s[ph] = p[ph] + 1j * q[ph]
-    s["name"] = s.from_name
-    s = s.loc[:, ["name", "t", "a", "b", "c"]]
-    return s
+    for phase in "abc":
+        s[phase] = p[phase] + 1j * q[phase]
+
+    s["name"] = s["from_name"]
+    return s.loc[:, ["name", "t", "a", "b", "c"]]
 
 
 def _concat_field(
@@ -109,86 +194,85 @@ def _concat_field(
     bus_id_col: Optional[str] = None,
     branch_cols: Optional[tuple] = None,
 ) -> Optional[pd.DataFrame]:
-    """Concatenate a DataFrame field from multiple PowerFlowResult objects.
+    """Concatenate and deduplicate a result DataFrame field.
 
-    Parameters
-    ----------
-    res_list : list[PowerFlowResult]
-        Area results to merge.
-    field : str
-        PowerFlowResult attribute name.
-    valid_names : set or None
-        Set of global bus names used to filter out dummy boundary nodes.
-        Pass None to skip filtering.
-    name_cols : tuple of str
-        Columns checked when filtering by valid_names (bus-level data).
-        Only rows where ALL of these columns are in valid_names are kept.
-        For branch data pass as empty tuple and use branch_cols instead.
-    bus_id_col : str or None
-        When set, deduplicate by (bus_id_col,) or (bus_id_col, "t").
-    branch_cols : tuple of str or None
-        For branch/flow data: candidate column names for from/to keys.
-        The first existing pair is used for filtering and deduplication.
+    ``branch_cols`` marks branch-indexed data. For such data, the first
+    available from/to endpoint columns are used for filtering and
+    deduplication.
+
+    For bus-indexed data, the first available column in ``name_cols`` is
+    used to remove dummy boundary buses.
     """
     frames = [
-        getattr(r, field) for r in res_list if getattr(r, field, None) is not None
+        getattr(result, field)
+        for result in res_list
+        if getattr(result, field, None) is not None
     ]
+
     if not frames:
         return None
 
     df = pd.concat(frames, ignore_index=True)
+    is_branch_data = branch_cols is not None
 
-    # Filter out dummy boundary nodes using valid bus names.
+    from_col = None
+    to_col = None
+
+    if is_branch_data:
+        from_col = next(
+            (col for col in ("from_name", "fb") if col in df.columns),
+            None,
+        )
+        to_col = next(
+            (col for col in ("to_name", "tb", "name") if col in df.columns),
+            None,
+        )
+
     if valid_names is not None:
-        if branch_cols:
-            # branch / flow frames: keep rows where both endpoints are real.
-            from_candidates = ("from_name", "fb")
-            to_candidates = ("to_name", "tb", "name")
-            fc = next((c for c in from_candidates if c in df.columns), None)
-            tc = next((c for c in to_candidates if c in df.columns), None)
-            if fc and tc:
-                df = df.loc[
-                    df[fc].astype(str).isin(valid_names)
-                    & df[tc].astype(str).isin(valid_names)
-                ]
-        elif name_cols:
-            # bus-level frames: at least one name column must exist.
-            nc = next((c for c in name_cols if c in df.columns), None)
-            if nc:
-                df = df.loc[df[nc].astype(str).isin(valid_names)]
+        if is_branch_data and from_col and to_col:
+            df = df.loc[
+                df[from_col].astype(str).isin(valid_names)
+                & df[to_col].astype(str).isin(valid_names)
+            ]
+        elif not is_branch_data:
+            name_col = next(
+                (col for col in name_cols if col in df.columns),
+                None,
+            )
+            if name_col is not None:
+                df = df.loc[df[name_col].astype(str).isin(valid_names)]
 
     if df.empty:
         return None
 
-    # Deduplicate.
-    if branch_cols:
-        fc = next((c for c in ("from_name", "fb") if c in df.columns), None)
-        tc = next((c for c in ("to_name", "tb", "name") if c in df.columns), None)
-        key = [c for c in (fc, tc) if c]
+    if is_branch_data:
+        key = [col for col in (from_col, to_col) if col is not None]
     elif bus_id_col and bus_id_col in df.columns:
         key = [bus_id_col]
     else:
-        key = [c for c in ("name", "id") if c in df.columns]
+        key = [col for col in ("name", "id") if col in df.columns]
 
     if key:
         if "t" in df.columns:
-            key = key + ["t"]
-        df = df.drop_duplicates(subset=key).reset_index(drop=True)
-    else:
-        df = df.reset_index(drop=True)
+            key.append("t")
+        df = df.drop_duplicates(subset=key)
 
-    # Sort branch data: tb primary, fb secondary. This aligns with case.branch_data order.
-    # Critical for plotting: _process_branch_data reindexes by `tb - 1`.
-    if branch_cols and "tb" in df.columns:
+    if is_branch_data and "tb" in df.columns:
         sort_cols = ["tb"]
         if "fb" in df.columns:
             sort_cols.append("fb")
-        df = df.sort_values(sort_cols, na_position="last").reset_index(drop=True)
-    # Sort bus data by id for consistency.
-    elif bus_id_col and bus_id_col in df.columns:
-        df = df.sort_values([bus_id_col], na_position="last").reset_index(drop=True)
 
-    return df
+        df = df.sort_values(
+            sort_cols,
+            na_position="last",
+        )
+    elif bus_id_col and bus_id_col in df.columns:
+        df = df.sort_values(
+            [bus_id_col],
+            na_position="last",
+        )
+
+    return df.reset_index(drop=True)
 
 
 def combine_powerflow_results(
@@ -372,27 +456,37 @@ def send_s_down(models: dict[str, Case], boundaries: dict[str, BoundaryVars]):
     return models
 
 
-# def add_v_swing_to_schedules(schedules, v, receiving_area):
-#     v = v.loc[v.name == receiving_area, ["t", "a", "b", "c"]]
-#     v.index = v.t
-#     v = v.loc[:, ["a", "b", "c"]]
-#     for t in v.index.unique():
-#         v_t = v.loc[t]
-#         if isinstance(v_t, pd.DataFrame):
-#             v_t = v_t.iloc[0]
-#         schedules.loc[schedules.time == t, ["v_a", "v_b", "v_c"]] = v_t.to_numpy()
-#     return schedules
-
-
 def add_v_swing_to_schedules(schedules, v, receiving_area):
-    v_swing = (
-        v.loc[v.name == receiving_area, ["t", "a", "b", "c"]]
-        .drop_duplicates(subset=["t"], keep="first")
-        .rename(columns={"t": "time", "a": "v_a", "b": "v_b", "c": "v_c"})
-        .set_index("time")
+    v_rows = v.loc[
+        v.name == receiving_area,
+        ["t", "a", "b", "c"],
+    ]
+
+    assert not v_rows.duplicated(["t"]).any(), (
+        f"Duplicate voltage boundary values for area {receiving_area}"
     )
+
+    v_swing = v_rows.rename(
+        columns={
+            "t": "time",
+            "a": "v_a",
+            "b": "v_b",
+            "c": "v_c",
+        }
+    ).set_index("time")
+
     schedules = schedules.set_index("time")
-    schedules.loc[v_swing.index, ["v_a", "v_b", "v_c"]] = v_swing[["v_a", "v_b", "v_c"]]
+
+    assert v_swing.index.isin(schedules.index).all(), (
+        f"Voltage boundary times are missing from the schedule "
+        f"for area {receiving_area}"
+    )
+
+    schedules.loc[
+        v_swing.index,
+        ["v_a", "v_b", "v_c"],
+    ] = v_swing[["v_a", "v_b", "v_c"]]
+
     return schedules.reset_index()
 
 
@@ -412,51 +506,28 @@ def add_v_down_to_schedules(schedules, v, sending_area):
     return schedules
 
 
-# def add_s_to_schedules(schedules, s, sending_area):
-#     s = deepcopy(s)
-#     s.index = s.t
-#     s = s.loc[:, ["a", "b", "c"]]
-#     p_down = s.apply(np.real)
-#     q_down = s.apply(np.imag)
-#     for t in s.index.unique():
-#         # Get row(s) for this time step
-#         s_t = s.loc[t]
-#         p_t = p_down.loc[t]
-#         q_t = q_down.loc[t]
-#         # If DataFrames (multiple rows), take first
-#         if isinstance(s_t, pd.DataFrame):
-#             s_t = s_t.iloc[0]
-#         if isinstance(p_t, pd.DataFrame):
-#             p_t = p_t.iloc[0]
-#         if isinstance(q_t, pd.DataFrame):
-#             q_t = q_t.iloc[0]
-#         schedules.loc[
-#             schedules.time == t, [f"{sending_area}.{ph}.p" for ph in "abc"]
-#         ] = p_t.to_numpy()
-#         schedules.loc[
-#             schedules.time == t, [f"{sending_area}.{ph}.q" for ph in "abc"]
-#         ] = q_t.to_numpy()
-#     return schedules
-
-
 def add_s_to_schedules(schedules, s, sending_area):
-    p_cols = [f"{sending_area}.{ph}.p" for ph in "abc"]
-    q_cols = [f"{sending_area}.{ph}.q" for ph in "abc"]
+    p_cols = [f"{sending_area}.{phase}.p" for phase in "abc"]
+    q_cols = [f"{sending_area}.{phase}.q" for phase in "abc"]
 
-    s_prep = (
-        s.loc[:, ["t", "a", "b", "c"]]
-        .drop_duplicates(subset=["t"], keep="first")
-        .rename(columns={"t": "time"})
-        .set_index("time")
+    s_rows = s.loc[:, ["t", "a", "b", "c"]]
+
+    assert not s_rows.duplicated(["t"]).any(), (
+        f"Duplicate power boundary values for area {sending_area}"
     )
 
-    # Extract real and imaginary parts
+    s_prep = s_rows.rename(columns={"t": "time"}).set_index("time")
+    schedules = schedules.set_index("time")
+
+    assert s_prep.index.isin(schedules.index).all(), (
+        f"Power boundary times are missing from the schedule for area {sending_area}"
+    )
+
     p_data = s_prep[["a", "b", "c"]].apply(np.real)
     p_data.columns = p_cols
     q_data = s_prep[["a", "b", "c"]].apply(np.imag)
     q_data.columns = q_cols
 
-    schedules = schedules.set_index("time")
     schedules.loc[s_prep.index, p_cols] = p_data
     schedules.loc[s_prep.index, q_cols] = q_data
     return schedules.reset_index()
@@ -475,55 +546,58 @@ def local_to_global(results: dict, x_map_to_global: dict, n_x: int):
     return x
 
 
-def _solve(_models, _model_name, objective, kwargs, conn):
+def _solve_pool(area_name, area_case, objective, kwargs):
     try:
-        result = _models[_model_name].run_opf(objective=objective, **kwargs)
-    except Exception as exc:
-        conn.send(("error", _model_name, repr(exc)))
-        conn.close()
-        raise RuntimeError(f"ENAPP area solve failed for {_model_name}") from exc
-    conn.send(("ok", _model_name, result))
-    conn.close()
+        result = area_case.run_opf(objective=objective, **kwargs)
 
-
-def _solve_pool(_cases, _area_name, objective, kwargs):
-    try:
-        result = _cases[_area_name].run_opf(objective=objective, **kwargs)
-        # Multiprocessing workers must return pickle-safe objects. Some
-        # backends (notably Pyomo) attach non-picklable solver/model objects
-        # to PowerFlowResult for diagnostics. They are not used by ENAPP
-        # boundary exchange, so strip them here before returning to parent.
+        # Multiprocessing workers must return pickle-safe objects.
         if hasattr(result, "raw_result"):
             result.raw_result = None
         if hasattr(result, "model"):
             result.model = None
         return result
-    except Exception as exc:
+
+    except Exception:
+        logger.exception("ENAPP solve failed for area %s", area_name)
         return None
-        # raise RuntimeError(f"ENAPP area solve failed for {_area_name}") from exc
 
 
 def _solve_all_parallel(cases, objective, **kwargs):
-    all_results = {}
+    area_names = list(cases)
+    args = [
+        (area_name, cases[area_name], objective, kwargs) for area_name in area_names
+    ]
+
     with mp.Pool() as pool:
-        args = [(cases, area_name, objective, kwargs) for area_name in cases.keys()]
-        all_results_list = pool.starmap(_solve_pool, args)
-    for area_name, result in zip(cases.keys(), all_results_list):
-        all_results[area_name] = result
-    return all_results
+        results = pool.starmap(_solve_pool, args)
+
+    return dict(zip(area_names, results))
 
 
-def _solve_all_loop(models, objective, **kwargs):
+def _solve_all_loop(cases, objective, **kwargs):
     all_results = {}
-    for area_name in models.keys():
+
+    for area_name, area_case in cases.items():
         try:
-            all_results[area_name] = models[area_name].run_opf(
-                objective=objective, **kwargs
-            )
-        except Exception as exc:
+            all_results[area_name] = area_case.run_opf(objective=objective, **kwargs)
+        except Exception:
+            logger.exception("ENAPP solve failed for area %s", area_name)
             all_results[area_name] = None
-            # raise RuntimeError(f"ENAPP area solve failed for {area_name}") from exc
+
     return all_results
+
+
+def _safe_frame_max(frame: pd.DataFrame) -> float:
+    if frame.empty:
+        return 0.0
+    values = frame.to_numpy(
+        dtype=float,
+        na_value=np.nan,
+    ).ravel()
+    values = values[~np.isnan(values)]
+    if values.size == 0:
+        return 0.0
+    return float(np.max(values))
 
 
 def parse_all_boundaries(models, all_results, area_info):
@@ -545,16 +619,86 @@ def send_all_boundaries(cases, boundaries):
 
 def calculate_boundary_deviation(boundaries, boundaries_prev):
     diff_maxes = []
-    for area_name in boundaries.keys():
+    for area_name in boundaries:
+        if area_name not in boundaries_prev:
+            raise ValueError(f"Previous boundary values are missing area {area_name}")
         diff = abs(boundaries[area_name] - boundaries_prev[area_name])
         p = diff.s_up.loc[:, ["a", "b", "c"]].apply(np.real)
         q = diff.s_up.loc[:, ["a", "b", "c"]].apply(np.imag)
-        p_max = np.max(p)
-        q_max = np.max(q)
-        v_max = np.max(diff.v_down.loc[:, ["a", "b", "c"]])
-        diff_maxes.append(np.nanmax([v_max, p_max, q_max]))
-    diff_max = max(diff_maxes)
-    return diff_max
+        v = diff.v_down.loc[:, ["a", "b", "c"]]
+        p_max = _safe_frame_max(p)
+        q_max = _safe_frame_max(q)
+        v_max = _safe_frame_max(v)
+        diff_maxes.append(float(np.nanmax([v_max, p_max, q_max])))
+    return max(diff_maxes, default=0.0)
+
+
+def _get_root_areas(
+    area_info: dict[str, dict[str, list]],
+) -> set[str]:
+    return {
+        area_name for area_name, info in area_info.items() if not info.get("up_areas")
+    }
+
+
+def _aggregate_root_objective(
+    results: dict[str, PowerFlowResult],
+    root_areas: set[str],
+) -> Optional[float]:
+    objective_values = [
+        result.objective_value
+        for area_name, result in results.items()
+        if area_name in root_areas
+        and result is not None
+        and getattr(result, "objective_value", None) is not None
+    ]
+
+    return sum(objective_values) if objective_values else None
+
+
+def _remap_area_results_to_global_ids(
+    results: dict[str, PowerFlowResult],
+    case: opf.Case,
+    area_info: dict[str, dict[str, list]],
+) -> None:
+    if case.bus_data is None:
+        return
+
+    name_to_global_id = {
+        str(row["name"]): int(row["id"])
+        for _, row in case.bus_data.loc[:, ["id", "name"]].iterrows()
+    }
+
+    for result in results.values():
+        if result is None:
+            continue
+
+        voltages = getattr(result, "voltages", None)
+        if voltages is not None and "name" in voltages.columns:
+            voltages = voltages.copy()
+            voltages["id"] = voltages["name"].astype(str).map(name_to_global_id)
+            result.voltages = voltages
+
+        for flow_attr in ("active_power_flows", "reactive_power_flows"):
+            flows = getattr(result, flow_attr, None)
+
+            if flows is None:
+                continue
+
+            if not {"from_name", "to_name"}.issubset(flows.columns):
+                continue
+
+            flows = flows.copy()
+            flows["fb"] = flows["from_name"].astype(str).map(name_to_global_id)
+            flows["tb"] = flows["to_name"].astype(str).map(name_to_global_id)
+            setattr(result, flow_attr, flows)
+
+    _reconstruct_boundary_flows(
+        results,
+        area_info,
+        case,
+        name_to_global_id,
+    )
 
 
 def _reconstruct_boundary_flows(
@@ -617,11 +761,61 @@ def _reconstruct_boundary_flows(
                 setattr(ar, flow_attr, df)
 
 
+def _finalize_enapp_result(
+    result: Optional[PowerFlowResult],
+    *,
+    case: opf.Case,
+    objective_value: Optional[float],
+    converged: bool,
+    iterations: int,
+    runtime: float,
+    solver_status: str,
+    termination_condition: str,
+    area_results: dict[str, PowerFlowResult],
+    boundary_errors: list[float],
+    parallel_used: bool,
+    area_solve_failed: bool,
+    failed_areas: set[str],
+) -> PowerFlowResult:
+    if result is None:
+        result = PowerFlowResult(
+            objective_value=objective_value,
+            converged=converged,
+            solver="enapp",
+            result_type="opf",
+            case=case,
+        )
+
+    result.case = case
+    result.objective_value = objective_value
+    result.solve_time = runtime
+    result.iterations = iterations
+    result.converged = converged
+    result.solver = "enapp"
+    result.result_type = "opf"
+    result.solver_status = solver_status
+    result.termination_condition = termination_condition
+    result.backend = "enapp"
+
+    result.raw_result = {
+        "area_results": area_results,
+        "boundary_error_per_iter": boundary_errors,
+        "enapp_iterations": iterations,
+        "enapp_runtime": runtime,
+        "enapp_parallel_used": parallel_used,
+        "area_solve_failed": area_solve_failed,
+        "failed_areas": sorted(failed_areas),
+    }
+
+    return result
+
+
 def solve_enapp(
     case: opf.Case,
     area_info: dict[str, dict[str, list]],
     objective: Callable,
-    tol: float,
+    swing_voltage_slack_penalty: float = 1e6,
+    tol: float = 1e-6,
     max_iterations: int = 100,
     parallel: bool = True,
     solve_callback: Optional = None,
@@ -636,189 +830,194 @@ def solve_enapp(
             None,
         ]
     ] = None,
+    verbose_enapp: bool = False,
     **kwargs,
 ) -> PowerFlowResult:
-    """Solve a decomposed OPF/PF problem with ENAPP using modern Case API.
+    """Solve a decomposed OPF/PF problem with ENAPP."""
+    logger.setLevel(logging.DEBUG if verbose_enapp else logging.WARNING)
 
-    Parameters
-    ----------
-    case : opf.Case
-        Full network case.
-    area_info : dict
-        ENAPP area topology and boundary definitions.
-    objective : Callable | str
-        Objective accepted by ``Case.run_opf``.
-    tol : float
-        Boundary convergence tolerance.
-    max_iterations : int, default 100
-        Maximum ENAPP coordination iterations.
-    parallel : bool, default True
-        Whether to attempt multiprocessing for per-area solves.
-
-    Returns
-    -------
-    PowerFlowResult
-        Aggregated network-level result. Additional ENAPP metadata is attached:
-        ``area_results``, ``boundary_error_per_iter``, ``enapp_iterations``,
-        ``enapp_runtime``, and ``enapp_parallel_used``.
-    """
     tic = perf_counter()
-    sources = {area_name: data["up_buses"][0] for area_name, data in area_info.items()}
+    sources = {area_name: info["up_buses"][0] for area_name, info in area_info.items()}
     cases = decompose(case, sources)
-    # for _m in models.values():
-    #     plot_network(_m).show()
-    all_results = {}
-    all_results_next = {}
-    boundaries = {}  # type: dict[str, BoundaryVars]
-    # cost_per_iter = []
-    boundary_error_per_iter = []
-    parallel_enabled = parallel
-    converged = False
-    it = -1
-    for it in range(max_iterations):
-        if solve_callback is not None:
-            all_results_next = solve_callback(cases, objective, **kwargs)
-        elif parallel_enabled:
-            all_results_next = _solve_all_parallel(cases, objective, **kwargs)
-        else:
-            all_results_next = _solve_all_loop(cases, objective, **kwargs)
-        for area_name, result in all_results_next.items():
-            if result is None:
-                print(f"{area_name} solve failed. Using last iteration result.")
-                continue
-            all_results[area_name] = all_results_next[area_name]
-        if len(all_results.keys()) < len(cases.keys()):
-            # Not all areas solved; aggregate partial results and return early
-            n_solved = len(all_results)
-            n_total = len(cases)
-            print(
-                f"Only {n_solved}/{n_total} areas solved. Returning aggregated partial result."
-            )
-            root_areas = [
-                a for a, info in area_info.items() if not info.get("up_areas")
-            ]
-            fun_vals = []
-            for area_name, ar in all_results.items():
-                if area_name not in root_areas:
-                    continue
-                if (
-                    ar is not None
-                    and hasattr(ar, "objective_value")
-                    and ar.objective_value is not None
-                ):
-                    fun_vals.append(ar.objective_value)
-            fun = sum(fun_vals) if fun_vals else None
-            partial_result = combine_powerflow_results(
-                [ar for ar in all_results.values() if ar is not None],
-                case_ref=case,
-                objective_value=fun,
-            )
-            if partial_result is None:
-                partial_result = PowerFlowResult(
-                    objective_value=fun,
-                    converged=False,
-                    solver="enapp",
-                    result_type="opf",
-                    case=case,
-                )
-            partial_result.case = case
-            partial_result.objective_value = fun
-            partial_result.converged = False
-            partial_result.solver = "enapp"
-            partial_result.result_type = "opf"
-            partial_result.solver_status = "failure"
-            partial_result.termination_condition = "incomplete_solve"
-            partial_result.backend = "enapp"
-            return partial_result
-        boundaries_prev = deepcopy(boundaries)
-        boundaries = parse_all_boundaries(cases, all_results, area_info)
-        cases = send_all_boundaries(cases, boundaries)
-        if iteration_callback is not None:
-            iteration_callback(it, cases, all_results, boundaries)
-        if it < 1:
-            continue
-        diff_max = calculate_boundary_deviation(boundaries, boundaries_prev)
-        # print(diff_max)
-        boundary_error_per_iter.append(diff_max)
-        if diff_max < tol:
-            # print(f"Solved after {it} iterations.")
-            converged = True
-            break
-    # Aggregate per-area objective values if available (each area returns a PowerFlowResult)
-    # Only sum objectives for root areas (areas with no upstream areas) to avoid
-    # double-counting cost contributions at dummy boundary swings.
-    root_areas = [a for a, info in area_info.items() if not info.get("up_areas")]
-    fun_vals = []
-    for area_name, ar in all_results.items():
-        if area_name not in root_areas:
-            continue
-        if hasattr(ar, "objective_value") and ar.objective_value is not None:
-            fun_vals.append(ar.objective_value)
-    fun = sum(fun_vals) if fun_vals else None
-    # Remap local-area fb/tb/id columns to global bus IDs so that plotting
-    # routines (which index by id-1) work correctly on the aggregated result.
-    if case is not None and hasattr(case, "bus_data") and case.bus_data is not None:
-        name_to_global_id: dict[str, int] = {
-            str(r[1]): int(r[0])
-            for r in case.bus_data.loc[:, ["id", "name"]].to_numpy()
-        }
-        for ar in all_results.values():
-            # --- voltages: id column ---
-            if getattr(ar, "voltages", None) is not None:
-                v = ar.voltages.copy()
-                if "name" in v.columns:
-                    v["id"] = v["name"].astype(str).map(name_to_global_id)
-                    ar.voltages = v
-            # --- branch flows: fb/tb columns ---
-            for flow_attr in ("active_power_flows", "reactive_power_flows"):
-                df = getattr(ar, flow_attr, None)
-                if (
-                    df is not None
-                    and "from_name" in df.columns
-                    and "to_name" in df.columns
-                ):
-                    df = df.copy()
-                    df["fb"] = df["from_name"].astype(str).map(name_to_global_id)
-                    df["tb"] = df["to_name"].astype(str).map(name_to_global_id)
-                    setattr(ar, flow_attr, df)
 
-        # Reconstruct boundary-branch rows (dummy swing → real upstream bus)
-        # so they are not dropped by the valid-names filter during aggregation.
-        _reconstruct_boundary_flows(all_results, area_info, case, name_to_global_id)
-    # Build an aggregated PowerFlowResult from per-area results for convenience
-    aggregated_result = combine_powerflow_results(
-        all_results.values(), case_ref=case, objective_value=fun
-    )
-    if aggregated_result is None:
-        aggregated_result = PowerFlowResult(
-            objective_value=fun,
-            converged=converged,
-            solver="enapp",
-            result_type="opf",
-            case=case,
-        )
+    if "free_swing_voltage" in kwargs:
+        raise TypeError("free_swing_voltage is controlled by solve_enapp")
 
-    runtime = perf_counter() - tic
-    aggregated_result.case = case
-    aggregated_result.objective_value = fun
-    aggregated_result.solve_time = runtime
-    aggregated_result.iterations = it + 1
-    aggregated_result.converged = converged
-    aggregated_result.solver = "enapp"
-    aggregated_result.result_type = "opf"
-    aggregated_result.solver_status = "optimal" if converged else "max_iterations"
-    aggregated_result.termination_condition = (
-        "converged" if converged else "max_iterations"
-    )
-    aggregated_result.backend = "enapp"
-
-    # Distributed diagnostics are kept in raw_result for compatibility.
-    aggregated_result.raw_result = {
-        "area_results": all_results,
-        "boundary_error_per_iter": boundary_error_per_iter,
-        "enapp_iterations": it + 1,
-        "enapp_runtime": runtime,
-        "enapp_parallel_used": parallel_enabled,
+    solve_kwargs = {
+        **kwargs,
+        "free_swing_voltage": True,
+        "swing_voltage_slack_penalty": (swing_voltage_slack_penalty),
     }
 
-    return aggregated_result
+    root_areas = _get_root_areas(area_info)
+    all_results = {}
+    boundaries = {}
+    boundary_error_per_iter = []
+
+    failed_areas = set()
+    any_area_solve_failed = False
+    converged = False
+
+    parallel_used = parallel and solve_callback is None
+
+    for iterations in range(1, max_iterations + 1):
+        iteration_solve_failed = False
+        if solve_callback is not None:
+            iteration_results = solve_callback(cases, objective, **solve_kwargs)
+        elif parallel:
+            iteration_results = _solve_all_parallel(cases, objective, **solve_kwargs)
+        else:
+            iteration_results = _solve_all_loop(cases, objective, **solve_kwargs)
+
+        for area_name, result in iteration_results.items():
+            if result is None:
+                iteration_solve_failed = True
+                any_area_solve_failed = True
+                failed_areas.add(area_name)
+
+                logger.warning(
+                    "ENAPP area %s failed on iteration %d; "
+                    "retaining its previous successful result, if any.",
+                    area_name,
+                    iterations,
+                )
+                continue
+
+            all_results[area_name] = result
+
+        # At least one area has never produced a successful result.
+        if len(all_results) < len(cases):
+            _remap_area_results_to_global_ids(all_results, case, area_info)
+            objective_value = _aggregate_root_objective(all_results, root_areas)
+            partial_result = combine_powerflow_results(
+                all_results.values(), case_ref=case, objective_value=objective_value
+            )
+            runtime = perf_counter() - tic
+            logger.warning(
+                "Only %d/%d ENAPP areas solved; returning a partial result.",
+                len(all_results),
+                len(cases),
+            )
+            return _finalize_enapp_result(
+                partial_result,
+                case=case,
+                objective_value=objective_value,
+                converged=False,
+                iterations=iterations,
+                runtime=runtime,
+                solver_status="failure",
+                termination_condition="incomplete_solve",
+                area_results=all_results,
+                boundary_errors=boundary_error_per_iter,
+                parallel_used=parallel_used,
+                area_solve_failed=True,
+                failed_areas=failed_areas,
+            )
+
+        previous_boundaries = deepcopy(boundaries)
+
+        boundaries = parse_all_boundaries(cases, all_results, area_info)
+        swing_voltage_errors = {}
+        for area_name, result in all_results.items():
+            area_errors = {phase: 0.0 for phase in "abc"}
+            v_result = parse_v_up(cases[area_name], result)
+            schedules = cases[area_name].schedules
+
+            if v_result.empty or not {"time", "v_a", "v_b", "v_c"}.issubset(
+                schedules.columns
+            ):
+                swing_voltage_errors[area_name] = area_errors
+                continue
+
+            v_compare = v_result.merge(
+                schedules[["time", "v_a", "v_b", "v_c"]],
+                left_on="t",
+                right_on="time",
+            )
+
+            for phase in "abc":
+                error = (v_compare[phase] - v_compare[f"v_{phase}"]).abs()
+                area_errors[phase] = _safe_frame_max(error.to_frame())
+
+            swing_voltage_errors[area_name] = area_errors
+        cases = send_all_boundaries(cases, boundaries)
+
+        if iteration_callback is not None:
+            iteration_callback(iterations, cases, all_results, boundaries)
+
+        if iterations == 1:
+            continue
+
+        boundary_error = calculate_boundary_deviation(
+            boundaries,
+            previous_boundaries,
+        )
+        boundary_error_per_iter.append(boundary_error)
+        logger.info(
+            "ENAPP iteration %d boundary error: %.6e",
+            iterations,
+            boundary_error,
+        )
+        swing_voltage_error_text = "".join(
+            f"\n{area}: a={errors['a']:.6e}, "
+            f"b={errors['b']:.6e}, "
+            f"c={errors['c']:.6e}"
+            for area, errors in swing_voltage_errors.items()
+        )
+
+        logger.debug(
+            "swing voltage errors: %s",
+            swing_voltage_error_text,
+        )
+        # A failed area solve prevents this run from being
+        # reported as converged, even if stale boundary values meet tol.
+        if boundary_error < tol and not iteration_solve_failed:
+            logger.info(
+                "ENAPP converged after %d iterations with boundary error %.6e",
+                iterations,
+                boundary_error,
+            )
+            converged = True
+            break
+
+    _remap_area_results_to_global_ids(
+        all_results,
+        case,
+        area_info,
+    )
+
+    objective_value = _aggregate_root_objective(
+        all_results,
+        root_areas,
+    )
+
+    aggregated_result = combine_powerflow_results(
+        all_results.values(),
+        case_ref=case,
+        objective_value=objective_value,
+    )
+
+    runtime = perf_counter() - tic
+
+    if converged:
+        solver_status = "optimal"
+        termination_condition = "converged"
+    else:
+        solver_status = "max_iterations"
+        termination_condition = "max_iterations"
+
+    return _finalize_enapp_result(
+        aggregated_result,
+        case=case,
+        objective_value=objective_value,
+        converged=converged,
+        iterations=iterations,
+        runtime=runtime,
+        solver_status=solver_status,
+        termination_condition=termination_condition,
+        area_results=all_results,
+        boundary_errors=boundary_error_per_iter,
+        parallel_used=parallel_used,
+        area_solve_failed=any_area_solve_failed,
+        failed_areas=failed_areas,
+    )
