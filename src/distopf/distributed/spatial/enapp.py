@@ -810,6 +810,26 @@ def _finalize_enapp_result(
     return result
 
 
+def dampen_boundaries(boundaries, boundaries_last, alpha=0.5):
+    boundaries_damped = {}
+    val_cols = ["a", "b", "c"]
+    for area, boundary in boundaries.items():
+        boundary_last = boundaries_last.get(area)
+        if boundary_last is None:
+            boundaries_damped[area] = boundary
+            continue
+        s_up_damped = boundary.s_up.copy()
+        v_dn_damped = boundary.v_down.copy()
+        s_up_damped.loc[:, val_cols] = boundary.s_up.loc[
+            :, val_cols
+        ] * alpha + boundary_last.s_up.loc[:, val_cols] * (1 - alpha)
+        v_dn_damped.loc[:, val_cols] = boundary.v_down.loc[
+            :, val_cols
+        ] * alpha + boundary_last.v_down.loc[:, val_cols] * (1 - alpha)
+        boundaries_damped[area] = BoundaryVars(s_up_damped, v_dn_damped)
+    return boundaries_damped
+
+
 def solve_enapp(
     case: opf.Case,
     area_info: dict[str, dict[str, list]],
@@ -834,7 +854,7 @@ def solve_enapp(
     **kwargs,
 ) -> PowerFlowResult:
     """Solve a decomposed OPF/PF problem with ENAPP."""
-    logger.setLevel(logging.DEBUG if verbose_enapp else logging.WARNING)
+    logger.setLevel(logging.INFO if verbose_enapp else logging.WARNING)
 
     tic = perf_counter()
     sources = {area_name: info["up_buses"][0] for area_name, info in area_info.items()}
@@ -915,8 +935,9 @@ def solve_enapp(
             )
 
         previous_boundaries = deepcopy(boundaries)
-
+        boundaries_last = deepcopy(boundaries)
         boundaries = parse_all_boundaries(cases, all_results, area_info)
+        boundaries = dampen_boundaries(boundaries, boundaries_last, alpha=1.0)
         swing_voltage_errors = {}
         for area_name, result in all_results.items():
             area_errors = {phase: 0.0 for phase in "abc"}
@@ -959,9 +980,7 @@ def solve_enapp(
             boundary_error,
         )
         swing_voltage_error_text = "".join(
-            f"\n{area}: a={errors['a']:.6e}, "
-            f"b={errors['b']:.6e}, "
-            f"c={errors['c']:.6e}"
+            f"\n{area}: a={errors['a']:.6e}, b={errors['b']:.6e}, c={errors['c']:.6e}"
             for area, errors in swing_voltage_errors.items()
         )
 

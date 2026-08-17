@@ -71,13 +71,12 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
     """Create all Pyomo sets"""
     m.time_set = pyo.RangeSet(case.start_step, case.start_step + case.n_steps - 1)
     m.bus_set = pyo.Set(initialize=case.bus_data.id.tolist())
+    swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
     m.swing_bus_set = pyo.Set(
-        initialize=case.bus_data[case.bus_data.bus_type == "SWING"].id.tolist()
+        initialize=case.bus_data.loc[swing_mask, "id"].astype(int).tolist()
     )
     m.swing_phase_set = pyo.Set(
-        initialize=_create_phase_tuples(
-            case.bus_data[case.bus_data.bus_type == "SWING"]
-        ),
+        initialize=_create_phase_tuples(case.bus_data.loc[swing_mask]),
         dimen=2,
     )
     m.branch_set = pyo.Set(
