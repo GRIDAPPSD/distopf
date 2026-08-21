@@ -433,6 +433,12 @@ class ADMMAgent(AreaAgent):
     # ------------------------------------------------------------------
 
     def _write_v_up_target(self, target: pd.DataFrame) -> None:
+        # ADMM frames are keyed by the local boundary bus name (the parent
+        # area, for an ``IN`` bus), while the swing schedule helper selects
+        # rows by receiving area.  Normalize the key before writing so the
+        # consensus target is not silently filtered out.
+        target = target.copy()
+        target["name"] = self.name
         self.case.schedules = add_v_swing_to_schedules(
             self.case.schedules,
             target,
