@@ -72,12 +72,20 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
     m.time_set = pyo.RangeSet(case.start_step, case.start_step + case.n_steps - 1)
     m.bus_set = pyo.Set(initialize=case.bus_data.id.tolist())
     swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+    boundary_in_mask = case.bus_data.bus_type.isin(["SWING_FREE", "IN"])
+    boundary_out_mask = case.bus_data.bus_type.isin(["OUT"])
     m.swing_bus_set = pyo.Set(
         initialize=case.bus_data.loc[swing_mask, "id"].astype(int).tolist()
     )
     m.swing_phase_set = pyo.Set(
         initialize=_create_phase_tuples(case.bus_data.loc[swing_mask]),
         dimen=2,
+    )
+    m.boundary_in_set = pyo.Set(
+        initialize=case.bus_data.loc[boundary_in_mask, "id"].astype(int).tolist()
+    )
+    m.boundary_out_set = pyo.Set(
+        initialize=case.bus_data.loc[boundary_out_mask, "id"].astype(int).tolist()
     )
     m.branch_set = pyo.Set(
         initialize=[
@@ -329,7 +337,8 @@ def _create_v_swing_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     v_swing_data = {}
 
     # Find swing buses
-    swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
+    swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+    swing_buses = case.bus_data[swing_mask]
 
     for _, row in swing_buses.iterrows():
         for phase in _parse_phases(str(row.phases)):
@@ -778,6 +787,7 @@ def add_constraints(
     control_regulators: bool = False,
     reg_tap_change_limit: int | None = None,
     free_swing_voltage: bool = False,
+    free_boundary_loads: bool = False,
 ) -> None:
     """Add constraints to a LinDistFlow Pyomo model.
 
@@ -838,7 +848,7 @@ def add_constraints(
         constraints.add_swing_bus_voltage_slack_constraints(model)
 
     # Loads
-    constraints.add_cvr_load_constraints(model)
+    constraints.add_cvr_load_constraints(model, free_boundary_loads)
 
     # Capacitors
     if control_capacitors:

@@ -63,17 +63,24 @@ def _create_branch_phase_tuples(
 
 
 def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
-    """Create all Pyomo sets"""
+    """Create all Pyomo sets, including decomposed boundary buses."""
     m.time_set = pyo.RangeSet(case.start_step, case.start_step + case.n_steps - 1)
     m.bus_set = pyo.Set(initialize=case.bus_data.id.tolist())
+    swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+    boundary_in_mask = case.bus_data.bus_type.isin(["SWING_FREE", "IN"])
+    boundary_out_mask = case.bus_data.bus_type.isin(["OUT"])
     m.swing_bus_set = pyo.Set(
-        initialize=case.bus_data[case.bus_data.bus_type == "SWING"].id.tolist()
+        initialize=case.bus_data.loc[swing_mask, "id"].astype(int).tolist()
     )
     m.swing_phase_set = pyo.Set(
-        initialize=_create_phase_tuples(
-            case.bus_data[case.bus_data.bus_type == "SWING"]
-        ),
+        initialize=_create_phase_tuples(case.bus_data.loc[swing_mask]),
         dimen=2,
+    )
+    m.boundary_in_set = pyo.Set(
+        initialize=case.bus_data.loc[boundary_in_mask, "id"].astype(int).tolist()
+    )
+    m.boundary_out_set = pyo.Set(
+        initialize=case.bus_data.loc[boundary_out_mask, "id"].astype(int).tolist()
     )
     m.branch_set = pyo.Set(
         initialize=[
@@ -342,8 +349,9 @@ def _create_regulator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
 def _create_v_swing_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     v_swing_data = {}
 
-    # Find swing buses
-    swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
+    # Include real and decomposed input boundary swing buses.
+    swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+    swing_buses = case.bus_data[swing_mask]
 
     for _, row in swing_buses.iterrows():
         for phase in _parse_phases(str(row.phases)):

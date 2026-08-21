@@ -39,7 +39,8 @@ class CaseValidator:
         self.warnings = []
 
         # Swing bus validation
-        swing_buses = self.case.bus_data[self.case.bus_data.bus_type == "SWING"]
+        swing_mask = self.case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+        swing_buses = self.case.bus_data[swing_mask]
         if len(swing_buses) == 0:
             self.errors.append(
                 "No SWING bus found. Exactly one bus must have bus_type='SWING'."

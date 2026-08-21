@@ -58,7 +58,8 @@ class BaseModel:
         # ~~~~~~~~~~~~~~~~~~~~ prepare data ~~~~~~~~~~~~~~~~~~~~
         self.nb = len(self.bus.id)
         self.r, self.x = self._init_rx(self.branch)
-        self.swing_bus = self.bus.loc[self.bus.bus_type == "SWING"].index[0]
+        swing_mask = self.bus.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+        self.swing_bus = self.bus.loc[swing_mask].index[0]
         self.all_buses = {
             "a": self.bus.loc[self.bus.phases.str.contains("a")].index.to_numpy(),
             "b": self.bus.loc[self.bus.phases.str.contains("b")].index.to_numpy(),

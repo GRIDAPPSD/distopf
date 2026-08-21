@@ -1322,13 +1322,14 @@ def _validate_case_data(case: Case) -> None:
     if case.branch_data is None or len(case.branch_data) == 0:
         raise ValueError("Case must contain branch data")
 
-    # Check for swing bus
+    # Check for a real or decomposed input swing bus.
     if case.bus_data is not None:
-        swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
+        swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+        swing_buses = case.bus_data[swing_mask]
         if len(swing_buses) == 0:
-            raise ValueError("Case must contain at least one SWING bus")
+            raise ValueError("Case must contain at least one SWING or IN bus")
         elif len(swing_buses) > 1:
-            raise ValueError("Case cannot contain more than one SWING bus")
+            raise ValueError("Case cannot contain more than one SWING or IN bus")
 
 
 # Enhanced versions of existing functions with better error handling
@@ -1593,9 +1594,10 @@ def modify_case(
 
     # Modify swing voltage
     if v_swing is not None:
-        case.bus_data.loc[case.bus_data.bus_type == "SWING", ["v_a", "v_b", "v_c"]] = (
-            v_swing
-        )
+        case.bus_data.loc[
+            case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"]),
+            ["v_a", "v_b", "v_c"],
+        ] = v_swing
 
     if v_min is not None:
         case.bus_data.loc[:, "v_min"] = v_min

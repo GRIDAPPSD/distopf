@@ -57,8 +57,10 @@ class FBS:
         self.node_capacitors = self._build_node_capacitors()
         self.phase_connections = self._build_phase_connections()
 
-        # Find swing bus
-        swing_buses = self.bus_data[self.bus_data.bus_type == "SWING"]
+        # Find the real or decomposed input swing bus.
+        swing_buses = self.bus_data[
+            self.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+        ]
         if len(swing_buses) != 1:
             raise ValueError("Exactly one swing bus must be defined")
         self.swing_bus = swing_buses.at[swing_buses.index[0], "id"]

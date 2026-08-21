@@ -174,7 +174,9 @@ def add_regulator_constraints(m: LindistModelProtocol) -> None:
     m.regulator_ratio = pyo.Constraint(m.reg_phase_set, m.time_set, rule=regulator_rule)
 
 
-def add_cvr_load_constraints(m: LindistModelProtocol) -> None:
+def add_cvr_load_constraints(
+    m: LindistModelProtocol, free_boundary_loads: bool = False
+) -> None:
     """
     Add voltage-dependent load constraints.
     p_L = p_0 + CVR_p * (p_0/2) * (v - 1)
@@ -182,6 +184,8 @@ def add_cvr_load_constraints(m: LindistModelProtocol) -> None:
     """
 
     def cvr_p_rule(m: LindistModelProtocol, _id, ph, t):
+        if free_boundary_loads and _id in m.boundary_out_set:
+            return pyo.Constraint.Skip
         p_nom = m.p_load_nom[_id, ph, t]
         cvr_p = m.cvr_p[_id, ph]
         return m.p_load[_id, ph, t] == p_nom + cvr_p * p_nom / 2 * (
@@ -189,6 +193,8 @@ def add_cvr_load_constraints(m: LindistModelProtocol) -> None:
         )
 
     def cvr_q_rule(m: LindistModelProtocol, _id, ph, t):
+        if free_boundary_loads and _id in m.boundary_out_set:
+            return pyo.Constraint.Skip
         q_nom = m.q_load_nom[_id, ph, t]
         cvr_q = m.cvr_q[_id, ph]
         return m.q_load[_id, ph, t] == q_nom + cvr_q * q_nom / 2 * (

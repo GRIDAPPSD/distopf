@@ -300,6 +300,8 @@ class PowerFlowResult:
 
     def plot_power_flows(self, t=None):
         """Plot branch power flows."""
+        if self.active_power_flows is None or self.reactive_power_flows is None:
+            raise RuntimeError("No results available.")
         from distopf.plot import plot_power_flows
 
         return plot_power_flows(self.active_power_flows, self.reactive_power_flows, t=t)

@@ -108,6 +108,156 @@ class BoundaryVars:
         )
 
 
+@dataclass
+class InterfaceADMMState:
+    z_v: pd.DataFrame
+    z_s: pd.DataFrame
+    u_v_up: pd.DataFrame
+    u_v_down: pd.DataFrame
+    u_s_up: pd.DataFrame
+    u_s_down: pd.DataFrame
+
+
+@dataclass
+class ADMMState:
+    rho: float
+    interfaces: dict[tuple[str, str], InterfaceADMMState]
+
+
+def _get_boundary_values(frame, name=None):
+    if name is not None:
+        frame = frame.loc[frame.name.astype(str) == str(name)]
+
+    values = frame.loc[:, ["t", "a", "b", "c"]].copy()
+
+    if values.duplicated(["t"]).any():
+        raise ValueError(f"Duplicate boundary values for area {name}")
+
+    return values.sort_values("t").reset_index(drop=True)
+
+
+def _zero_boundary_values(values):
+    result = values.copy()
+    result.loc[:, ["a", "b", "c"]] = 0
+    return result
+
+
+def _average_boundary_values(x1, x2):
+    values = pd.merge(
+        x1,
+        x2,
+        on="t",
+        suffixes=("_1", "_2"),
+        validate="one_to_one",
+    )
+
+    result = values.loc[:, ["t"]].copy()
+    for phase in "abc":
+        result[phase] = (values[f"{phase}_1"] + values[f"{phase}_2"]) / 2
+
+    return result
+
+
+def initialize_admm_state(boundaries, area_info, rho=1.0):
+    interfaces = {}
+
+    for up_area, info in area_info.items():
+        for down_area in info.get("down_areas", []):
+            up_boundary = boundaries[up_area]
+            down_boundary = boundaries[down_area]
+
+            v_down = _get_boundary_values(
+                up_boundary.v_down,
+                down_area,
+            )
+            s_down = _get_boundary_values(
+                up_boundary.s_down,
+                down_area,
+            )
+
+            # The downstream area's upstream boundary has only one parent,
+            # so filtering by name is unnecessary.
+            v_up = _get_boundary_values(down_boundary.v_up)
+            s_up = _get_boundary_values(down_boundary.s_up)
+
+            z_v = _average_boundary_values(v_down, v_up)
+            z_s = _average_boundary_values(s_down, s_up)
+
+            interfaces[(up_area, down_area)] = InterfaceADMMState(
+                z_v=z_v,
+                z_s=z_s,
+                u_v_up=_zero_boundary_values(v_down),
+                u_v_down=_zero_boundary_values(v_up),
+                u_s_up=_zero_boundary_values(s_down),
+                u_s_down=_zero_boundary_values(s_up),
+            )
+
+    return ADMMState(
+        rho=rho,
+        interfaces=interfaces,
+    )
+
+
+def update_admm_state(state, boundaries):
+    for (up_area, down_area), interface in state.interfaces.items():
+        up_boundary = boundaries[up_area]
+        down_boundary = boundaries[down_area]
+
+        v_down = _get_boundary_values(
+            up_boundary.v_down,
+            down_area,
+        )
+        s_down = _get_boundary_values(
+            up_boundary.s_down,
+            down_area,
+        )
+        v_up = _get_boundary_values(down_boundary.v_up)
+        s_up = _get_boundary_values(down_boundary.s_up)
+
+        # Consensus update:
+        # z = average(x_up + u_up, x_down + u_down)
+        v_down_u = v_down.copy()
+        v_up_u = v_up.copy()
+        s_down_u = s_down.copy()
+        s_up_u = s_up.copy()
+
+        for phase in "abc":
+            v_down_u[phase] += interface.u_v_up[phase]
+            v_up_u[phase] += interface.u_v_down[phase]
+            s_down_u[phase] += interface.u_s_up[phase]
+            s_up_u[phase] += interface.u_s_down[phase]
+
+        interface.z_v = _average_boundary_values(v_down_u, v_up_u)
+        interface.z_s = _average_boundary_values(s_down_u, s_up_u)
+
+        # Scaled dual update: u = u + x - z
+        for phase in "abc":
+            interface.u_v_up[phase] += v_down[phase] - interface.z_v[phase]
+            interface.u_v_down[phase] += v_up[phase] - interface.z_v[phase]
+            interface.u_s_up[phase] += s_down[phase] - interface.z_s[phase]
+            interface.u_s_down[phase] += s_up[phase] - interface.z_s[phase]
+
+    return state
+
+
+@dataclass
+class ADMMTargets:
+    v_up: pd.DataFrame
+    s_up: pd.DataFrame
+    v_down: pd.DataFrame
+    s_down: pd.DataFrame
+
+
+def _shift_consensus(z, u, name):
+    target = z.copy()
+
+    for phase in "abc":
+        target[phase] = z[phase] - u[phase]
+
+    target["name"] = str(name)
+    return target.loc[:, ["name", "t", "a", "b", "c"]]
+
+
 def _get_swing_name(case: Case) -> str:
     if case.bus_data is None:
         raise ValueError("Case has no bus_data")

@@ -852,8 +852,10 @@ def calculate_nodal_distances(case):
     """
     from collections import deque
 
-    # Find swing bus
-    swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
+    # Find real or decomposed input swing bus.
+    swing_buses = case.bus_data[
+        case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+    ]
     source_bus = swing_buses.at[swing_buses.index[0], "id"]
 
     # Build adjacency list
@@ -1939,8 +1941,10 @@ def _make_title(show_phases, show_reactive_power):
 
 
 def _make_asset_markers(bus_data, cap_data, gen_data, bat_data, node_size):
-    # Add substation marker
-    substation_buses = bus_data.loc[bus_data.bus_type == "SWING", :]
+    # Add substation/input-boundary marker
+    substation_buses = bus_data.loc[
+        bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"]), :
+    ]
     substation_trace = go.Scatter(
         x=substation_buses["x"],
         y=substation_buses["y"],

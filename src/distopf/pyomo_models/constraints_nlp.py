@@ -382,14 +382,19 @@ def add_regulator_constraints(m: LindistModelProtocol) -> None:
     m.regulator_ratio = pyo.Constraint(m.reg_phase_set, m.time_set, rule=regulator_rule)
 
 
-def add_cvr_load_constraints(m: LindistModelProtocol) -> None:
+def add_cvr_load_constraints(
+    m: LindistModelProtocol, free_boundary_loads: bool = False
+) -> None:
     """
     Add voltage-dependent load constraints.
-    p_L = p_0 + CVR_p * (p_0/2) * (v - 1)
-    q_L = q_0 + CVR_q * (q_0/2) * (v - 1)
+
+    OUT buses represent downstream-area aggregate loads. Their load variables
+    must remain free when boundary loads are coordinated externally.
     """
 
     def cvr_p_rule(m: LindistModelProtocol, _id, ph, t):
+        if free_boundary_loads and _id in m.boundary_out_set:
+            return pyo.Constraint.Skip
         p_nom = m.p_load_nom[_id, ph, t]
         cvr_p = m.cvr_p[_id, ph]
         return m.p_load[_id, ph, t] == p_nom + cvr_p * p_nom / 2 * (
@@ -397,6 +402,8 @@ def add_cvr_load_constraints(m: LindistModelProtocol) -> None:
         )
 
     def cvr_q_rule(m: LindistModelProtocol, _id, ph, t):
+        if free_boundary_loads and _id in m.boundary_out_set:
+            return pyo.Constraint.Skip
         q_nom = m.q_load_nom[_id, ph, t]
         cvr_q = m.cvr_q[_id, ph]
         return m.q_load[_id, ph, t] == q_nom + cvr_q * q_nom / 2 * (
@@ -1207,6 +1214,8 @@ def add_nlp_constraints(
     control_capacitors: bool = False,
     control_regulators: bool = False,
     reg_tap_change_limit: int | None = None,
+    free_swing_voltage: bool = False,
+    free_boundary_loads: bool = False,
 ) -> None:
     """
     Add all constraints for the nonlinear BranchFlow model.
@@ -1244,10 +1253,17 @@ def add_nlp_constraints(
     # Voltage constraints
     add_voltage_limits(m)
     add_voltage_drop_nlp_constraints(m)
-    add_swing_bus_constraints(m)
+    if free_swing_voltage:
+        from distopf.pyomo_models.constraints import (
+            add_swing_bus_voltage_slack_constraints,
+        )
+
+        add_swing_bus_voltage_slack_constraints(m)
+    else:
+        add_swing_bus_constraints(m)
 
     # Loads
-    add_cvr_load_constraints(m)
+    add_cvr_load_constraints(m, free_boundary_loads=free_boundary_loads)
 
     # Capacitors
     if control_capacitors:

@@ -87,7 +87,8 @@ def graph_to_model(graph, model_ref, remap_ids=False):
     reg_data = edges_to_df(graph, "reg_data")
     schedules = deepcopy(model_ref.schedules)
     if remap_ids:
-        sources = bus_data.loc[bus_data.bus_type == "SWING", "name"].to_list()
+        swing_mask = bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+        sources = bus_data.loc[swing_mask, "name"].to_list()
         assert len(sources) == 1
         source = sources[0]
         id_map = remap_node_ids(graph, source)
@@ -107,18 +108,13 @@ def graph_to_model(graph, model_ref, remap_ids=False):
             schedules[f"{load_shape}.a.q"] = 0.0
             schedules[f"{load_shape}.b.q"] = 0.0
             schedules[f"{load_shape}.c.q"] = 0.0
+    swing_mask = bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
     if "v_a" not in schedules.columns:
-        schedules["v_a"] = bus_data.loc[bus_data.bus_type == "SWING", "v_a"].to_numpy()[
-            0
-        ]
+        schedules["v_a"] = bus_data.loc[swing_mask, "v_a"].to_numpy()[0]
     if "v_b" not in schedules.columns:
-        schedules["v_b"] = bus_data.loc[bus_data.bus_type == "SWING", "v_b"].to_numpy()[
-            0
-        ]
+        schedules["v_b"] = bus_data.loc[swing_mask, "v_b"].to_numpy()[0]
     if "v_c" not in schedules.columns:
-        schedules["v_c"] = bus_data.loc[bus_data.bus_type == "SWING", "v_c"].to_numpy()[
-            0
-        ]
+        schedules["v_c"] = bus_data.loc[swing_mask, "v_c"].to_numpy()[0]
     return LinDistMP(
         branch_data=branch_data,
         bus_data=bus_data,
@@ -259,7 +255,7 @@ def make_new_node(template_data, name, bus_id, load_shape, bus_type):
     data["bus_data"].loc[:, ["id"]] = bus_id
     data["bus_data"].loc[:, ["name"]] = name
     default_load = 1
-    if bus_type == "SWING":
+    if bus_type in ("SWING", "SWING_FREE", "IN"):
         default_load = 0
     data["bus_data"].loc[:, ["pl_a", "pl_b", "pl_c"]] = default_load
     data["bus_data"].loc[:, ["ql_a", "ql_b", "ql_c"]] = default_load

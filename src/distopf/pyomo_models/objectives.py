@@ -535,6 +535,102 @@ def create_penalized_objective(
     return pyo.Objective(rule=objective_rule, sense=pyo.minimize)
 
 
+# ============ Penalty Functions for ADMM ==============================================
+# ======================================================================================
+def admm_v_up_penalty(m, rho: float = 1.0):
+    """Quadratic penalty on this area's upstream voltage.
+
+    Compares v2 at the swing bus to (v_swing_target)^2 loaded from the
+    schedule v_a/v_b/v_c columns.
+    """
+    if not hasattr(m, "swing_phase_set"):
+        return 0
+
+    penalty = 0
+    for _id, ph in m.swing_phase_set:
+        for t in m.time_set:
+            v_target_sq = m.v_swing[_id, ph, t] ** 2
+            penalty += (m.v2[_id, ph, t] - v_target_sq) ** 2
+
+    return 0.5 * rho * penalty
+
+
+def admm_s_up_penalty(m, rho: float = 1.0):
+    """Quadratic penalty on this area's total upstream power.
+
+    For each swing bus and phase, sums P (and Q) flows on all branches
+    leaving the swing bus and compares the total to the target stored in
+    the schedule under '<parent>.<phase>.p' and '<parent>.<phase>.q'.
+    """
+    # Group outgoing swing-bus branches by (swing_bus, phase).
+    swing_branches: dict[tuple[int, str], list[tuple[int, int]]] = {}
+    for fb, tb, ph in m.branch_phase_set:
+        if fb not in m.swing_bus_set:
+            continue
+        swing_branches.setdefault((fb, ph), []).append((fb, tb))
+
+    penalty = 0
+    for (fb, ph), branches in swing_branches.items():
+        area_name = m.name_map[fb]
+        p_param = getattr(m, f"schedule_{area_name}.{ph}.p", None)
+        q_param = getattr(m, f"schedule_{area_name}.{ph}.q", None)
+        if p_param is None or q_param is None:
+            continue
+
+        for t in m.time_set:
+            p_total = sum(m.p_flow[f, tt, ph, t] for f, tt in branches)
+            q_total = sum(m.q_flow[f, tt, ph, t] for f, tt in branches)
+            penalty += (p_total - p_param[t]) ** 2
+            penalty += (q_total - q_param[t]) ** 2
+
+    return 0.5 * rho * penalty
+
+
+def admm_v_down_penalty(m, rho: float = 1.0):
+    """Quadratic penalty on this area's downstream (child) voltages.
+
+    Applies to dummy child buses whose voltage targets are stored in
+    schedule columns '<child>.<phase>.v'.
+    """
+    penalty = 0
+
+    for _id, ph in m.bus_phase_set:
+        area_name = m.name_map[_id]
+        v_param = getattr(m, f"schedule_{area_name}.{ph}.v", None)
+        if v_param is None:
+            continue
+
+        for t in m.time_set:
+            v_target_sq = v_param[t] ** 2
+            penalty += (m.v2[_id, ph, t] - v_target_sq) ** 2
+
+    return 0.5 * rho * penalty
+
+
+def admm_s_down_penalty(m, rho: float = 1.0):
+    """Quadratic penalty on this area's downstream (child) power.
+
+    Applies to loads at dummy child buses whose P and Q targets are stored
+    in schedule columns '<child>.<phase>.p' and '<child>.<phase>.q'.
+    """
+    penalty = 0
+
+    for _id, ph in m.bus_phase_set:
+        if _id in m.swing_bus_set:
+            continue
+        area_name = m.name_map[_id]
+        p_param = getattr(m, f"schedule_{area_name}.{ph}.p", None)
+        q_param = getattr(m, f"schedule_{area_name}.{ph}.q", None)
+        if p_param is None or q_param is None:
+            continue
+
+        for t in m.time_set:
+            penalty += (m.p_load[_id, ph, t] - p_param[t]) ** 2
+            penalty += (m.q_load[_id, ph, t] - q_param[t]) ** 2
+
+    return 0.5 * rho * penalty
+
+
 # ============ Convenience Functions ===================================================
 # ======================================================================================
 
