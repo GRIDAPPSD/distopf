@@ -80,6 +80,45 @@ result = case.run_opf(objective="curtail_min", control_variable="P", v_max=1.05,
 result.plot_network().show(renderer="browser")
 ```
 
+## Spatial ENAPP and ADMM solvers
+
+The spatial solvers are available through the public [`Case.run_enapp()`](src/distopf/api.py:577) and [`Case.run_admm()`](src/distopf/api.py:617) methods. Supply an area topology as a JSON-safe dictionary keyed by area name. Each area must define `up_areas`, `down_areas`, and exactly one `up_buses` entry; bus names must match the selected case.
+
+```python
+area_info = {
+    "area1": {
+        "up_areas": [],
+        "down_areas": ["area2"],
+        "up_buses": ["sourcebus"],
+        "down_buses": ["632"],
+    },
+    "area2": {
+        "up_areas": ["area1"],
+        "down_areas": [],
+        "up_buses": ["632"],
+        "down_buses": [],
+    },
+}
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
+result = case.run_enapp(
+    area_info=area_info,
+    objective="substation_power",
+    parallel=False,
+    max_iterations=25,
+)
+```
+
+Runs made through these methods are recorded by [`record_call()`](src/distopf/utils/call_recorder.py:90). Calling [`PowerFlowResult.save()`](src/distopf/results.py:209) writes `run_config.json`, including the distributed solver and topology, so named-objective runs can be reproduced with [`replay()`](src/distopf/api.py:1140):
+
+```python
+result.save("results/ieee13-enapp")
+replayed = opf.replay("results/ieee13-enapp/run_config.json")
+```
+
+Custom objective callables and solve/iteration callbacks are intentionally marked non-replayable because they cannot be reconstructed from JSON.
+
+
+
 ## Optimization Wrappers
 
 DistOPF supports multiple optimization wrappers for solving OPF problems:
