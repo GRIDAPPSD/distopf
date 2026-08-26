@@ -932,7 +932,7 @@ def solve_enapp(
 
     if "free_swing_voltage" in kwargs:
         raise TypeError("free_swing_voltage is controlled by solve_enapp")
-    
+
     solve_kwargs = {
         **kwargs,
         "free_swing_voltage": True,

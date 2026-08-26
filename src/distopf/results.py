@@ -173,9 +173,11 @@ class PowerFlowResult:
     error_message: Optional[str] = None  # Error details if solve failed
     case_name: Optional[str] = None  # Case identifier for benchmarking
 
-    # ENAPP/distributed metadata
+    # Distributed solver metadata
     area_results: Optional[dict[str, "PowerFlowResult"]] = None
     boundary_error_per_iter: Optional[list[float]] = None
+    iteration_summaries: Optional[pd.DataFrame] = None
+    area_iteration_summaries: Optional[pd.DataFrame] = None
     enapp_iterations: Optional[int] = None
     enapp_runtime: Optional[float] = None
     enapp_parallel_used: Optional[bool] = None

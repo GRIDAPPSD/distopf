@@ -9,37 +9,55 @@ import pandas as pd
 import distopf as opf
 from distopf.api import Case
 from distopf.distributed.spatial.decompose import decompose
-from distopf.distributed.spatial.enapp_agents import (
-    AreaAgent,
+from distopf.distributed.spatial.boundary import (
     BoundaryVars,
     S_DOWN,
     S_UP,
     V_DOWN,
     V_UP,
+    _empty_boundary_frame,
+)
+from distopf.distributed.spatial.execution import (
     _agent_boundaries,
     _agent_results,
     _aggregate_root_objective,
-    _empty_boundary_frame,
-    _finalize_enapp_result,
     _get_root_areas,
     _record_iteration_results,
     _remap_area_results_to_global_ids,
     _solve_iteration,
+    combine_powerflow_results,
+    create_area_agents,
+    _finalize_result,
+)
+from distopf.distributed.spatial.messaging import send_all_agent_messages
+from distopf.distributed.spatial.messaging import AreaAgent
+from distopf.distributed.spatial.schedule import (
     add_s_to_schedules,
     add_v_down_to_schedules,
     add_v_swing_to_schedules,
-    combine_powerflow_results,
-    create_area_agents,
-    send_all_agent_messages,
 )
 from distopf.results import PowerFlowResult
 
 
 logger = logging.getLogger(__name__)
-if not logger.handlers:
-    _handler = logging.StreamHandler()
-    _handler.setFormatter(logging.Formatter("%(name)s | %(message)s"))
-    logger.addHandler(_handler)
+
+
+def _configure_logging(verbose_admm: bool) -> None:
+    """Enable ADMM diagnostics without changing an application's log policy."""
+    if not verbose_admm or logger.level != logging.NOTSET:
+        return
+
+    logger.setLevel(logging.DEBUG)
+
+    # Keep verbose ADMM output local to this module instead of enabling DEBUG
+    # output from unrelated libraries such as Pyomo.
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(name)s | %(levelname)s | %(message)s")
+        )
+        logger.addHandler(handler)
+        logger.propagate = False
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +146,11 @@ class ADMMAgent(AreaAgent):
 
     # residuals[neighbor][variable] = history of scalar primal residuals
     residuals: dict[str, dict[str, list[float]]] = field(default_factory=dict)
+    # target_actual_residuals[neighbor][variable] = target-versus-actual history
+    target_actual_residuals: dict[str, dict[str, list[float]]] = field(
+        default_factory=dict
+    )
+    pending_targets: dict[tuple[str, str], pd.DataFrame] = field(default_factory=dict)
 
     def _initialize_duals_if_needed(self) -> None:
         if self.boundary is None:
@@ -339,6 +362,24 @@ class ADMMAgent(AreaAgent):
         self,
         pair: _InterfacePair,
     ) -> None:
+        # Compare the current local boundary with the target generated after
+        # the previous iteration.  The first iteration has no prior target.
+        target_key = (str(pair.neighbor), pair.variable)
+        previous_target = self.pending_targets.get(target_key)
+        if previous_target is not None:
+            target_actual = self._frame_residual(
+                local=pair.local,
+                remote=previous_target,
+            )
+            self.target_actual_residuals.setdefault(str(pair.neighbor), {})
+            self.target_actual_residuals[str(pair.neighbor)].setdefault(
+                pair.variable,
+                [],
+            )
+            self.target_actual_residuals[str(pair.neighbor)][pair.variable].append(
+                target_actual
+            )
+
         # Primal consensus residual:
         #
         #     ||local - remote||_inf
@@ -379,6 +420,7 @@ class ADMMAgent(AreaAgent):
         #     z - u
         #
         target = _minus_frame(z, u_new)
+        self.pending_targets[target_key] = target.copy()
         pair.write_target(target)
 
     def apply_messages(self) -> None:
@@ -403,6 +445,16 @@ class ADMMAgent(AreaAgent):
             ),
             default=0.0,
         )
+
+    def latest_target_actual_residual(self) -> Optional[float]:
+        """Return the latest target-versus-actual residual, if available."""
+        values = [
+            history[-1]
+            for neighbor_history in self.target_actual_residuals.values()
+            for history in neighbor_history.values()
+            if history
+        ]
+        return max(values) if values else None
 
     # ------------------------------------------------------------------
     # Dual storage
@@ -512,6 +564,18 @@ def _global_primal_residual(
     )
 
 
+def _global_target_actual_residual(
+    agents: dict[str, ADMMAgent],
+) -> float:
+    """Return the latest maximum target-versus-actual residual."""
+    values = [
+        residual
+        for agent in agents.values()
+        if (residual := agent.latest_target_actual_residual()) is not None
+    ]
+    return max(values) if values else float("nan")
+
+
 # ---------------------------------------------------------------------------
 # Main ADMM solve loop
 # ---------------------------------------------------------------------------
@@ -535,7 +599,7 @@ def solve_admm(
     **kwargs,
 ) -> PowerFlowResult:
     """Solve a decomposed OPF with ADMM proximal message passing."""
-    logger.setLevel(logging.DEBUG if verbose_admm else logging.WARNING)
+    _configure_logging(verbose_admm)
 
     tic = perf_counter()
 
@@ -565,6 +629,8 @@ def solve_admm(
     root_areas = _get_root_areas(area_info)
     boundaries: dict[str, BoundaryVars] = {}
     residual_per_iter: list[float] = []
+    iteration_summaries: list[dict[str, float | int]] = []
+    area_iteration_summaries: list[dict[str, object]] = []
     failed_areas: set[str] = set()
     any_area_solve_failed = False
     converged = False
@@ -590,6 +656,35 @@ def solve_admm(
         any_area_solve_failed |= iteration_solve_failed
 
         all_results = _agent_results(agents)
+        area_iteration_summaries.extend(
+            {
+                "iteration": iterations,
+                "area": area_name,
+                "objective": result.objective_value,
+                "solve_time": result.solve_time,
+                "converged": result.converged,
+                "solve_failed": area_name in failed_areas,
+                "solver_status": result.solver_status,
+                "termination_condition": result.termination_condition,
+                "has_result": True,
+            }
+            for area_name, result in all_results.items()
+        )
+        area_iteration_summaries.extend(
+            {
+                "iteration": iterations,
+                "area": area_name,
+                "objective": float("nan"),
+                "solve_time": float("nan"),
+                "converged": False,
+                "solve_failed": True,
+                "solver_status": None,
+                "termination_condition": None,
+                "has_result": False,
+            }
+            for area_name in agents
+            if area_name not in all_results
+        )
         boundaries = _agent_boundaries(agents)
 
         send_all_agent_messages(agents)
@@ -604,6 +699,22 @@ def solve_admm(
 
         residual = _global_primal_residual(agents)
         residual_per_iter.append(residual)
+        target_actual_residual = _global_target_actual_residual(agents)
+        solve_times = [
+            result.solve_time
+            for result in all_results.values()
+            if result.solve_time is not None
+        ]
+        iteration_summaries.append(
+            {
+                "iteration": iterations,
+                "objective": _aggregate_root_objective(all_results, root_areas),
+                "solve_time": sum(solve_times) if solve_times else float("nan"),
+                "solve_time_max": max(solve_times) if solve_times else float("nan"),
+                "target_actual_residual": target_actual_residual,
+                "primal_consensus_residual": residual,
+            }
+        )
 
         logger.info(
             "ADMM iteration %d primal residual: %.6e",
@@ -627,7 +738,7 @@ def solve_admm(
 
     runtime = perf_counter() - tic
 
-    return _finalize_enapp_result(
+    return _finalize_result(
         aggregated_result,
         case=case,
         objective_value=objective_value,
@@ -638,7 +749,12 @@ def solve_admm(
         termination_condition="converged" if converged else "max_iterations",
         area_results=all_results,
         boundary_errors=residual_per_iter,
+        iteration_summaries=pd.DataFrame(iteration_summaries),
+        area_iteration_summaries=pd.DataFrame(area_iteration_summaries),
         parallel_used=parallel_used,
         area_solve_failed=any_area_solve_failed,
         failed_areas=failed_areas,
+        solver="admm",
+        backend="admm",
+        metadata_prefix="admm",
     )
