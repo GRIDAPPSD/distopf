@@ -248,6 +248,11 @@ class PowerFlowResult:
                 },
                 "call": self.metadata["call"],
             }
+            if self.metadata.get("distributed_solver"):
+                run_config["distributed"] = {
+                    "solver": self.metadata["distributed_solver"],
+                    "area_info": self.metadata.get("area_info", {}),
+                }
             with open(output_dir / "run_config.json", "w") as f:
                 json.dump(run_config, f, indent=2, default=str)
 

@@ -531,6 +531,13 @@ def _finalize_result(
 
     result.case = case
     result.objective_value = objective_value
+    result.metadata = dict(result.metadata or {})
+    result.metadata.update(
+        {
+            "distributed_solver": solver,
+            "area_info": getattr(case, "_distributed_area_info", {}),
+        }
+    )
     result.solve_time = runtime
     result.iterations = iterations
     result.converged = converged

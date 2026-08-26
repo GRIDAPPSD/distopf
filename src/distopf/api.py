@@ -573,6 +573,84 @@ class Case:
             if handler:
                 self._disable_verbose(handler)
 
+    @record_call
+    def run_enapp(
+        self,
+        area_info: dict[str, dict[str, list]],
+        objective: Optional[str | Callable] = "loss_min",
+        swing_voltage_slack_penalty: float = 1e6,
+        damping_factor: float = 1.0,
+        tol: float = 1e-6,
+        max_iterations: int = 100,
+        parallel: bool = True,
+        solve_callback: Optional[Callable] = None,
+        iteration_callback: Optional[Callable] = None,
+        verbose_enapp: bool = False,
+        **kwargs,
+    ):
+        """Run the spatial ENAPP solver with replayable call metadata.
+
+        ``area_info`` must contain JSON-safe area topology records with
+        ``up_buses``, ``up_areas``, and ``down_areas`` lists. Named objectives
+        produce replayable runs; custom objectives or callbacks are retained for
+        interactive use but are marked non-replayable by ``record_call``.
+        """
+        _validate_area_info(area_info)
+        from distopf.distributed.spatial.enapp_agents import solve_enapp
+
+        return solve_enapp(
+            self,
+            area_info=area_info,
+            objective=objective,
+            swing_voltage_slack_penalty=swing_voltage_slack_penalty,
+            damping_factor=damping_factor,
+            tol=tol,
+            max_iterations=max_iterations,
+            parallel=parallel,
+            solve_callback=solve_callback,
+            iteration_callback=iteration_callback,
+            verbose_enapp=verbose_enapp,
+            **kwargs,
+        )
+
+    @record_call
+    def run_admm(
+        self,
+        area_info: dict[str, dict[str, list]],
+        objective: Optional[str | Callable] = "loss_min",
+        rho_v_up: float = 1e6,
+        rho_s_dn: float = 1e6,
+        rho_v_dn: float = 1e6,
+        rho_s_up: float = 1e6,
+        tol: float = 1e-4,
+        max_iterations: int = 200,
+        parallel: bool = True,
+        solve_callback: Optional[Callable] = None,
+        iteration_callback: Optional[Callable] = None,
+        verbose_admm: bool = False,
+        **kwargs,
+    ):
+        """Run the spatial ADMM solver with replayable call metadata."""
+        _validate_area_info(area_info)
+        from distopf.distributed.spatial.admm_agents import solve_admm
+
+        return solve_admm(
+            self,
+            area_info=area_info,
+            objective=objective,
+            rho_v_up=rho_v_up,
+            rho_s_dn=rho_s_dn,
+            rho_v_dn=rho_v_dn,
+            rho_s_up=rho_s_up,
+            tol=tol,
+            max_iterations=max_iterations,
+            parallel=parallel,
+            solve_callback=solve_callback,
+            iteration_callback=iteration_callback,
+            verbose_admm=verbose_admm,
+            **kwargs,
+        )
+
     # -------------------------------------------------------------------------
     # Model Creation Methods (for advanced users)
     # -------------------------------------------------------------------------
@@ -1114,7 +1192,48 @@ def replay(run_config_path: Path | str):
         **case_info.get("kwargs", {}),
     )
 
-    return getattr(case, call["method"])(**call["arguments"])
+    method = call["method"]
+    arguments = dict(call["arguments"])
+    if method in {"run_enapp", "run_admm"}:
+        if arguments.get("solve_callback") is not None or arguments.get(
+            "iteration_callback"
+        ) is not None:
+            raise ValueError(
+                "Distributed replay does not support solve_callback or "
+                "iteration_callback"
+            )
+        arguments["parallel"] = False
+    return getattr(case, method)(**arguments)
+
+
+def _validate_area_info(area_info: dict[str, dict[str, list]]) -> None:
+    """Validate the JSON-safe topology contract used by spatial solvers."""
+    import json
+
+    if not isinstance(area_info, dict) or not area_info:
+        raise ValueError("area_info must be a non-empty dictionary")
+    try:
+        json.dumps(area_info)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("area_info must be JSON-serializable") from exc
+
+    required = {"up_buses", "up_areas", "down_areas"}
+    for area_name, info in area_info.items():
+        if not isinstance(area_name, str) or not isinstance(info, dict):
+            raise ValueError("area_info keys must be strings and values dictionaries")
+        missing = required.difference(info)
+        if missing:
+            raise ValueError(
+                f"area_info[{area_name!r}] is missing required fields: "
+                f"{sorted(missing)}"
+            )
+        for field in required:
+            if not isinstance(info[field], list):
+                raise ValueError(f"area_info[{area_name!r}][{field!r}] must be a list")
+        if len(info["up_buses"]) != 1:
+            raise ValueError(
+                f"area_info[{area_name!r}]['up_buses'] must contain exactly one bus"
+            )
 
 
 def create_case(

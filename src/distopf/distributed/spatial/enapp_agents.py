@@ -191,6 +191,7 @@ def solve_enapp(
         raise ValueError("damping_factor must be between 0.0 and 1.0")
 
     _configure_logging(verbose_enapp)
+    case._distributed_area_info = area_info
 
     tic = perf_counter()
 

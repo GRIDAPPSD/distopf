@@ -600,6 +600,7 @@ def solve_admm(
 ) -> PowerFlowResult:
     """Solve a decomposed OPF with ADMM proximal message passing."""
     _configure_logging(verbose_admm)
+    case._distributed_area_info = area_info
 
     tic = perf_counter()
 
