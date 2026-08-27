@@ -137,8 +137,9 @@ class _InterfacePair:
 
 @dataclass
 class ADMMAgent(AreaAgent):
-    """Area agent implementing pairwise scaled ADMM."""
+    """Area agent implementing pairwise ADMM boundary coordination."""
 
+    scaled: bool = True
     u_s_up: pd.DataFrame = field(default_factory=_empty_boundary_frame)
     u_v_up: pd.DataFrame = field(default_factory=_empty_boundary_frame)
     u_s_down: pd.DataFrame = field(default_factory=_empty_boundary_frame)
@@ -404,22 +405,26 @@ class ADMMAgent(AreaAgent):
             pair.remote,
         )
 
-        # Scaled dual update:
-        #
-        #     u <- u + local - z
-        #
-        u_new = _add_frame(
-            pair.dual,
-            _minus_frame(pair.local, z),
-        )
+        if self.scaled:
+            # Scaled dual update:
+            #
+            #     u <- u + local - z
+            #
+            u_new = _add_frame(
+                pair.dual,
+                _minus_frame(pair.local, z),
+            )
+            pair.set_dual(u_new)
 
-        pair.set_dual(u_new)
-
-        # Local next-iteration target:
-        #
-        #     z - u
-        #
-        target = _minus_frame(z, u_new)
+            # Local next-iteration target:
+            #
+            #     z - u
+            #
+            target = _minus_frame(z, u_new)
+        else:
+            # Without scaled dual variables, use the arithmetic consensus
+            # directly as the next local target.
+            target = z
         self.pending_targets[target_key] = target.copy()
         pair.write_target(target)
 
@@ -427,7 +432,8 @@ class ADMMAgent(AreaAgent):
         """
         Process current messages, update ADMM variables, and write targets.
         """
-        self._initialize_duals_if_needed()
+        if self.scaled:
+            self._initialize_duals_if_needed()
 
         for pair in self._interface_pairs():
             self._process_interface_pair(pair)
@@ -535,6 +541,7 @@ class ADMMAgent(AreaAgent):
 def create_admm_agents(
     cases: dict[str, Case],
     area_info: dict[str, dict[str, list]],
+    scaled: bool = True,
 ) -> dict[str, ADMMAgent]:
     base_agents = create_area_agents(cases, area_info)
 
@@ -544,6 +551,7 @@ def create_admm_agents(
             case=agent.case,
             down_areas=agent.down_areas,
             upstream_recipients=agent.upstream_recipients,
+            scaled=scaled,
         )
         for area_name, agent in base_agents.items()
     }
@@ -585,6 +593,7 @@ def solve_admm(
     case: opf.Case,
     area_info: dict[str, dict[str, list]],
     objective: Callable | str,
+    scaled: bool = True,
     # rho: float = 1e6,
     rho_v_up: float = 1e6,
     rho_s_dn: float = 1e6,
@@ -607,7 +616,7 @@ def solve_admm(
     sources = {area_name: info["up_buses"][0] for area_name, info in area_info.items()}
 
     cases = decompose(case, sources)
-    agents = create_admm_agents(cases, area_info)
+    agents = create_admm_agents(cases, area_info, scaled=scaled)
 
     if "free_swing_voltage" in kwargs:
         raise TypeError("free_swing_voltage is controlled by solve_admm")

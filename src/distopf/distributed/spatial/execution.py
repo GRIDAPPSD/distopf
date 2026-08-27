@@ -155,6 +155,14 @@ def _aggregate_root_objective(
     results: dict[str, PowerFlowResult],
     root_areas: set[str],
 ) -> Optional[float]:
+    """Return the objective represented by the upstream/root area result.
+
+    The root area contains the system swing and therefore its objective is
+    already a system-level value. Summing multiple roots is retained for
+    disconnected decompositions, but child-area objectives must not be added:
+    they duplicate the same network objective and can make ADMM comparisons
+    meaningless.
+    """
     objective_values = [
         result.objective_value
         for area_name, result in results.items()

@@ -6,6 +6,7 @@ import pytest
 import distopf as opf
 from distopf.distributed.spatial.admm_agents import (
     ADMMAgent,
+    _average_boundary_frames,
     create_admm_agents,
 )
 from distopf.distributed.spatial.decompose import decompose
@@ -147,6 +148,43 @@ def test_admm_target_actual_residual_uses_maximum_frame_difference():
     target.loc[0, "b"] = 0.7
 
     assert ADMMAgent._frame_residual(local, target) == pytest.approx(0.2)
+
+
+def test_unscaled_admm_uses_consensus_without_updating_dual():
+    local = pd.DataFrame(
+        {
+            "name": ["area"],
+            "t": [0],
+            "a": [1.0],
+            "b": [0.9],
+            "c": [1.1],
+        }
+    )
+    remote = local.copy()
+    remote.loc[0, ["a", "b", "c"]] = [0.8, 1.0, 1.3]
+    written = []
+    dual_updates = []
+
+    agent = ADMMAgent("area", object(), [], scaled=False)
+    pair = type(
+        "Pair",
+        (),
+        {
+            "neighbor": "remote",
+            "variable": "v",
+            "local": local,
+            "remote": remote,
+            "dual": local.copy(),
+            "set_dual": dual_updates.append,
+            "write_target": written.append,
+        },
+    )()
+
+    agent._process_interface_pair(pair)
+
+    pd.testing.assert_frame_equal(written[0], _average_boundary_frames(local, remote))
+    assert dual_updates == []
+    assert agent.pending_targets[("remote", "v")].equals(written[0])
 
 
 def test_algorithm_neutral_finalizer_preserves_identity():

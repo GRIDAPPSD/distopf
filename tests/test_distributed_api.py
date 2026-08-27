@@ -49,6 +49,25 @@ def test_area_info_validation():
         )
 
 
+def test_admm_scaled_option_is_recorded_and_replayed(tmp_path):
+    result = _case().run_admm(
+        area_info=AREA_INFO,
+        objective="substation_power",
+        scaled=False,
+        parallel=False,
+        max_iterations=1,
+        control_regulators=False,
+        solver="ipopt",
+    )
+    result.save(tmp_path)
+
+    config = json.loads((tmp_path / "run_config.json").read_text())
+    assert config["call"]["arguments"]["scaled"] is False
+
+    replayed = opf.replay(tmp_path / "run_config.json")
+    assert replayed.metadata["call"]["arguments"]["scaled"] is False
+
+
 def test_enapp_save_and_replay(tmp_path):
     result = _case().run_enapp(
         area_info=AREA_INFO,
