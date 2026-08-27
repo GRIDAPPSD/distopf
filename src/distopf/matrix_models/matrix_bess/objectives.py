@@ -309,7 +309,7 @@ def cp_obj_energy_cost_min(model: LinDistBaseMP, xk, **kwargs):
 
 
 def cp_obj_demand_cost_min(model: LinDistBaseMP, xk, **kwargs):
-    demand_charge = kwargs.get("demand_charge") * 1000  # convert to $/MW
+    demand_charge = kwargs.get("demand_charge")
     edges = np.array([])
     for t in range(model.start_step, model.start_step + model.n_steps):
         for a in "abc":

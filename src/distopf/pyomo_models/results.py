@@ -44,6 +44,16 @@ class PyoResult:
         for var in vars:
             setattr(self, var, get_values(getattr(model, var)))
 
+        self.validate_u_reg()
+        if getattr(self, "u_reg", None) is not None:
+            self.reg_taps = self.u_reg.loc[self.u_reg.value == 1].copy()
+            self.reg_taps["tap"] -= 16
+            self.reg_taps = self.reg_taps.drop(columns=["value"]).reset_index(drop=True)
+            self.reg_taps = self.reg_taps.pivot(
+                index=["fb", "tb", "from_name", "to_name", "t"],
+                columns="phase",
+                values="tap",
+            ).reset_index()
         # Backward-compatibility enrichment for legacy flow extraction output.
         # New branch-indexed flows already contain fb/tb columns.
         flow_vars = ["p_flow", "q_flow"]
@@ -59,6 +69,13 @@ class PyoResult:
                 self._populate_common_duals(model)
             except KeyError as e:
                 print(f"Warning: Could not extract duals for some constraints: {e}")
+
+    def validate_u_reg(self):
+        """Validate that u_reg variable is present and has only binary values."""
+        if hasattr(self, "u_reg"):
+            u_reg_df = getattr(self, "u_reg")
+            if not ((u_reg_df["value"] == 0) | (u_reg_df["value"] == 1)).all():
+                raise ValueError("u_reg DataFrame contains non-binary values.")
 
     def _populate_common_duals(self, model: pyo.ConcreteModel | LindistModelProtocol):
         """Populate commonly-used dual attributes for convenience.
@@ -152,6 +169,8 @@ class PyoResult:
 def get_values(var: pyo.Var) -> pd.DataFrame:
     """Extract variable values and pivot to wide format."""
     df = get_values_tidy(var)
+    if var.name == "u_reg":
+        return df
     if df.empty:
         return df
     if {"fb", "tb", "from_name", "to_name"}.issubset(df.columns):
@@ -226,6 +245,32 @@ def get_values_tidy(var: pyo.Var) -> pd.DataFrame:
                 for (fb, tb, _ph, t), _val in var.extract_values().items()
             ],
             columns=["fb", "tb", "from_name", "to_name", "t", "phase", "value"],
+        )
+    if var.dim() == 5:
+        return pd.DataFrame(
+            data=[
+                [
+                    fb,
+                    tb,
+                    var.model().name_map[fb],
+                    var.model().name_map[tb],
+                    t,
+                    _ph,
+                    tap,
+                    _val,
+                ]
+                for (fb, tb, _ph, tap, t), _val in var.extract_values().items()
+            ],
+            columns=[
+                "fb",
+                "tb",
+                "from_name",
+                "to_name",
+                "t",
+                "phase",
+                "tap",
+                "value",
+            ],
         )
     return pd.DataFrame(columns=["id", "name", "t", "phase", "value"])
 

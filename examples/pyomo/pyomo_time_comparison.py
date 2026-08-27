@@ -88,8 +88,8 @@ results = opt.solve(model)
 t5 = perf_counter()
 # Extract and display results
 if results.solver.status == pyo.SolverStatus.ok:
-    print("Optimization successful!")
-    print(f"Objective value: {pyo.value(model.objective)}")
+    # print("Optimization successful!")
+    # print(f"Objective value: {pyo.value(model.objective)}")
     # # data = get_all_results(model, case)
     res = PyoResult(model)
     # s = res.p_flow.copy()

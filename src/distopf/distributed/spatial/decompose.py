@@ -79,6 +79,40 @@ def nodes_to_df(graph, key):
     return df
 
 
+def _ensure_schedule_horizon(schedules: pd.DataFrame, case_ref: Case) -> pd.DataFrame:
+    """Ensure decomposed cases always have rows for the active time horizon."""
+    active_times = list(
+        range(case_ref.start_step, case_ref.start_step + case_ref.n_steps)
+    )
+    if len(active_times) == 0:
+        return schedules
+
+    if schedules is None or schedules.empty:
+        schedules = pd.DataFrame({"time": active_times})
+    else:
+        schedules = schedules.copy()
+        if "time" not in schedules.columns:
+            schedules["time"] = schedules.index
+
+    schedules = schedules.drop_duplicates(subset="time", keep="last")
+    schedules = schedules.sort_values(by="time", ignore_index=True)
+    schedules.index = schedules.time.to_numpy()
+
+    missing_times = [t for t in active_times if t not in schedules.index]
+    if missing_times:
+        missing_df = pd.DataFrame({"time": missing_times})
+        missing_df.index = missing_df.time.to_numpy()
+        schedules = pd.concat([schedules, missing_df], ignore_index=False, sort=False)
+        schedules = schedules.sort_index()
+        schedules = schedules.sort_values(by="time", ignore_index=True)
+        schedules.index = schedules.time.to_numpy()
+
+    # Filter to ONLY active time steps (not just ensure they exist)
+    schedules = schedules.loc[schedules["time"].isin(active_times)]
+    schedules.index = schedules.time.to_numpy()
+    return schedules
+
+
 def graph_to_case(graph, case_ref, remap_ids=False):
     branch_data = edges_to_df(graph, "branch_data")
     bus_data = nodes_to_df(graph, "bus_data")
@@ -86,9 +120,11 @@ def graph_to_case(graph, case_ref, remap_ids=False):
     bat_data = nodes_to_df(graph, "bat_data")
     cap_data = nodes_to_df(graph, "cap_data")
     reg_data = edges_to_df(graph, "reg_data")
-    schedules = deepcopy(case_ref.schedules)
+    schedules = _ensure_schedule_horizon(deepcopy(case_ref.schedules), case_ref)
+    original_load_shapes = set(case_ref.bus_data.load_shape.astype(str).to_list())
     if remap_ids:
-        sources = bus_data.loc[bus_data.bus_type == "SWING", "name"].to_list()
+        swing_mask = bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+        sources = bus_data.loc[swing_mask, "name"].to_list()
         assert len(sources) == 1
         source = sources[0]
         id_map = remap_node_ids(graph, source)
@@ -100,8 +136,10 @@ def graph_to_case(graph, case_ref, remap_ids=False):
         branch_data["tb"] = branch_data.to_name.map(id_map)
         reg_data["fb"] = reg_data.from_name.map(id_map)
         reg_data["tb"] = reg_data.to_name.map(id_map)
-    for load_shape in bus_data.load_shape.to_list():
-        if load_shape not in schedules.columns and load_shape != "":
+    for load_shape in bus_data.load_shape.astype(str).to_list():
+        if load_shape == "" or load_shape in original_load_shapes:
+            continue
+        if load_shape not in schedules.columns:
             schedules[f"{load_shape}.a.p"] = 0.0
             schedules[f"{load_shape}.b.p"] = 0.0
             schedules[f"{load_shape}.c.p"] = 0.0
@@ -109,17 +147,11 @@ def graph_to_case(graph, case_ref, remap_ids=False):
             schedules[f"{load_shape}.b.q"] = 0.0
             schedules[f"{load_shape}.c.q"] = 0.0
     if "v_a" not in schedules.columns:
-        schedules["v_a"] = bus_data.loc[bus_data.bus_type == "SWING", "v_a"].to_numpy()[
-            0
-        ]
+        schedules["v_a"] = bus_data.loc[swing_mask, "v_a"].to_numpy()[0]
     if "v_b" not in schedules.columns:
-        schedules["v_b"] = bus_data.loc[bus_data.bus_type == "SWING", "v_b"].to_numpy()[
-            0
-        ]
+        schedules["v_b"] = bus_data.loc[swing_mask, "v_b"].to_numpy()[0]
     if "v_c" not in schedules.columns:
-        schedules["v_c"] = bus_data.loc[bus_data.bus_type == "SWING", "v_c"].to_numpy()[
-            0
-        ]
+        schedules["v_c"] = bus_data.loc[swing_mask, "v_c"].to_numpy()[0]
     return Case(
         branch_data=branch_data,
         bus_data=bus_data,
@@ -193,7 +225,9 @@ def decompose_graph(graph, sources):
             name=down_area,
             bus_id=len(up_area_graph.nodes) + 1,
             load_shape=down_area,
-            bus_type="PQ",
+            bus_type="OUT",
+            boundary_type="downstream_load",
+            boundary_area=down_area,
         )
         # up_area_graph.add_node(to_bus, **source_data[down_area])
 
@@ -238,7 +272,9 @@ def decompose_graph(graph, sources):
             name=up_area,
             bus_id=1,
             load_shape="",
-            bus_type="SWING",
+            bus_type="IN",
+            boundary_type="upstream_swing",
+            boundary_area=down_area,
         )
         dummy_swing_edge_data = make_new_edge(
             template_data=boundaries_data[down_area],
@@ -255,18 +291,32 @@ def decompose_graph(graph, sources):
     return area_graphs
 
 
-def make_new_node(template_data, name, bus_id, load_shape, bus_type):
+def make_new_node(
+    template_data,
+    name,
+    bus_id,
+    load_shape,
+    bus_type,
+    boundary_type="",
+    boundary_area="",
+):
     data = deepcopy(template_data)
     data["bus_data"].loc[:, ["id"]] = bus_id
     data["bus_data"].loc[:, ["name"]] = name
+
     default_load = 1
-    if bus_type == "SWING":
+    if bus_type in ("SWING", "SWING_FREE", "IN"):
         default_load = 0
+
     data["bus_data"].loc[:, ["pl_a", "pl_b", "pl_c"]] = default_load
     data["bus_data"].loc[:, ["ql_a", "ql_b", "ql_c"]] = default_load
     data["bus_data"].loc[:, ["has_gen", "has_load", "has_cap"]] = False
     data["bus_data"].loc[:, ["load_shape"]] = load_shape
     data["bus_data"].loc[:, ["bus_type"]] = bus_type
+
+    data["bus_data"].loc[:, "boundary_type"] = boundary_type
+    data["bus_data"].loc[:, "boundary_area"] = boundary_area
+
     data["gen_data"] = data["gen_data"].drop(index=data["gen_data"].index)
     data["bat_data"] = data["bat_data"].drop(index=data["bat_data"].index)
     data["cap_data"] = data["cap_data"].drop(index=data["cap_data"].index)

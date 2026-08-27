@@ -62,8 +62,8 @@ results = opt.solve(model)
 
 # Extract and display results
 if results.solver.status == pyo.SolverStatus.ok:
-    print("Optimization successful!")
-    print(f"Objective value: {pyo.value(model.objective)}")
+    # print("Optimization successful!")
+    # print(f"Objective value: {pyo.value(model.objective)}")
     # data = get_all_results(model, case)
     sol = PyoResult(model)
     plot_voltages(sol.voltages, t=0).show(renderer="browser")

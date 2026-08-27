@@ -82,6 +82,16 @@ class PowerFlowResult:
         Error details if solve failed
     case_name : str or None
         Case identifier for benchmarking and result tracking
+    area_results : dict[str, PowerFlowResult] or None
+        Per-area results for ENAPP/decomposed solves.
+    boundary_error_per_iter : list[float] or None
+        Boundary mismatch metric over ENAPP iterations.
+    enapp_iterations : int or None
+        Number of ENAPP coordination iterations.
+    enapp_runtime : float or None
+        Total ENAPP runtime in seconds.
+    enapp_parallel_used : bool or None
+        Whether ENAPP multiprocessing remained enabled throughout solve.
     raw_result : Any
         Raw result object from the underlying solver (for advanced access)
     model : Any
@@ -163,6 +173,15 @@ class PowerFlowResult:
     error_message: Optional[str] = None  # Error details if solve failed
     case_name: Optional[str] = None  # Case identifier for benchmarking
 
+    # Distributed solver metadata
+    area_results: Optional[dict[str, "PowerFlowResult"]] = None
+    boundary_error_per_iter: Optional[list[float]] = None
+    iteration_summaries: Optional[pd.DataFrame] = None
+    area_iteration_summaries: Optional[pd.DataFrame] = None
+    enapp_iterations: Optional[int] = None
+    enapp_runtime: Optional[float] = None
+    enapp_parallel_used: Optional[bool] = None
+
     # References (not included in repr for cleanliness)
     raw_result: Any = field(default=None, repr=False)
     model: Any = field(default=None, repr=False)
@@ -215,20 +234,44 @@ class PowerFlowResult:
 
         # 4. Unified run config — the single file replay needs
         if self.metadata and "call" in self.metadata:
+            case_config = {
+                "source": "csv",
+                "path": "input",
+                "replay_source": "snapshot",
+                "kwargs": (
+                    self.case._construction_kwargs()
+                    if self.case is not None
+                    else {}
+                ),
+                "modifications": (
+                    self.case._replay_metadata()["modifications"]
+                    if self.case is not None
+                    else {}
+                ),
+            }
+            if self.case is not None and self.case._source_path is not None:
+                try:
+                    import os
+
+                    case_config["base_path"] = os.path.relpath(
+                        self.case._source_path, output_dir.resolve()
+                    )
+                except ValueError:
+                    # On platforms with different filesystem drives, retaining
+                    # the absolute path is more useful than dropping provenance.
+                    case_config["base_path"] = self.case._source_path
+
             run_config = {
                 "schema_version": 1,
                 "provenance": self.metadata.get("provenance", {}),
-                "case": {
-                    "source": "csv",
-                    "path": "input",
-                    "kwargs": (
-                        self.case._construction_kwargs()
-                        if self.case is not None
-                        else {}
-                    ),
-                },
+                "case": case_config,
                 "call": self.metadata["call"],
             }
+            if self.metadata.get("distributed_solver"):
+                run_config["distributed"] = {
+                    "solver": self.metadata["distributed_solver"],
+                    "area_info": self.metadata.get("area_info", {}),
+                }
             with open(output_dir / "run_config.json", "w") as f:
                 json.dump(run_config, f, indent=2, default=str)
 
@@ -283,6 +326,8 @@ class PowerFlowResult:
 
     def plot_power_flows(self, t=None):
         """Plot branch power flows."""
+        if self.active_power_flows is None or self.reactive_power_flows is None:
+            raise RuntimeError("No results available.")
         from distopf.plot import plot_power_flows
 
         return plot_power_flows(self.active_power_flows, self.reactive_power_flows, t=t)

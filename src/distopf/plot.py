@@ -163,44 +163,73 @@ def compare_voltages(v1: pd.DataFrame, v2: pd.DataFrame, t=None) -> go.Figure:
     v2 = _remove_empty_triplex_phases(v2)
     v1 = v1.copy()
     v2 = v2.copy()
-    if "id" not in v1.columns:
-        v1["id"] = v1.index
-    if "name" not in v1.columns:
-        v1["name"] = v1["id"]
-    if "id" not in v2.columns:
-        v2["id"] = v2.index
-    if "name" not in v2.columns:
-        v2["name"] = v2["id"]
-    t1 = t2 = t
-    if t is None and "t" in v1.columns:
-        t1 = min(v1.t)
-    if t is None and "t" in v2.columns:
-        t2 = min(v2.t)
-    if "t" in v1.columns and "t" in v2.columns:
-        assert t1 == t2
-    if "t" in v1.columns:
-        v1 = pd.DataFrame(v1.loc[v1.t == t1, :])
-        v1 = v1.drop("t", axis=1)
-    if "t" in v2.columns:
-        v2 = pd.DataFrame(v2.loc[v2.t == t2, :])
-        v2 = v2.drop("t", axis=1)
-    v1 = v1.melt(
-        ignore_index=True, var_name="phase", id_vars=["id", "name"], value_name="v1"
+
+    for df in (v1, v2):
+        if "id" not in df.columns:
+            df["id"] = df.index
+        if "name" not in df.columns:
+            df["name"] = df["id"]
+
+    has_t1 = "t" in v1.columns
+    has_t2 = "t" in v2.columns
+
+    # If user passed a specific t, filter to that single timestep
+    if t is not None:
+        if has_t1:
+            v1 = v1.loc[v1.t == t, :]
+        if has_t2:
+            v2 = v2.loc[v2.t == t, :]
+
+    id_vars1 = ["id", "name"] + (["t"] if "t" in v1.columns else [])
+    id_vars2 = ["id", "name"] + (["t"] if "t" in v2.columns else [])
+
+    v1m = v1.melt(
+        ignore_index=True, var_name="phase", id_vars=id_vars1, value_name="v1"
     )
-    v2 = v2.melt(
-        ignore_index=True, var_name="phase", id_vars=["id", "name"], value_name="v2"
+    v2m = v2.melt(
+        ignore_index=True, var_name="phase", id_vars=id_vars2, value_name="v2"
     )
-    v = pd.merge(v1, v2, on=["id", "name", "phase"])
+
+    merge_keys = ["id", "name", "phase"]
+    if "t" in v1m.columns and "t" in v2m.columns:
+        merge_keys.append("t")
+
+    v = pd.merge(v1m, v2m, on=merge_keys)
+
+    long_id_vars = ["id", "name", "phase"] + (["t"] if "t" in v.columns else [])
     v = v.melt(
         ignore_index=True,
         var_name="value",
-        id_vars=["id", "name", "phase"],
+        id_vars=long_id_vars,
         value_name="v",
-    ).sort_values(by=["id", "phase"])
-    # v1["v1"] = v1["v1"].astype(float)
-    # v2["v2"] = v2["v2"].astype(float)
-    # v = pd.merge(v1, v2, on=["name", "phase"])
-    fig = px.line(v, x="name", facet_col="phase", y="v", color="value", markers=True)
+    ).sort_values(by=long_id_vars)
+
+    # Build figure - use animation_frame if we have a time column
+    if "t" in v.columns and v["t"].nunique() > 1:
+        v = v.sort_values(by=["t", "id", "phase"])
+        fig = px.line(
+            v,
+            x="name",
+            facet_col="phase",
+            y="v",
+            color="value",
+            markers=True,
+            animation_frame="t",
+        )
+        # Fix y-axis range so it doesn't jump between frames
+        ymin, ymax = v["v"].min(), v["v"].max()
+        pad = (ymax - ymin) * 0.05 if ymax > ymin else 1
+        fig.update_yaxes(range=[ymin - pad, ymax + pad])
+    else:
+        fig = px.line(
+            v,
+            x="name",
+            facet_col="phase",
+            y="v",
+            color="value",
+            markers=True,
+        )
+
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
     fig.for_each_xaxis(lambda a: a.update(title="Bus Name"))
     return fig
@@ -566,7 +595,7 @@ def plot_pq(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
     return fig
 
 
-def compare_flows(s1: pd.DataFrame, s2: pd.DataFrame) -> go.Figure:
+def compare_flows(s1: pd.DataFrame, s2: pd.DataFrame, t=None) -> go.Figure:
     """
     Similar to plot_power_flows but plots two results side by side.
     Parameters
@@ -591,48 +620,73 @@ def compare_flows(s1: pd.DataFrame, s2: pd.DataFrame) -> go.Figure:
     if "to_name" not in s2.columns:
         s2["to_name"] = s2.tb
 
-    s1 = s1.melt(
-        ignore_index=True,
-        id_vars=["fb", "tb", "from_name", "to_name"],
-        var_name="phase",
-        value_name="s",
+    has_t1 = "t" in s1.columns
+    has_t2 = "t" in s2.columns
+
+    # If user passed a specific t, filter to that single timestep
+    if t is not None:
+        if has_t1:
+            s1 = s1.loc[s1.t == t, :]
+        if has_t2:
+            s2 = s2.loc[s2.t == t, :]
+
+    id_vars1 = ["fb", "tb", "from_name", "to_name"] + (
+        ["t"] if "t" in s1.columns else []
     )
+    id_vars2 = ["fb", "tb", "from_name", "to_name"] + (
+        ["t"] if "t" in s2.columns else []
+    )
+    s1 = s1.melt(ignore_index=True, var_name="phase", id_vars=id_vars1, value_name="s")
     s1["p"] = s1.s.apply(np.real)
     s1["q"] = s1.s.apply(np.imag)
     del s1["s"]
-    s1 = s1.melt(
-        ignore_index=True,
-        id_vars=["fb", "tb", "from_name", "to_name", "phase"],
-        var_name="part",
-        value_name="s1",
-    )
-    s2 = s2.melt(
-        ignore_index=True,
-        id_vars=["fb", "tb", "from_name", "to_name"],
-        var_name="phase",
-        value_name="s",
-    )
+    id_vars1 = id_vars1 + ["phase"]
+    s1 = s1.melt(ignore_index=True, var_name="part", id_vars=id_vars1, value_name="s1")
+
+    s2 = s2.melt(ignore_index=True, var_name="phase", id_vars=id_vars2, value_name="s")
     s2["p"] = s2.s.apply(np.real)
     s2["q"] = s2.s.apply(np.imag)
     del s2["s"]
-    s2 = s2.melt(
-        ignore_index=True,
-        id_vars=["fb", "tb", "from_name", "to_name", "phase"],
-        var_name="part",
-        value_name="s2",
-    )
-    s = pd.merge(
-        s1, s2, on=["fb", "tb", "from_name", "to_name", "phase", "part"], how="outer"
-    )
-    fig = px.bar(
-        s,
-        x="to_name",
-        y=["s1", "s2"],
-        facet_col="phase",
-        facet_row="part",
-        barmode="group",
-        labels={"to_name": "To-Bus Name"},
-    )
+    id_vars2 = id_vars2 + ["phase"]
+    s2 = s2.melt(ignore_index=True, var_name="part", id_vars=id_vars2, value_name="s2")
+
+    merge_keys = ["fb", "tb", "from_name", "to_name", "phase", "part"]
+    if "t" in s1.columns and "t" in s2.columns:
+        merge_keys.append("t")
+
+    s = pd.merge(s1, s2, on=merge_keys, how="outer")
+
+    s = s.melt(
+        ignore_index=True, var_name="value", id_vars=merge_keys, value_name="power"
+    ).sort_values(by=["t", "tb", "phase", "part"])
+    # Build figure - use animation_frame if we have a time column
+    if "t" in s.columns and s["t"].nunique() > 1:
+        s = s.sort_values(by=["t", "tb", "phase", "part"])
+        fig = px.bar(
+            s,
+            x="to_name",
+            y="power",
+            color="value",
+            facet_col="phase",
+            facet_row="part",
+            barmode="group",
+            labels={"to_name": "To-Bus Name"},
+            animation_frame="t",
+        )
+        ymin, ymax = s["power"].min(), s["power"].max()
+        pad = (ymax - ymin) * 0.05 if ymax > ymin else 1
+        fig.update_yaxes(range=[ymin - pad, ymax + pad])
+    else:
+        fig = px.bar(
+            s,
+            x="to_name",
+            y="power",
+            color="value",
+            facet_col="phase",
+            facet_row="part",
+            barmode="group",
+            labels={"to_name": "To-Bus Name"},
+        )
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].upper()))
     fig.update_layout(
         yaxis4_title="Active Power (p.u.)",
@@ -798,8 +852,10 @@ def calculate_nodal_distances(case):
     """
     from collections import deque
 
-    # Find swing bus
-    swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
+    # Find real or decomposed input swing bus.
+    swing_buses = case.bus_data[
+        case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+    ]
     source_bus = swing_buses.at[swing_buses.index[0], "id"]
 
     # Build adjacency list
@@ -1885,8 +1941,10 @@ def _make_title(show_phases, show_reactive_power):
 
 
 def _make_asset_markers(bus_data, cap_data, gen_data, bat_data, node_size):
-    # Add substation marker
-    substation_buses = bus_data.loc[bus_data.bus_type == "SWING", :]
+    # Add substation/input-boundary marker
+    substation_buses = bus_data.loc[
+        bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"]), :
+    ]
     substation_trace = go.Scatter(
         x=substation_buses["x"],
         y=substation_buses["y"],

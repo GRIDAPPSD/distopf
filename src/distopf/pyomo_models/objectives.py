@@ -118,6 +118,113 @@ def cost_minimization_rule(m):
     return total_cost
 
 
+def substation_cost_objective_rule(model: LindistModelProtocol):
+    """
+    Minimize total cost of buying energy from the transmission system by
+    using the schedule_price and substation load.
+    """
+    total_cost = 0
+    for _id, ph in model.branch_phase_set:
+        for t in model.time_set:
+            if model.from_bus_map[_id] in model.swing_bus_set:
+                total_cost += model.p_flow[_id, ph, t] * model.schedule_price[t]
+    return total_cost
+
+
+def gen_cost_rule(model: LindistModelProtocol):
+    generation_cost = 0
+    for _id, ph in model.gen_phase_set:
+        for t in model.time_set:
+            generation_cost += (
+                model.p_gen[_id, ph, t] * model.gen_cost[_id, ph] * model.delta_t
+            )
+    return generation_cost
+
+
+def total_cost_rule(model: LindistModelProtocol):
+    return gen_cost_rule(model) + substation_cost_objective_rule(model)
+
+
+def generation_cost_with_substation_quadratic_penalty_objective_rule(
+    model: LindistModelProtocol,
+    substation_penalty_weight: float = 1e6,
+):
+    """
+    Minimize generation energy cost plus quadratic penalty on substation load.
+
+    Generation energy cost uses ``schedule_price[t]`` when available and
+    falls back to a unit price of 1.0 when price data is not defined.
+
+    The substation term penalizes nonzero active power exchange at the swing
+    bus by summing squared substation active power flows across phases/time.
+
+    Parameters
+    ----------
+    model : LindistModelProtocol
+        Pyomo model.
+    substation_penalty_weight : float
+        Weight for the quadratic substation load penalty.
+
+    Returns
+    -------
+    Pyomo expression for total generation cost + substation penalty.
+    """
+    print(f"Substation penalty weight: {substation_penalty_weight}")
+    generation_cost = 0
+    for _id, ph in model.gen_phase_set:
+        for t in model.time_set:
+            energy_price = (
+                model.schedule_price[t] if hasattr(model, "schedule_price") else 1.0
+            )
+            generation_cost += model.p_gen[_id, ph, t] * energy_price
+
+    substation_penalty = 0
+    for _id, ph in model.branch_phase_set:
+        for t in model.time_set:
+            if model.from_bus_map[_id] in model.swing_bus_set:
+                substation_penalty += model.p_flow[_id, ph, t] ** 2
+
+    return gen_cost_rule(model) + 1e6 * substation_penalty
+
+
+def demand_charge_objective_rule(model: LindistModelProtocol):
+    """
+    Minimize demand charge based on peak substation power.
+
+    Penalizes the maximum active power flow from the substation across all time steps.
+    This is a nonlinear objective due to the max() operation.
+
+    Parameters
+    ----------
+    model : LindistModelProtocol
+        Pyomo model
+
+    Returns
+    -------
+    Pyomo expression for demand charge based on peak substation power
+    """
+    if not hasattr(model, "demand_charge"):
+        return 0
+    peak_power = 0
+    for _id, ph in model.branch_phase_set:
+        for t in model.time_set:
+            if model.from_bus_map[_id] in model.swing_bus_set:
+                peak_power = pyo.maximize(peak_power, model.p_flow[_id, ph, t])
+    return peak_power * model.demand_charge
+
+
+# Combined energy and demand charge minimization objective
+def combined_energy_and_demand_charge_objective_rule(model: LindistModelProtocol):
+    """
+    Minimize total energy cost plus demand charge.
+
+    Returns
+    -------
+    Pyomo expression for total cost (energy + demand charge)
+    """
+    return substation_cost_objective_rule(model) + demand_charge_objective_rule(model)
+
+
 # ============ Penalty Functions for Soft Constraints ==================================
 # ======================================================================================
 #
@@ -428,6 +535,102 @@ def create_penalized_objective(
     return pyo.Objective(rule=objective_rule, sense=pyo.minimize)
 
 
+# ============ Penalty Functions for ADMM ==============================================
+# ======================================================================================
+def admm_v_up_penalty(m, rho: float = 1.0):
+    """Quadratic penalty on this area's upstream voltage.
+
+    Compares v2 at the swing bus to (v_swing_target)^2 loaded from the
+    schedule v_a/v_b/v_c columns.
+    """
+    if not hasattr(m, "swing_phase_set"):
+        return 0
+
+    penalty = 0
+    for _id, ph in m.swing_phase_set:
+        for t in m.time_set:
+            v_target_sq = m.v_swing[_id, ph, t] ** 2
+            penalty += (m.v2[_id, ph, t] - v_target_sq) ** 2
+
+    return 0.5 * rho * penalty
+
+
+def admm_s_up_penalty(m, rho: float = 1.0):
+    """Quadratic penalty on this area's total upstream power.
+
+    For each swing bus and phase, sums P (and Q) flows on all branches
+    leaving the swing bus and compares the total to the target stored in
+    the schedule under '<parent>.<phase>.p' and '<parent>.<phase>.q'.
+    """
+    # Group outgoing swing-bus branches by (swing_bus, phase).
+    swing_branches: dict[tuple[int, str], list[tuple[int, int]]] = {}
+    for fb, tb, ph in m.branch_phase_set:
+        if fb not in m.swing_bus_set:
+            continue
+        swing_branches.setdefault((fb, ph), []).append((fb, tb))
+
+    penalty = 0
+    for (fb, ph), branches in swing_branches.items():
+        area_name = m.name_map[fb]
+        p_param = getattr(m, f"schedule_{area_name}.{ph}.p", None)
+        q_param = getattr(m, f"schedule_{area_name}.{ph}.q", None)
+        if p_param is None or q_param is None:
+            continue
+
+        for t in m.time_set:
+            p_total = sum(m.p_flow[f, tt, ph, t] for f, tt in branches)
+            q_total = sum(m.q_flow[f, tt, ph, t] for f, tt in branches)
+            penalty += (p_total - p_param[t]) ** 2
+            penalty += (q_total - q_param[t]) ** 2
+
+    return 0.5 * rho * penalty
+
+
+def admm_v_down_penalty(m, rho: float = 1.0):
+    """Quadratic penalty on this area's downstream (child) voltages.
+
+    Applies to dummy child buses whose voltage targets are stored in
+    schedule columns '<child>.<phase>.v'.
+    """
+    penalty = 0
+
+    for _id, ph in m.bus_phase_set:
+        area_name = m.name_map[_id]
+        v_param = getattr(m, f"schedule_{area_name}.{ph}.v", None)
+        if v_param is None:
+            continue
+
+        for t in m.time_set:
+            v_target_sq = v_param[t] ** 2
+            penalty += (m.v2[_id, ph, t] - v_target_sq) ** 2
+
+    return 0.5 * rho * penalty
+
+
+def admm_s_down_penalty(m, rho: float = 1.0):
+    """Quadratic penalty on this area's downstream (child) power.
+
+    Applies to loads at dummy child buses whose P and Q targets are stored
+    in schedule columns '<child>.<phase>.p' and '<child>.<phase>.q'.
+    """
+    penalty = 0
+
+    for _id, ph in m.bus_phase_set:
+        if _id in m.swing_bus_set:
+            continue
+        area_name = m.name_map[_id]
+        p_param = getattr(m, f"schedule_{area_name}.{ph}.p", None)
+        q_param = getattr(m, f"schedule_{area_name}.{ph}.q", None)
+        if p_param is None or q_param is None:
+            continue
+
+        for t in m.time_set:
+            penalty += (m.p_load[_id, ph, t] - p_param[t]) ** 2
+            penalty += (m.q_load[_id, ph, t] - q_param[t]) ** 2
+
+    return 0.5 * rho * penalty
+
+
 # ============ Convenience Functions ===================================================
 # ======================================================================================
 
@@ -464,6 +667,23 @@ def add_voltage_deviation_objective(model: LindistModelProtocol) -> None:
     """Add voltage deviation minimization objective to model."""
     set_objective(
         model, pyo.Objective(rule=voltage_deviation_objective_rule, sense=pyo.minimize)
+    )
+
+
+def add_generation_cost_with_substation_quadratic_penalty_objective(
+    model: LindistModelProtocol,
+    substation_penalty_weight: float = 1.0,
+) -> None:
+    """Add generation-cost + quadratic substation-load penalty objective."""
+    set_objective(
+        model,
+        pyo.Objective(
+            rule=lambda m: generation_cost_with_substation_quadratic_penalty_objective_rule(
+                m,
+                substation_penalty_weight=substation_penalty_weight,
+            ),
+            sense=pyo.minimize,
+        ),
     )
 
 
@@ -541,6 +761,37 @@ def add_penalized_substation_power_objective(
     set_objective(model, obj)
 
 
+def voltage_slack_penalty(m, weight=1e3):
+    if not hasattr(m, "v2_slack"):
+        return 0
+    penalty = 0
+    for _id, ph in m.bus_phase_set:
+        for t in m.time_set:
+            penalty += m.v2_slack[_id, ph, t]
+    return weight * penalty
+
+
+def thermal_slack_penalty(m, weight=1e3):
+    if not hasattr(m, "thermal_slack"):
+        return 0
+
+    penalty = 0
+    for _id, ph in m.branch_phase_set:
+        for t in m.time_set:
+            penalty += m.thermal_slack[_id, ph, t]
+    return weight * penalty
+
+
+def swing_voltage_slack_penalty(m, weight=1e3):
+    if not hasattr(m, "swing_v2_slack"):
+        return 0
+    penalty = 0
+    for _id, ph in m.swing_phase_set:
+        for t in m.time_set:
+            penalty += m.swing_v2_slack[_id, ph, t]
+    return weight * penalty
+
+
 loss_objective = pyo.Objective(rule=loss_objective_rule, sense=pyo.minimize)
 
 substation_power_objective = pyo.Objective(
@@ -553,4 +804,9 @@ voltage_deviation_objective = pyo.Objective(
 
 generation_curtailment_objective = pyo.Objective(
     rule=generation_curtailment_objective_rule, sense=pyo.minimize
+)
+
+generation_cost_with_substation_quadratic_penalty_objective = pyo.Objective(
+    rule=generation_cost_with_substation_quadratic_penalty_objective_rule,
+    sense=pyo.minimize,
 )

@@ -2,6 +2,8 @@
 
 import pytest
 import distopf as opf
+from distopf.distributed.spatial.decompose import decompose
+from distopf.fbs import FBS
 from distopf.wrappers.pyomo_wrapper import PyomoWrapper
 from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
 from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
@@ -149,6 +151,61 @@ class TestNlpIntegration:
                 x in error_msg for x in ["ipopt", "solver", "infeasible", "warning"]
             ):
                 raise
+
+
+class TestNlpDecomposedBoundaries:
+    """Regression coverage for nonlinear decomposed-area boundary handling."""
+
+    @pytest.fixture
+    def decomposed_cases(self):
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123", n_steps=1)
+        area_info = {
+            "area1": {"up_buses": ["150"]},
+            "area2": {"up_buses": ["152"]},
+            "area3": {"up_buses": ["135"]},
+            "area4": {"up_buses": ["160"]},
+        }
+        return decompose(
+            case,
+            {area_name: data["up_buses"][0] for area_name, data in area_info.items()},
+        )
+
+    def test_branchflow_recognizes_in_and_out_boundaries(self, decomposed_cases):
+        area_case = decomposed_cases["area2"]
+        model = create_nl_branchflow_model(area_case)
+
+        in_ids = set(model.boundary_in_set)
+        out_ids = set(model.boundary_out_set)
+        assert len(in_ids) == 1
+        assert len(out_ids) == 1
+        assert in_ids <= set(model.swing_bus_set)
+
+        add_nlp_constraints(
+            model,
+            free_swing_voltage=True,
+            free_boundary_loads=True,
+        )
+        out_id = next(iter(out_ids))
+        assert not any(index[0] == out_id for index in model.cvr_p_load)
+        assert not any(index[0] == out_id for index in model.cvr_q_load)
+
+    def test_branchflow_loads_scheduled_in_voltage_for_in_boundary(
+        self, decomposed_cases
+    ):
+        area_case = decomposed_cases["area4"]
+        area_case.schedules.loc[:, ["v_a", "v_b", "v_c"]] = [0.91, 0.92, 0.93]
+        model = create_nl_branchflow_model(area_case)
+
+        assert len(model.swing_bus_set) == 1
+        assert len(model.swing_phase_set) == 3
+        target_values = {
+            ph: float(model.v_swing[next(iter(model.swing_bus_set)), ph, 0])
+            for ph in ("a", "b", "c")
+        }
+        assert target_values == {"a": 0.91, "b": 0.92, "c": 0.93}
+
+    def test_fbs_accepts_decomposed_in_boundary(self, decomposed_cases):
+        FBS(decomposed_cases["area4"])
 
     def test_case_run_opf_branchflow_with_initialization(self, small_case):
         """Test that Case.run_opf() with formulation='branchflow' accepts initialize flag."""

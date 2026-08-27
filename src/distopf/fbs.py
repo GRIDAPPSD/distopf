@@ -57,8 +57,10 @@ class FBS:
         self.node_capacitors = self._build_node_capacitors()
         self.phase_connections = self._build_phase_connections()
 
-        # Find swing bus
-        swing_buses = self.bus_data[self.bus_data.bus_type == "SWING"]
+        # Find the real or decomposed input swing bus.
+        swing_buses = self.bus_data[
+            self.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+        ]
         if len(swing_buses) != 1:
             raise ValueError("Exactly one swing bus must be defined")
         self.swing_bus = swing_buses.at[swing_buses.index[0], "id"]
@@ -750,15 +752,17 @@ class FBS:
                 bus = tb
                 a_t = np.eye(5, dtype=complex)
             voltages = self.voltages[bus].copy()
-            
-            branch_phases = list(set(fb_phases) & set(tb_phases)) 
+
+            branch_phases = list(set(fb_phases) & set(tb_phases))
             if self._is_triplex_transformer(fb, tb):
                 branch_phases = tb_phases
                 primary_phase = self._get_primary_phase(tb)
                 voltages = np.zeros_like(self.voltages[bus])
                 voltages[3:] = self.voltages[bus][primary_phase]
- 
-            a_t[4, 4] = -a_t[4, 4]  # s2 current is referenced pointing downstream however current on the minus reference for the voltage, so flip the sign to get correct power flow direction
+
+            a_t[4, 4] = -a_t[
+                4, 4
+            ]  # s2 current is referenced pointing downstream however current on the minus reference for the voltage, so flip the sign to get correct power flow direction
             s = a_t @ voltages * np.conj(current)
 
             flow_data.append(
@@ -812,15 +816,17 @@ class FBS:
                 bus = tb
                 a_t = np.eye(5, dtype=complex)
             voltages = self.voltages[bus].copy()
-            
-            branch_phases = list(set(fb_phases) & set(tb_phases)) 
+
+            branch_phases = list(set(fb_phases) & set(tb_phases))
             if self._is_triplex_transformer(fb, tb):
                 branch_phases = tb_phases
                 primary_phase = self._get_primary_phase(tb)
                 voltages = np.zeros_like(self.voltages[bus])
                 voltages[3:] = self.voltages[bus][primary_phase]
- 
-            a_t[4, 4] = -a_t[4, 4]  # s2 current is referenced pointing downstream however current on the minus reference for the voltage, so flip the sign to get correct power flow direction
+
+            a_t[4, 4] = -a_t[
+                4, 4
+            ]  # s2 current is referenced pointing downstream however current on the minus reference for the voltage, so flip the sign to get correct power flow direction
             s = a_t @ voltages * np.conj(current)
 
             # branch_phases = list(set(fb_phases) & set(tb_phases))

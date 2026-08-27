@@ -22,7 +22,16 @@ def solve(
     buf = StringIO()
     t0 = time.perf_counter()
     with capture_output(buf):
-        results = solver_factory.solve(model, tee=True)
+        if solver == "mindtpy":
+            results = solver_factory.solve(
+                model,
+                tee=True,
+                strategy="OA",
+                mip_solver="appsi_highs",
+                nlp_solver="ipopt",
+            )
+        else:
+            results = solver_factory.solve(model, tee=True)
     solve_time = time.perf_counter() - t0
     log = buf.getvalue()
 

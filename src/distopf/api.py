@@ -277,6 +277,12 @@ class Case:
         self.n_steps = n_steps
         self.delta_t = delta_t  # hours per step
 
+        # Replay provenance and scenario modifications. The saved input snapshot
+        # contains the already-modified data; these fields describe how it was
+        # produced without changing replay behavior for that snapshot.
+        self._source_path: Optional[str] = None
+        self._modifications: dict = {}
+
         # Result storage (populated after running analysis)
         self._model: Optional["LinDistBase"] = None
         self._result = None
@@ -573,6 +579,86 @@ class Case:
             if handler:
                 self._disable_verbose(handler)
 
+    @record_call
+    def run_enapp(
+        self,
+        area_info: dict[str, dict[str, list]],
+        objective: Optional[str | Callable] = "loss_min",
+        swing_voltage_slack_penalty: float = 1e6,
+        damping_factor: float = 1.0,
+        tol: float = 1e-6,
+        max_iterations: int = 100,
+        parallel: bool = True,
+        solve_callback: Optional[Callable] = None,
+        iteration_callback: Optional[Callable] = None,
+        verbose_enapp: bool = False,
+        **kwargs,
+    ):
+        """Run the spatial ENAPP solver with replayable call metadata.
+
+        ``area_info`` must contain JSON-safe area topology records with
+        ``up_buses``, ``up_areas``, and ``down_areas`` lists. Named objectives
+        produce replayable runs; custom objectives or callbacks are retained for
+        interactive use but are marked non-replayable by ``record_call``.
+        """
+        _validate_area_info(area_info)
+        from distopf.distributed.spatial.enapp_agents import solve_enapp
+
+        return solve_enapp(
+            self,
+            area_info=area_info,
+            objective=objective,
+            swing_voltage_slack_penalty=swing_voltage_slack_penalty,
+            damping_factor=damping_factor,
+            tol=tol,
+            max_iterations=max_iterations,
+            parallel=parallel,
+            solve_callback=solve_callback,
+            iteration_callback=iteration_callback,
+            verbose_enapp=verbose_enapp,
+            **kwargs,
+        )
+
+    @record_call
+    def run_admm(
+        self,
+        area_info: dict[str, dict[str, list]],
+        objective: Optional[str | Callable] = "loss_min",
+        scaled: bool = True,
+        rho_v_up: float = 1e6,
+        rho_s_dn: float = 1e6,
+        rho_v_dn: float = 1e6,
+        rho_s_up: float = 1e6,
+        tol: float = 1e-4,
+        max_iterations: int = 200,
+        parallel: bool = True,
+        solve_callback: Optional[Callable] = None,
+        iteration_callback: Optional[Callable] = None,
+        verbose_admm: bool = False,
+        **kwargs,
+    ):
+        """Run the spatial ADMM solver with replayable call metadata."""
+        _validate_area_info(area_info)
+        from distopf.distributed.spatial.admm_agents import solve_admm
+
+        return solve_admm(
+            self,
+            area_info=area_info,
+            objective=objective,
+            scaled=scaled,
+            rho_v_up=rho_v_up,
+            rho_s_dn=rho_s_dn,
+            rho_v_dn=rho_v_dn,
+            rho_s_up=rho_s_up,
+            tol=tol,
+            max_iterations=max_iterations,
+            parallel=parallel,
+            solve_callback=solve_callback,
+            iteration_callback=iteration_callback,
+            verbose_admm=verbose_admm,
+            **kwargs,
+        )
+
     # -------------------------------------------------------------------------
     # Model Creation Methods (for advanced users)
     # -------------------------------------------------------------------------
@@ -737,7 +823,6 @@ class Case:
 
         return plot_schedules(self.schedules)
 
-
     # -------------------------------------------------------------------------
     # Case Modification Methods
     # -------------------------------------------------------------------------
@@ -808,7 +893,7 @@ class Case:
         Case
             New Case with copied data
         """
-        return Case(
+        copied = Case(
             self.branch_data.copy(),
             self.bus_data.copy(),
             self.gen_data.copy() if self.gen_data is not None else None,
@@ -825,6 +910,9 @@ class Case:
             ignore_cap=self.ignore_cap,
             ignore_reg=self.ignore_reg,
         )
+        copied._source_path = self._source_path
+        copied._modifications = dict(self._modifications)
+        return copied
 
     def add_generator(
         self,
@@ -960,6 +1048,13 @@ class Case:
             "schedule_summary": sched_summary,
         }
 
+    def _replay_metadata(self) -> dict:
+        """Return scenario metadata needed to reproduce this case."""
+        return {
+            "modifications": dict(self._modifications),
+            "replay_source": "snapshot",
+        }
+
     def _construction_kwargs(self) -> dict:
         """Kwargs needed by ``create_case`` to reconstruct this Case from CSVs.
 
@@ -1083,6 +1178,7 @@ def replay(run_config_path: Path | str):
         If the run was marked non-replayable (e.g. a custom Callable objective).
     """
     import json
+
     run_config_path = Path(run_config_path)
     with open(run_config_path) as f:
         config = json.load(f)
@@ -1097,7 +1193,8 @@ def replay(run_config_path: Path | str):
     call = config["call"]
     if not call.get("replayable", True):
         bad = [
-            k for k, v in call["arguments"].items()
+            k
+            for k, v in call["arguments"].items()
             if isinstance(v, dict) and v.get("__nonserializable__")
         ]
         raise ValueError(f"Run is not replayable (non-serializable args: {bad})")
@@ -1107,13 +1204,78 @@ def replay(run_config_path: Path | str):
     if not case_path.is_absolute():
         case_path = (run_config_path.parent / case_path).resolve()
 
+    # Explicit replay_source takes precedence. For hand-authored scenario
+    # configs (such as benchmarking configs) whose path is a base case, infer
+    # "base" when the field is absent. Legacy saved results point at their
+    # materialized ``input`` directory and therefore default to "snapshot".
+    replay_source = case_info.get("replay_source")
+    if replay_source is None:
+        replay_source = "snapshot" if case_path.name == "input" else "base"
+    if replay_source not in {"snapshot", "base"}:
+        raise ValueError(
+            f"Unsupported replay_source: {replay_source!r}; "
+            "expected 'snapshot' or 'base'"
+        )
+    if replay_source == "base":
+        # Hand-authored benchmark configs already use ``case.path`` as the
+        # immutable base case. Saved result configs may additionally provide a
+        # distinct ``base_path`` while keeping ``path`` pointed at ``input``.
+        base_path = case_info.get("base_path", case_info["path"])
+        case_path = Path(base_path)
+        if not case_path.is_absolute():
+            case_path = (run_config_path.parent / case_path).resolve()
+
     case = create_case(
         case_path,
         model_type=case_info.get("source"),
         **case_info.get("kwargs", {}),
     )
+    if replay_source == "base":
+        case.modify(**case_info.get("modifications", {}))
 
-    return getattr(case, call["method"])(**call["arguments"])
+    method = call["method"]
+    arguments = dict(call["arguments"])
+    if method in {"run_enapp", "run_admm"}:
+        if (
+            arguments.get("solve_callback") is not None
+            or arguments.get("iteration_callback") is not None
+        ):
+            raise ValueError(
+                "Distributed replay does not support solve_callback or "
+                "iteration_callback"
+            )
+        arguments["parallel"] = False
+    return getattr(case, method)(**arguments)
+
+
+def _validate_area_info(area_info: dict[str, dict[str, list]]) -> None:
+    """Validate the JSON-safe topology contract used by spatial solvers."""
+    import json
+
+    if not isinstance(area_info, dict) or not area_info:
+        raise ValueError("area_info must be a non-empty dictionary")
+    try:
+        json.dumps(area_info)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("area_info must be JSON-serializable") from exc
+
+    required = {"up_buses", "up_areas", "down_areas"}
+    for area_name, info in area_info.items():
+        if not isinstance(area_name, str) or not isinstance(info, dict):
+            raise ValueError("area_info keys must be strings and values dictionaries")
+        missing = required.difference(info)
+        if missing:
+            raise ValueError(
+                f"area_info[{area_name!r}] is missing required fields: "
+                f"{sorted(missing)}"
+            )
+        for field in required:
+            if not isinstance(info[field], list):
+                raise ValueError(f"area_info[{area_name!r}][{field!r}] must be a list")
+        if len(info["up_buses"]) != 1:
+            raise ValueError(
+                f"area_info[{area_name!r}]['up_buses'] must contain exactly one bus"
+            )
 
 
 def create_case(
@@ -1176,7 +1338,7 @@ def create_case(
 
     # Route to appropriate function based on model type
     if model_type == "csv":
-        return create_case_from_csv(
+        case = create_case_from_csv(
             data_path,
             start_step=start_step,
             n_steps=n_steps,
@@ -1188,7 +1350,7 @@ def create_case(
             ignore_reg=ignore_reg,
         )
     elif model_type in ["dss", "opendss"]:
-        return create_case_from_dss(
+        case = create_case_from_dss(
             data_path,
             start_step=start_step,
             n_steps=n_steps,
@@ -1200,7 +1362,7 @@ def create_case(
             ignore_reg=ignore_reg,
         )
     elif model_type == "cim":
-        return create_case_from_cim(
+        case = create_case_from_cim(
             data_path,
             start_step=start_step,
             n_steps=n_steps,
@@ -1216,6 +1378,9 @@ def create_case(
             f"Unsupported model type: '{model_type}'. "
             f"Supported types are: 'csv', 'dss', 'opendss', 'cim'"
         )
+
+    case._source_path = str(data_path.resolve())
+    return case
 
 
 def _detect_model_type(data_path: Path) -> str:
@@ -1321,13 +1486,14 @@ def _validate_case_data(case: Case) -> None:
     if case.branch_data is None or len(case.branch_data) == 0:
         raise ValueError("Case must contain branch data")
 
-    # Check for swing bus
+    # Check for a real or decomposed input swing bus.
     if case.bus_data is not None:
-        swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
+        swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+        swing_buses = case.bus_data[swing_mask]
         if len(swing_buses) == 0:
-            raise ValueError("Case must contain at least one SWING bus")
+            raise ValueError("Case must contain at least one SWING or IN bus")
         elif len(swing_buses) > 1:
-            raise ValueError("Case cannot contain more than one SWING bus")
+            raise ValueError("Case cannot contain more than one SWING or IN bus")
 
 
 # Enhanced versions of existing functions with better error handling
@@ -1549,6 +1715,22 @@ def modify_case(
     cvr_p=None,
     cvr_q=None,
 ):
+    modifications = {
+        key: value
+        for key, value in {
+            "load_mult": load_mult,
+            "gen_mult": gen_mult,
+            "control_variable": control_variable,
+            "v_swing": v_swing,
+            "v_min": v_min,
+            "v_max": v_max,
+            "cvr_p": cvr_p,
+            "cvr_q": cvr_q,
+        }.items()
+        if value is not None
+    }
+    case._modifications.update(modifications)
+
     # Modify load multiplier
     if load_mult is not None:
         case.bus_data.loc[:, ["pl_a", "ql_a", "pl_b", "ql_b", "pl_c", "ql_c"]] *= (
@@ -1592,9 +1774,10 @@ def modify_case(
 
     # Modify swing voltage
     if v_swing is not None:
-        case.bus_data.loc[case.bus_data.bus_type == "SWING", ["v_a", "v_b", "v_c"]] = (
-            v_swing
-        )
+        case.bus_data.loc[
+            case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"]),
+            ["v_a", "v_b", "v_c"],
+        ] = v_swing
 
     if v_min is not None:
         case.bus_data.loc[:, "v_min"] = v_min

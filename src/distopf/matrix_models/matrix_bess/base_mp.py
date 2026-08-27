@@ -91,7 +91,8 @@ class BaseModelMP:
         # ~~~~~~~~~~~~~~~~~~~~ prepare data ~~~~~~~~~~~~~~~~~~~~
         self.nb = len(self.bus.id)
         self.r, self.x = self._init_rx(self.branch)
-        self.swing_bus = self.bus.loc[self.bus.bus_type == "SWING"].index[0]
+        swing_mask = self.bus.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+        self.swing_bus = self.bus.loc[swing_mask].index[0]
         self.all_buses = {
             "a": self.bus.loc[self.bus.phases.str.contains("a")].index.to_numpy(),
             "b": self.bus.loc[self.bus.phases.str.contains("b")].index.to_numpy(),
@@ -987,10 +988,10 @@ class LinDistBaseMP(BaseModelMP):
         """
         # a_bat, b_bat = self.create_battery_cycle_limit_constraints()
         a_inv, b_inv = self.create_inverter_octagon_constraints()
-        # a_therm, b_therm = self.create_octagon_thermal_constraints()
+        a_therm, b_therm = self.create_octagon_thermal_constraints()
         a_bat8, b_bat8 = self.create_octagon_battery_constraints()
-        a_ub = vstack([a_inv, a_bat8])  # a_therm, a_bat
-        b_ub = np.r_[b_inv, b_bat8]  # b_therm, b_bat
+        a_ub = vstack([a_inv, a_bat8, a_therm])  # a_therm, a_bat
+        b_ub = np.r_[b_inv, b_bat8, b_therm]  # b_therm, b_bat
         return csr_array(a_ub), b_ub
 
     def create_hexagon_constraints(self) -> tuple[csr_array, np.ndarray]:

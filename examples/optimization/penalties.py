@@ -12,7 +12,6 @@ Requires: pyomo, numpy, pandas, and a solver (ipopt for nonlinear, glpk/cbc for 
 import distopf as opf
 import pyomo.environ as pyo
 import pandas as pd
-import numpy as np
 
 # Import from distopf (adjust path as needed)
 from distopf.api import Case

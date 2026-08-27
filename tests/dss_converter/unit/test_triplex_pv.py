@@ -157,7 +157,7 @@ def test_loads_house4(conv):
 def test_bus_data_has_gen_flag(conv):
     bus = conv.bus_data.set_index("name")
     for name in ("loadbus", "house2", "house3", "house4"):
-        assert bus.loc[name, "has_gen"] == True
+        assert bus.loc[name, "has_gen"]
 
 
 def test_secondary_buses(conv):

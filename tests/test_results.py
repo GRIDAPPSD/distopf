@@ -1,5 +1,7 @@
 """Tests for PowerFlowResult: API, serialization, plotting guards."""
 
+import json
+
 import pandas as pd
 import pytest
 import pyomo.environ as pyo
@@ -126,6 +128,34 @@ class TestPowerFlowResultMethods:
         assert (tmp_path / "results" / "active_power_flows.csv").exists()
         assert (tmp_path / "results" / "reactive_power_flows.csv").exists()
         assert (tmp_path / "results" / "solver_metrics.json").exists()
+
+    def test_snapshot_replay_does_not_reapply_modifications(self, tmp_path):
+        """A saved modified snapshot must not multiply its inputs again."""
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
+        original_load = case.bus_data["pl_a"].sum()
+        case.modify(load_mult=1.5, cvr_p=0.8, cvr_q=2.0)
+        result = case.run_pf()
+        result.save(tmp_path / "results")
+
+        config = json.loads((tmp_path / "results" / "run_config.json").read_text())
+        assert config["case"]["replay_source"] == "snapshot"
+        assert config["case"]["modifications"] == {
+            "load_mult": 1.5,
+            "cvr_p": 0.8,
+            "cvr_q": 2.0,
+        }
+
+        # The result must remain replayable even when the original case path is
+        # unavailable; snapshot replay must not consult base_path.
+        config["case"]["base_path"] = "missing-original-case"
+        (tmp_path / "results" / "run_config.json").write_text(
+            json.dumps(config)
+        )
+        replayed = opf.replay(tmp_path / "results" / "run_config.json")
+        replayed_load = replayed.case.bus_data["pl_a"].sum()
+        assert replayed_load == pytest.approx(original_load * 1.5)
+        assert replayed.case.bus_data["cvr_p"].iat[0] == pytest.approx(0.8)
+        assert replayed.case.bus_data["cvr_q"].iat[0] == pytest.approx(2.0)
 
     def test_save_empty_result_creates_metrics_only(self, tmp_path):
         """save() on empty result should still create metrics."""

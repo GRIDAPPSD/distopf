@@ -54,7 +54,7 @@ def update_models(models: dict[str, LinDistMP]):
 
 def parse_v_up(model: LinDistMP, x: np.ndarray):
     swing = model.bus.loc[
-        model.bus.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE]), "name"
+        model.bus.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE, "IN"]), "name"
     ].to_list()[0]
     v = model.get_voltages(x)
     v = v.loc[v.name == swing, ["name", "t", "a", "b", "c"]]
@@ -77,7 +77,7 @@ def parse_v_dn(model: LinDistMP, x: np.ndarray, down_buses: list):
 
 def parse_s_up(model: LinDistMP, x: np.ndarray):
     swing = model.bus.loc[
-        model.bus.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE]), "name"
+        model.bus.bus_type.isin([opf.SWING_BUS, opf.SWING_FREE, "IN"]), "name"
     ].to_list()[0]
     s = model.get_apparent_power_flows(x)
     s = s.loc[s["from_name"] == swing, ["from_name", "t", "a", "b", "c"]]

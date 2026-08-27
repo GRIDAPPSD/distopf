@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional, Union
 from distopf.wrappers.base import Wrapper
+from distopf.pyomo_models import objectives
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -100,7 +101,6 @@ class PyomoWrapper(Wrapper):
             create_lindist_model,
             add_constraints,
             solve,
-            create_penalized_objective,
             set_objective,
         )
         import pyomo.environ as pyo  # type: ignore[import-untyped]
@@ -109,6 +109,22 @@ class PyomoWrapper(Wrapper):
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         equality_only = kwargs.pop("equality_only", False)
         reg_tap_change_limit = kwargs.pop("reg_tap_change_limit", None)
+
+        rho_v_up = kwargs.pop("rho_v_up", None)
+        rho_s_dn = kwargs.pop("rho_s_dn", None)
+        rho_v_dn = kwargs.pop("rho_v_dn", None)
+        rho_s_up = kwargs.pop("rho_s_up", None)
+
+        free_swing_voltage = kwargs.pop("free_swing_voltage", False)
+        swing_voltage_slack_penalty = kwargs.pop("swing_voltage_slack_penalty", 0)
+        free_boundary_loads = kwargs.pop("free_boundary_loads", False)
+
+        boundary_voltage_slack_penalty = kwargs.pop(
+            "boundary_voltage_slack_penalty", 0.0
+        )
+        boundary_load_slack_penalty = kwargs.pop("boundary_load_slack_penalty", 0.0)
+        swing_power_slack_penalty = kwargs.pop("swing_power_slack_penalty", 0.0)
+
         duals = kwargs.pop("duals", False)
         verbose = kwargs.pop("verbose", False)
 
@@ -133,21 +149,50 @@ class PyomoWrapper(Wrapper):
             control_capacitors=control_capacitors,
             control_regulators=control_regulators,
             reg_tap_change_limit=reg_tap_change_limit,
+            free_swing_voltage=free_swing_voltage,
+            free_boundary_loads=free_boundary_loads,
         )
 
         obj_rule = self._resolve_objective(objective)
-        if equality_only:
-            obj = create_penalized_objective(
-                obj_rule,
-                voltage_weight=voltage_weight,
-                thermal_weight=thermal_weight,
-                generator_weight=generator_weight,
-                battery_weight=battery_weight,
-                soc_weight=soc_weight,
-            )
-            set_objective(self.model, obj)
-        else:
-            self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
+
+        def combined_objective_rule(_m):
+            value = obj_rule(_m)
+
+            if free_swing_voltage and swing_voltage_slack_penalty > 0:
+                value += objectives.swing_voltage_slack_penalty(
+                    _m,
+                    weight=swing_voltage_slack_penalty,
+                )
+
+            if rho_v_up is not None:
+                value += objectives.admm_v_up_penalty(_m, rho=rho_v_up)
+            if rho_s_up is not None:
+                value += objectives.admm_s_up_penalty(_m, rho=rho_s_up)
+            if rho_v_dn is not None:
+                value += objectives.admm_v_down_penalty(_m, rho=rho_v_dn)
+            if rho_s_dn is not None:
+                value += objectives.admm_s_down_penalty(_m, rho=rho_s_dn)
+
+            if equality_only:
+                if voltage_weight is not None:
+                    value += objectives.voltage_violation_penalty(_m, voltage_weight)
+                if thermal_weight is not None:
+                    value += objectives.thermal_violation_penalty(_m, thermal_weight)
+                if generator_weight is not None:
+                    value += objectives.generator_violation_penalty(
+                        _m, generator_weight
+                    )
+                if battery_weight is not None:
+                    value += objectives.battery_violation_penalty(_m, battery_weight)
+                if soc_weight is not None:
+                    value += objectives.soc_violation_penalty(_m, soc_weight)
+
+            return value
+
+        set_objective(
+            self.model,
+            pyo.Objective(rule=combined_objective_rule, sense=pyo.minimize),
+        )
 
         self.result = solve(self.model, solver=solver, duals=duals, verbose=verbose)
 
@@ -176,6 +221,16 @@ class PyomoWrapper(Wrapper):
         solver_name = kwargs.pop("solver", "ipopt")
         verbose = kwargs.pop("verbose", False)
 
+        rho_v_up = kwargs.pop("rho_v_up", None)
+        rho_s_dn = kwargs.pop("rho_s_dn", None)
+        rho_v_dn = kwargs.pop("rho_v_dn", None)
+        rho_s_up = kwargs.pop("rho_s_up", None)
+
+        free_swing_voltage = kwargs.pop("free_swing_voltage", False)
+        swing_voltage_slack_penalty = kwargs.pop("swing_voltage_slack_penalty", 0)
+        free_boundary_loads = kwargs.pop(
+            "free_boundary_loads", kwargs.pop("free_boundary_load", False)
+        )
         if (control_regulators or control_capacitors) and solver_name == "ipopt":
             raise ValueError(
                 "Discrete controls (control_regulators/control_capacitors) require a MINLP solver. "
@@ -190,13 +245,39 @@ class PyomoWrapper(Wrapper):
             thermal_constraints=thermal_constraints,
             control_regulators=control_regulators,
             control_capacitors=control_capacitors,
+            free_swing_voltage=free_swing_voltage,
+            free_boundary_loads=free_boundary_loads,
         )
 
         if initialize == "fbs":
             self._initialize_from_fbs()
 
         obj_rule = self._resolve_objective(objective)
-        self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
+
+        def combined_objective_rule(_m):
+            value = obj_rule(_m)
+
+            if free_swing_voltage and swing_voltage_slack_penalty > 0:
+                value += objectives.swing_voltage_slack_penalty(
+                    _m,
+                    weight=swing_voltage_slack_penalty,
+                )
+
+            if rho_v_up is not None:
+                value += objectives.admm_v_up_penalty(_m, rho=rho_v_up)
+            if rho_s_up is not None:
+                value += objectives.admm_s_up_penalty(_m, rho=rho_s_up)
+            if rho_v_dn is not None:
+                value += objectives.admm_v_down_penalty(_m, rho=rho_v_dn)
+            if rho_s_dn is not None:
+                value += objectives.admm_s_down_penalty(_m, rho=rho_s_dn)
+
+            return value
+
+        self.model.objective = pyo.Objective(
+            rule=combined_objective_rule,
+            sense=pyo.minimize,
+        )
 
         self.result = solve(self.model, solver=solver_name, verbose=verbose)
 
@@ -211,6 +292,7 @@ class PyomoWrapper(Wrapper):
 
         q_caps = getattr(self.result, "q_cap", None)
         tap_ratios = getattr(self.result, "reg_ratio", None)
+        reg_taps = getattr(self.result, "reg_taps", None)
         p_loads = getattr(self.result, "p_load", None)
         q_loads = getattr(self.result, "q_load", None)
         p_bats = getattr(self.result, "p_bat", None)
@@ -243,6 +325,7 @@ class PyomoWrapper(Wrapper):
             reactive_power_loads=q_loads,
             capacitor_reactive_power=q_caps,
             tap_ratios=tap_ratios,
+            reg_taps=reg_taps,
             battery_active_power=p_bats,
             battery_reactive_power=q_bats,
             p_charge=p_charge,
@@ -390,17 +473,18 @@ class PyomoWrapper(Wrapper):
 
     def _resolve_objective(self, objective: Any) -> Any:
         """Resolve objective string to Pyomo objective function."""
-        from distopf.pyomo_models.objectives import (
-            none_rule,
-            loss_objective_rule,
-            substation_power_objective_rule,
-            voltage_deviation_objective_rule,
-            generation_curtailment_objective_rule,
-            cost_minimization_rule,
-        )
+        # from distopf.pyomo_models.objectives import (
+        #     none_rule,
+        #     loss_objective_rule,
+        #     substation_power_objective_rule,
+        #     voltage_deviation_objective_rule,
+        #     generation_curtailment_objective_rule,
+        #     generation_cost_with_substation_quadratic_penalty_objective_rule,
+        #     cost_minimization_rule,
+        # )
 
         if objective is None:
-            return none_rule
+            return objectives.none_rule
 
         if callable(objective):
             return objective
@@ -408,16 +492,18 @@ class PyomoWrapper(Wrapper):
         obj_lower = objective.lower().strip()
 
         objective_map = {
-            "loss": loss_objective_rule,
-            "loss_min": loss_objective_rule,
-            "substation": substation_power_objective_rule,
-            "substation_power": substation_power_objective_rule,
-            "voltage_deviation": voltage_deviation_objective_rule,
-            "curtail": generation_curtailment_objective_rule,
-            "curtail_min": generation_curtailment_objective_rule,
-            "curtailment": generation_curtailment_objective_rule,
-            "cost": cost_minimization_rule,
-            "cost_min": cost_minimization_rule,
+            "loss": objectives.loss_objective_rule,
+            "loss_min": objectives.loss_objective_rule,
+            "substation": objectives.substation_power_objective_rule,
+            "substation_power": objectives.substation_power_objective_rule,
+            "voltage_deviation": objectives.voltage_deviation_objective_rule,
+            "curtail": objectives.generation_curtailment_objective_rule,
+            "curtail_min": objectives.generation_curtailment_objective_rule,
+            "curtailment": objectives.generation_curtailment_objective_rule,
+            "generation_cost_substation_penalty": objectives.generation_cost_with_substation_quadratic_penalty_objective_rule,
+            "gen_cost_substation_penalty": objectives.generation_cost_with_substation_quadratic_penalty_objective_rule,
+            "cost": objectives.cost_minimization_rule,
+            "cost_min": objectives.cost_minimization_rule,
         }
 
         if obj_lower in objective_map:

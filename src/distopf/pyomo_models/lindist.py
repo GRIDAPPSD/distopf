@@ -71,14 +71,21 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
     """Create all Pyomo sets"""
     m.time_set = pyo.RangeSet(case.start_step, case.start_step + case.n_steps - 1)
     m.bus_set = pyo.Set(initialize=case.bus_data.id.tolist())
+    swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+    boundary_in_mask = case.bus_data.bus_type.isin(["SWING_FREE", "IN"])
+    boundary_out_mask = case.bus_data.bus_type.isin(["OUT"])
     m.swing_bus_set = pyo.Set(
-        initialize=case.bus_data[case.bus_data.bus_type == "SWING"].id.tolist()
+        initialize=case.bus_data.loc[swing_mask, "id"].astype(int).tolist()
     )
     m.swing_phase_set = pyo.Set(
-        initialize=_create_phase_tuples(
-            case.bus_data[case.bus_data.bus_type == "SWING"]
-        ),
+        initialize=_create_phase_tuples(case.bus_data.loc[swing_mask]),
         dimen=2,
+    )
+    m.boundary_in_set = pyo.Set(
+        initialize=case.bus_data.loc[boundary_in_mask, "id"].astype(int).tolist()
+    )
+    m.boundary_out_set = pyo.Set(
+        initialize=case.bus_data.loc[boundary_out_mask, "id"].astype(int).tolist()
     )
     m.branch_set = pyo.Set(
         initialize=[
@@ -216,6 +223,7 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     p_gen_data, q_gen_data = {}, {}
     s_rated_data, q_gen_min_data, q_gen_max_data = {}, {}, {}
     gen_control_data = {}
+    cost_data = {}
 
     for _, row in case.gen_data.iterrows():
         phases = _parse_phases(str(row.phases))
@@ -238,6 +246,9 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
             control_var = getattr(row, "control_variable", "")
             gen_control_data[(row.id, phase)] = CONTROL_VARIABLE_MAP[control_var]
 
+            # Generation Energy price per unit active power for one hour
+            cost = getattr(row, "cost", 0.0)
+            cost_data[(row.id, phase)] = cost
             # Nominal generation values, scaled by schedule
             gen_shape = getattr(row, "gen_shape", "PV")
             for t in m.time_set:
@@ -283,6 +294,12 @@ def _create_generator_parameters(m: pyo.ConcreteModel, case: Case) -> None:
         default=0,
         doc="Generator control variable type",
     )
+    m.gen_cost = pyo.Param(
+        m.gen_phase_set,
+        initialize=cost_data,
+        default=0.0,
+        doc="Generation cost per unit active power per hour",
+    )
 
 
 def _create_capacitor_parameters(m: pyo.ConcreteModel, case: Case) -> None:
@@ -320,14 +337,20 @@ def _create_v_swing_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     v_swing_data = {}
 
     # Find swing buses
-    swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
+    swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+    swing_buses = case.bus_data[swing_mask]
 
     for _, row in swing_buses.iterrows():
         for phase in _parse_phases(str(row.phases)):
             if (row.id, phase) not in m.bus_phase_set:
                 continue
-            v_swing = getattr(row, f"v_{phase}", 1.0)
             for t in m.time_set:
+                v_swing = getattr(row, f"v_{phase}", 1.0)
+                schedule_col = f"v_{phase}"
+                if schedule_col in case.schedules.columns and t in case.schedules.index:
+                    schedule_value = case.schedules.at[t, schedule_col]
+                    if pd.notna(schedule_value):
+                        v_swing = float(schedule_value)
                 v_swing_data[(row.id, phase, t)] = v_swing
 
     # NOTE: v_swing stores *voltage magnitude* (per-unit), not squared voltage.
@@ -574,6 +597,29 @@ def _create_price_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     )
 
 
+def _create_schedule_parameters(m: pyo.ConcreteModel, case: Case) -> None:
+    """Create a Pyomo parameter for each column in schedules.csv except 'time', indexed by m.time_set."""
+    if not hasattr(case, "schedules") or case.schedules is None:
+        return
+    schedules = case.schedules
+    for col in schedules.columns:
+        if col == "time":
+            continue
+        param_data = {
+            t: float(schedules.at[t, col]) for t in m.time_set if t in schedules.index
+        }
+        setattr(
+            m,
+            f"schedule_{col}",
+            pyo.Param(
+                m.time_set,
+                initialize=param_data,
+                default=0.0,
+                doc=f"Schedule parameter for {col} from schedules.csv",
+            ),
+        )
+
+
 def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     """
     Create all parameters for the Pyomo model including impedances, loads,
@@ -588,7 +634,10 @@ def _create_parameters(m: pyo.ConcreteModel, case: Case) -> None:
     _create_v_limit_parameters(m, case)
     _create_battery_parameters(m, case)
     _create_branch_thermal_parameters(m, case)
+    _create_schedule_parameters(m, case)
+
     _create_price_parameters(m, case)
+
 
 def create_lindist_model(
     case: Case,
@@ -737,6 +786,8 @@ def add_constraints(
     control_capacitors: bool = False,
     control_regulators: bool = False,
     reg_tap_change_limit: int | None = None,
+    free_swing_voltage: bool = False,
+    free_boundary_loads: bool = False,
 ) -> None:
     """Add constraints to a LinDistFlow Pyomo model.
 
@@ -791,10 +842,13 @@ def add_constraints(
     if not equality_only:
         constraints.add_voltage_limits(model)
     constraints.add_voltage_drop_constraints(model)
-    constraints.add_swing_bus_constraints(model)
+    if not free_swing_voltage:
+        constraints.add_swing_bus_constraints(model)
+    else:
+        constraints.add_swing_bus_voltage_slack_constraints(model)
 
     # Loads
-    constraints.add_cvr_load_constraints(model)
+    constraints.add_cvr_load_constraints(model, free_boundary_loads)
 
     # Capacitors
     if control_capacitors:

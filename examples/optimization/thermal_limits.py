@@ -1,6 +1,4 @@
 import distopf as opf
-import distopf.matrix_models.matrix_bess as mpopf
-import pandas as pd
 import numpy as np
 
 wrapper = "matrix"
