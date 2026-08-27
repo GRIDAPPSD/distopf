@@ -36,6 +36,8 @@ def create_area_agents(
                     sending_agent.upstream_recipients.append(receiving_area)
 
     return agents
+
+
 def _agent_results(
     agents: dict[str, AreaAgent],
 ) -> dict[str, PowerFlowResult]:
@@ -54,6 +56,7 @@ def _agent_boundaries(
         for area_name, agent in agents.items()
         if agent.boundary is not None
     }
+
 
 def _solve_all_pool(
     name: str,
@@ -143,6 +146,8 @@ def _record_iteration_results(
         agents[area_name].set_result(result)
 
     return iteration_solve_failed
+
+
 def _get_root_areas(
     area_info: dict[str, dict[str, list]],
 ) -> set[str]:
@@ -601,7 +606,6 @@ def dampen_boundaries(boundaries, boundaries_last, alpha=0.5):
             s_up_damped, v_dn_damped, v_up_damped, s_dn_damped
         )
     return boundaries_damped
-
 
 
 _finalize_enapp_result = _finalize_result

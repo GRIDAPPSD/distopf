@@ -6,7 +6,17 @@ import pandas as pd
 
 from distopf.api import Case
 from distopf.results import PowerFlowResult
-from .boundary import BoundaryVars, parse_s_up, parse_v_up, parse_s_dn, parse_v_dn, S_UP, V_UP, S_DOWN, V_DOWN
+from .boundary import (
+    BoundaryVars,
+    parse_s_up,
+    parse_v_up,
+    parse_s_dn,
+    parse_v_dn,
+    S_UP,
+    V_UP,
+    S_DOWN,
+    V_DOWN,
+)
 from .schedule import add_s_to_schedules, add_v_swing_to_schedules
 
 logger = logging.getLogger(__name__)
@@ -32,9 +42,11 @@ def safe_area_solve(
         logger.exception("solve failed for area %s", name)
         return None
 
+
 UPSTREAM_MESSAGE_KINDS = {S_UP, V_UP}
 DOWNSTREAM_MESSAGE_KINDS = {S_DOWN, V_DOWN}
 POWER_MESSAGE_KINDS = {S_UP, S_DOWN}
+
 
 @dataclass
 class BoundaryMessage:
@@ -163,6 +175,8 @@ class AreaAgent:
                 )
 
         self.inbox.clear()
+
+
 def _route_messages(
     agents: dict[str, AreaAgent],
     messages: list[BoundaryMessage],
@@ -207,5 +221,3 @@ def send_all_agent_messages(
     _send_message_kind(agents, V_UP)
     _send_message_kind(agents, S_DOWN)
     _send_message_kind(agents, V_DOWN)
-
-

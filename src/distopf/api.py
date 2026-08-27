@@ -1197,9 +1197,10 @@ def replay(run_config_path: Path | str):
     method = call["method"]
     arguments = dict(call["arguments"])
     if method in {"run_enapp", "run_admm"}:
-        if arguments.get("solve_callback") is not None or arguments.get(
-            "iteration_callback"
-        ) is not None:
+        if (
+            arguments.get("solve_callback") is not None
+            or arguments.get("iteration_callback") is not None
+        ):
             raise ValueError(
                 "Distributed replay does not support solve_callback or "
                 "iteration_callback"

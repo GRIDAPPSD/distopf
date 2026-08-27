@@ -10,7 +10,11 @@ from distopf.distributed.spatial.admm_agents import (
     create_admm_agents,
 )
 from distopf.distributed.spatial.decompose import decompose
-from distopf.distributed.spatial.messaging import AreaAgent, BoundaryMessage, safe_area_solve
+from distopf.distributed.spatial.messaging import (
+    AreaAgent,
+    BoundaryMessage,
+    safe_area_solve,
+)
 from distopf.distributed.spatial.execution import _finalize_result
 
 
@@ -49,7 +53,9 @@ def test_area_agent_solve_uses_neutral_safe_solver(monkeypatch):
         calls.update(name=name, case=case, objective=objective, kwargs=kwargs)
         return "result"
 
-    monkeypatch.setattr("distopf.distributed.spatial.messaging.safe_area_solve", fake_solver)
+    monkeypatch.setattr(
+        "distopf.distributed.spatial.messaging.safe_area_solve", fake_solver
+    )
     agent = AreaAgent("area", object(), [])
 
     assert agent.solve("objective", limit=1) == "result"

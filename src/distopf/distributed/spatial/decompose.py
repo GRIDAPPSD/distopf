@@ -147,17 +147,11 @@ def graph_to_case(graph, case_ref, remap_ids=False):
             schedules[f"{load_shape}.b.q"] = 0.0
             schedules[f"{load_shape}.c.q"] = 0.0
     if "v_a" not in schedules.columns:
-        schedules["v_a"] = bus_data.loc[swing_mask, "v_a"].to_numpy()[
-            0
-        ]
+        schedules["v_a"] = bus_data.loc[swing_mask, "v_a"].to_numpy()[0]
     if "v_b" not in schedules.columns:
-        schedules["v_b"] = bus_data.loc[swing_mask, "v_b"].to_numpy()[
-            0
-        ]
+        schedules["v_b"] = bus_data.loc[swing_mask, "v_b"].to_numpy()[0]
     if "v_c" not in schedules.columns:
-        schedules["v_c"] = bus_data.loc[swing_mask, "v_c"].to_numpy()[
-            0
-        ]
+        schedules["v_c"] = bus_data.loc[swing_mask, "v_c"].to_numpy()[0]
     return Case(
         branch_data=branch_data,
         bus_data=bus_data,

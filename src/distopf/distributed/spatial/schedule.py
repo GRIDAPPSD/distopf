@@ -19,9 +19,7 @@ def add_v_swing_to_schedules(
         f"Voltage boundary times are missing from the schedule "
         f"for area {receiving_area}"
     )
-    schedules.loc[v_swing.index, ["v_a", "v_b", "v_c"]] = v_swing[
-        ["v_a", "v_b", "v_c"]
-    ]
+    schedules.loc[v_swing.index, ["v_a", "v_b", "v_c"]] = v_swing[["v_a", "v_b", "v_c"]]
     return schedules.reset_index()
 
 

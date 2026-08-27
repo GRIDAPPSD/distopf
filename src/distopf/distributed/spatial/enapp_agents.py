@@ -162,6 +162,8 @@ def dampen_boundaries(
         )
 
     return boundaries_damped
+
+
 def solve_enapp(
     case: opf.Case,
     area_info: dict[str, dict[str, list]],

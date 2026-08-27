@@ -110,7 +110,6 @@ class PyomoWrapper(Wrapper):
         equality_only = kwargs.pop("equality_only", False)
         reg_tap_change_limit = kwargs.pop("reg_tap_change_limit", None)
 
-        admm_rho = kwargs.pop("admm_rho", None)
         rho_v_up = kwargs.pop("rho_v_up", None)
         rho_s_dn = kwargs.pop("rho_s_dn", None)
         rho_v_dn = kwargs.pop("rho_v_dn", None)
@@ -222,7 +221,6 @@ class PyomoWrapper(Wrapper):
         solver_name = kwargs.pop("solver", "ipopt")
         verbose = kwargs.pop("verbose", False)
 
-        admm_rho = kwargs.pop("admm_rho", None)
         rho_v_up = kwargs.pop("rho_v_up", None)
         rho_s_dn = kwargs.pop("rho_s_dn", None)
         rho_v_dn = kwargs.pop("rho_v_dn", None)
