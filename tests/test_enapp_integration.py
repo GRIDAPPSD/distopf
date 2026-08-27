@@ -50,6 +50,19 @@ def allclose_dataframe(df_enapp, df_central, tol_rel=1e-3, tol_abs=1e-6):
     if df_enapp is None or df_central is None:
         return False, (0, 1, np.inf)
 
+    # Align branch-indexed results by their stable global endpoint IDs rather
+    # than relying on each solver preserving the same internal row order.
+    # Centralized OPF retains the input branch order, while ENAPP returns a
+    # deterministic endpoint sort; both represent the same physical branches.
+    sort_cols = [
+        column
+        for column in ("fb", "tb", "t")
+        if column in df_enapp.columns and column in df_central.columns
+    ]
+    if sort_cols:
+        df_enapp = df_enapp.sort_values(sort_cols, kind="stable")
+        df_central = df_central.sort_values(sort_cols, kind="stable")
+
     df_enapp = df_enapp.reset_index(drop=True)
     df_central = df_central.reset_index(drop=True)
 
@@ -151,7 +164,45 @@ def test_enapp_plot_fix_validation():
         pytest.fail("plot_network raised IndexError - plot fix may not have worked")
 
 
-def test_enapp_ieee123_multiarea():
+def test_enapp_ieee123_multiarea_no_control():
+    """Test ENAPP on IEEE 123-bus with 4-area decomposition vs centralized OPF."""
+    case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
+    case.modify(control_variable="")
+    # Run centralized OPF
+    r_central = case.run_opf(solver="ipopt")
+
+    # Run ENAPP
+    r_enapp = case.run_enapp(AREA_INFO, tol=1e-6, parallel=True, solver="ipopt")
+
+    # Compare voltages
+    if r_central.voltages is not None and r_enapp.voltages is not None:
+        match_v, diag_v = allclose_dataframe(
+            r_enapp.voltages, r_central.voltages, **TOLERANCES["voltages"]
+        )
+        assert match_v, f"Voltage mismatch: {diag_v[0]}/{diag_v[1]}"
+        # if not match_v:
+        #     pytest.skip(
+        #         f"Voltage mismatch (likely due to solution differences): {diag_v[0]}/{diag_v[1]}"
+        #     )
+
+    # Compare active power flows
+    if (
+        r_central.active_power_flows is not None
+        and r_enapp.active_power_flows is not None
+    ):
+        match_p, diag_p = allclose_dataframe(
+            r_enapp.active_power_flows,
+            r_central.active_power_flows,
+            **TOLERANCES["flows"],
+        )
+        assert match_p, f"Flow mismatch: {diag_p[0]}/{diag_p[1]}"
+        # if not match_p:
+        #     pytest.skip(
+        #         f"Flow mismatch (likely due to solution differences): {diag_p[0]}/{diag_p[1]}"
+        #     )
+
+
+def test_enapp_ieee123_multiarea_loss_min():
     """Test ENAPP on IEEE 123-bus with 4-area decomposition vs centralized OPF."""
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
 
@@ -160,7 +211,7 @@ def test_enapp_ieee123_multiarea():
 
     # Run ENAPP
     r_enapp = solve_enapp(
-        case, AREA_INFO, objective="min_loss", tol=1e-3, parallel=False
+        case, AREA_INFO, objective="min_loss", tol=1e-6, parallel=False
     )
 
     # Compare voltages
@@ -170,7 +221,7 @@ def test_enapp_ieee123_multiarea():
         )
         if not match_v:
             pytest.skip(
-                f"Voltage mismatch (likely due to decomposition schedule issue): {diag_v[0]}/{diag_v[1]}"
+                f"Voltage mismatch (likely due to solution differences): {diag_v[0]}/{diag_v[1]}"
             )
 
     # Compare active power flows
@@ -185,7 +236,7 @@ def test_enapp_ieee123_multiarea():
         )
         if not match_p:
             pytest.skip(
-                f"Flow mismatch (likely due to decomposition schedule issue): {diag_p[0]}/{diag_p[1]}"
+                f"Flow mismatch (likely due to solution differences): {diag_p[0]}/{diag_p[1]}"
             )
 
     # Objective values are not compared here: ENAPP currently aggregates
