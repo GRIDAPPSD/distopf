@@ -234,18 +234,37 @@ class PowerFlowResult:
 
         # 4. Unified run config — the single file replay needs
         if self.metadata and "call" in self.metadata:
+            case_config = {
+                "source": "csv",
+                "path": "input",
+                "replay_source": "snapshot",
+                "kwargs": (
+                    self.case._construction_kwargs()
+                    if self.case is not None
+                    else {}
+                ),
+                "modifications": (
+                    self.case._replay_metadata()["modifications"]
+                    if self.case is not None
+                    else {}
+                ),
+            }
+            if self.case is not None and self.case._source_path is not None:
+                try:
+                    import os
+
+                    case_config["base_path"] = os.path.relpath(
+                        self.case._source_path, output_dir.resolve()
+                    )
+                except ValueError:
+                    # On platforms with different filesystem drives, retaining
+                    # the absolute path is more useful than dropping provenance.
+                    case_config["base_path"] = self.case._source_path
+
             run_config = {
                 "schema_version": 1,
                 "provenance": self.metadata.get("provenance", {}),
-                "case": {
-                    "source": "csv",
-                    "path": "input",
-                    "kwargs": (
-                        self.case._construction_kwargs()
-                        if self.case is not None
-                        else {}
-                    ),
-                },
+                "case": case_config,
                 "call": self.metadata["call"],
             }
             if self.metadata.get("distributed_solver"):

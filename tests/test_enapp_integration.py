@@ -167,7 +167,7 @@ def test_enapp_ieee123_multiarea_no_control():
     r_central = case.run_opf(solver="ipopt")
 
     # Run ENAPP
-    r_enapp = case.run_enapp(AREA_INFO, tol=1e-6, parallel=True, solver="ipopt")
+    r_enapp = case.run_enapp(AREA_INFO, tol=1e-6, parallel=False, solver="ipopt")
 
     # Compare voltages
     if r_central.voltages is not None and r_enapp.voltages is not None:

@@ -277,6 +277,12 @@ class Case:
         self.n_steps = n_steps
         self.delta_t = delta_t  # hours per step
 
+        # Replay provenance and scenario modifications. The saved input snapshot
+        # contains the already-modified data; these fields describe how it was
+        # produced without changing replay behavior for that snapshot.
+        self._source_path: Optional[str] = None
+        self._modifications: dict = {}
+
         # Result storage (populated after running analysis)
         self._model: Optional["LinDistBase"] = None
         self._result = None
@@ -887,7 +893,7 @@ class Case:
         Case
             New Case with copied data
         """
-        return Case(
+        copied = Case(
             self.branch_data.copy(),
             self.bus_data.copy(),
             self.gen_data.copy() if self.gen_data is not None else None,
@@ -904,6 +910,9 @@ class Case:
             ignore_cap=self.ignore_cap,
             ignore_reg=self.ignore_reg,
         )
+        copied._source_path = self._source_path
+        copied._modifications = dict(self._modifications)
+        return copied
 
     def add_generator(
         self,
@@ -1037,6 +1046,13 @@ class Case:
             "generator_controls": gen_controls,
             "schedule_columns": sched_cols,
             "schedule_summary": sched_summary,
+        }
+
+    def _replay_metadata(self) -> dict:
+        """Return scenario metadata needed to reproduce this case."""
+        return {
+            "modifications": dict(self._modifications),
+            "replay_source": "snapshot",
         }
 
     def _construction_kwargs(self) -> dict:
@@ -1188,11 +1204,34 @@ def replay(run_config_path: Path | str):
     if not case_path.is_absolute():
         case_path = (run_config_path.parent / case_path).resolve()
 
+    # Explicit replay_source takes precedence. For hand-authored scenario
+    # configs (such as benchmarking configs) whose path is a base case, infer
+    # "base" when the field is absent. Legacy saved results point at their
+    # materialized ``input`` directory and therefore default to "snapshot".
+    replay_source = case_info.get("replay_source")
+    if replay_source is None:
+        replay_source = "snapshot" if case_path.name == "input" else "base"
+    if replay_source not in {"snapshot", "base"}:
+        raise ValueError(
+            f"Unsupported replay_source: {replay_source!r}; "
+            "expected 'snapshot' or 'base'"
+        )
+    if replay_source == "base":
+        # Hand-authored benchmark configs already use ``case.path`` as the
+        # immutable base case. Saved result configs may additionally provide a
+        # distinct ``base_path`` while keeping ``path`` pointed at ``input``.
+        base_path = case_info.get("base_path", case_info["path"])
+        case_path = Path(base_path)
+        if not case_path.is_absolute():
+            case_path = (run_config_path.parent / case_path).resolve()
+
     case = create_case(
         case_path,
         model_type=case_info.get("source"),
         **case_info.get("kwargs", {}),
     )
+    if replay_source == "base":
+        case.modify(**case_info.get("modifications", {}))
 
     method = call["method"]
     arguments = dict(call["arguments"])
@@ -1299,7 +1338,7 @@ def create_case(
 
     # Route to appropriate function based on model type
     if model_type == "csv":
-        return create_case_from_csv(
+        case = create_case_from_csv(
             data_path,
             start_step=start_step,
             n_steps=n_steps,
@@ -1311,7 +1350,7 @@ def create_case(
             ignore_reg=ignore_reg,
         )
     elif model_type in ["dss", "opendss"]:
-        return create_case_from_dss(
+        case = create_case_from_dss(
             data_path,
             start_step=start_step,
             n_steps=n_steps,
@@ -1323,7 +1362,7 @@ def create_case(
             ignore_reg=ignore_reg,
         )
     elif model_type == "cim":
-        return create_case_from_cim(
+        case = create_case_from_cim(
             data_path,
             start_step=start_step,
             n_steps=n_steps,
@@ -1339,6 +1378,9 @@ def create_case(
             f"Unsupported model type: '{model_type}'. "
             f"Supported types are: 'csv', 'dss', 'opendss', 'cim'"
         )
+
+    case._source_path = str(data_path.resolve())
+    return case
 
 
 def _detect_model_type(data_path: Path) -> str:
@@ -1673,6 +1715,22 @@ def modify_case(
     cvr_p=None,
     cvr_q=None,
 ):
+    modifications = {
+        key: value
+        for key, value in {
+            "load_mult": load_mult,
+            "gen_mult": gen_mult,
+            "control_variable": control_variable,
+            "v_swing": v_swing,
+            "v_min": v_min,
+            "v_max": v_max,
+            "cvr_p": cvr_p,
+            "cvr_q": cvr_q,
+        }.items()
+        if value is not None
+    }
+    case._modifications.update(modifications)
+
     # Modify load multiplier
     if load_mult is not None:
         case.bus_data.loc[:, ["pl_a", "ql_a", "pl_b", "ql_b", "pl_c", "ql_c"]] *= (
