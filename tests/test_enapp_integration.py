@@ -4,7 +4,6 @@ import pytest
 import numpy as np
 import distopf as opf
 from distopf.distributed.spatial.decompose import decompose
-from distopf.distributed.spatial.enapp import solve_enapp
 
 
 # Tolerance for numerical comparisons (relative and absolute)
@@ -122,9 +121,7 @@ def test_decompose_initializes_schedule_horizon_for_scheduleless_case():
 def test_enapp_results_structure():
     """Validate that ENAPP returns properly structured PowerFlowResult."""
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
-    r_enapp = solve_enapp(
-        case, AREA_INFO, objective="min_loss", tol=1e-3, parallel=False
-    )
+    r_enapp = case.run_enapp(AREA_INFO, objective="min_loss", tol=1e-3, parallel=False)
 
     # Validate result structure
     assert r_enapp.voltages is not None, "Voltages should be present"
@@ -143,9 +140,7 @@ def test_enapp_results_structure():
 def test_enapp_plot_fix_validation():
     """Validate the plot fix: flows sorted correctly for visualization."""
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
-    r_enapp = solve_enapp(
-        case, AREA_INFO, objective="min_loss", tol=1e-3, parallel=False
-    )
+    r_enapp = case.run_enapp(AREA_INFO, objective="min_loss", tol=1e-3, parallel=False)
 
     # The critical fix: verify flows are sorted by tb
     flows = r_enapp.active_power_flows
@@ -210,9 +205,7 @@ def test_enapp_ieee123_multiarea_loss_min():
     r_central = case.run_opf(objective="min_loss")
 
     # Run ENAPP
-    r_enapp = solve_enapp(
-        case, AREA_INFO, objective="min_loss", tol=1e-6, parallel=False
-    )
+    r_enapp = case.run_enapp(AREA_INFO, objective="min_loss", tol=1e-6, parallel=False)
 
     # Compare voltages
     if r_central.voltages is not None and r_enapp.voltages is not None:
@@ -247,9 +240,7 @@ def test_enapp_ieee123_multiarea_loss_min():
 def test_enapp_flow_sorting():
     """Verify that ENAPP flows are properly sorted by tb (critical for plotting)."""
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
-    r_enapp = solve_enapp(
-        case, AREA_INFO, objective="min_loss", tol=1e-3, parallel=False
-    )
+    r_enapp = case.run_enapp(AREA_INFO, objective="min_loss", tol=1e-3, parallel=False)
 
     # Verify flows are sorted by tb
     assert r_enapp.active_power_flows is not None
@@ -267,9 +258,7 @@ def test_enapp_flow_sorting():
 def test_enapp_voltage_bounds():
     """Check that ENAPP voltage profiles stay within reasonable bounds."""
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
-    r_enapp = solve_enapp(
-        case, AREA_INFO, objective="min_loss", tol=1e-3, parallel=False
-    )
+    r_enapp = case.run_enapp(AREA_INFO, objective="min_loss", tol=1e-3, parallel=False)
 
     # Check voltage magnitudes
     assert r_enapp.voltages is not None
