@@ -103,19 +103,21 @@ case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
 result = case.run_enapp(
     area_info=area_info,
     objective="substation_power",
-    parallel=False,
+    parallel=True,
     max_iterations=25,
 )
 ```
 
-Runs made through these methods are recorded by [`record_call()`](src/distopf/utils/call_recorder.py:90). Calling [`PowerFlowResult.save()`](src/distopf/results.py:209) writes `run_config.json`, including the distributed solver and topology, so named-objective runs can be reproduced with [`replay()`](src/distopf/api.py:1140):
+Set `parallel=True` to solve the independent area subproblems with multiprocessing. The coordination iterations themselves remain sequential: each iteration waits for all area solves before exchanging boundary messages. Use `parallel=False` for serial execution or when debugging.
+
+Runs made through these methods are recorded by [`record_call()`](src/distopf/utils/call_recorder.py:90). Calling [`PowerFlowResult.save()`](src/distopf/results.py:209) writes `run_config.json`, including the distributed solver, topology, and `parallel` setting, so named-objective runs can be reproduced with [`replay()`](src/distopf/api.py:1140):
 
 ```python
 result.save("results/ieee13-enapp")
 replayed = opf.replay("results/ieee13-enapp/run_config.json")
 ```
 
-Custom objective callables and solve/iteration callbacks are intentionally marked non-replayable because they cannot be reconstructed from JSON.
+Replay preserves the recorded `parallel` setting for ENAPP and ADMM. Parallel replay requires a normal multiprocessing-capable execution environment; arbitrary custom objective callables and solve/iteration callbacks remain non-replayable because they cannot be reconstructed from JSON.
 
 
 
@@ -143,6 +145,27 @@ Use `formulation="branchflow"`.
 - **Solver**: IPOPT (continuous) or MINLP using Gurobi if installed (discrete controls)
 - **Speed**: Slower than linear, but more accurate
 - **Accuracy**: Nonlinear power flow representation
+
+### Pyomo Wrapper — SOCP Relaxation
+The SOCP formulation is a relaxation of the nonlinear BranchFlow model. It uses the same
+Pyomo/IPOPT solve path, but replaces the two branch-current equality constraints with
+inequality constraints. Use `formulation="socp"`.
+
+- **Model**: BranchFlow model with relaxed current constraints
+- **Solver**: IPOPT for continuous problems; MINLP solvers for discrete controls
+- **Use case**: Faster or more robust optimization when exact current equalities are not required
+- **Wrapper**: Pyomo only; it is not available through the matrix wrappers
+
+```python
+import distopf as opf
+
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
+result = case.run_opf(
+    formulation="socp",
+    objective="loss",
+    solver="ipopt",
+)
+```
 
 #### Continuous Optimization (IPOPT)
 For continuous optimization without discrete controls:
@@ -186,7 +209,7 @@ result = case.run_opf(wrapper="matrix_bess", objective="loss")
 #### Wrapper Comparison
 | Feature | Matrix/Matrix BESS | Pyomo  |
 |---------|---|---|
-| Model Type | LinDistFlow (linear) | LinDistFlow or Non-Linear BranchFlow |
+| Model Type | LinDistFlow (linear) | LinDistFlow, BranchFlow, or SOCP-relaxed BranchFlow |
 | Formulation | Matrix-based | Algebraic equations |
 | Solver API | Scipy or CVXPY | Pyomo |
 | Prefered Solver | HiGHs or Clarabel | IPOPT, Gurobi, Knitro |
@@ -204,7 +227,7 @@ DistOPF supports multiple optimization objectives for distribution system OPF:
 | **Substation Power** | `"substation"`, `"substation_power"` | Pyomo, Matrix | Minimize power imported from substation |
 | **Voltage Deviation** | `"voltage_deviation"` | Pyomo | Minimize deviations from nominal voltage (1.0 p.u.) |
 | **Generation Curtailment** | `"curtail"`, `"curtail_min"`, `"curtailment"` | Pyomo | Minimize DER curtailment |
-| **Cost Minimization** | `"cost"`, `"cost_min"` | Pyomo (LinDistFlow, BranchFlow) | Minimize energy procurement cost from swing bus |
+| **Cost Minimization** | `"cost"`, `"cost_min"` | Pyomo (LinDistFlow, BranchFlow, SOCP) | Minimize energy procurement cost from swing bus |
 
 #### Cost Minimization with Price Data
 

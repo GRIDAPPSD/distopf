@@ -16,10 +16,25 @@ def small_case():
 
 
 class TestNlpWrapperSelection:
-    """Test that formulation='branchflow' is properly registered and selectable."""
+    """Test that nonlinear Pyomo formulations are properly registered and selectable."""
+
+    def test_formulation_socp_routes_to_pyomo(self):
+        """SOCP formulation should select Pyomo and preserve its model type."""
+        from distopf.api import _resolve_wrapper
+
+        wrapper_cls, extra_kwargs = _resolve_wrapper(None, "socp")
+        assert wrapper_cls is PyomoWrapper
+        assert extra_kwargs == {"model_type": "socp"}
+
+    def test_formulation_socp_rejects_matrix_wrapper(self):
+        """SOCP is only implemented by the Pyomo wrapper."""
+        from distopf.api import _resolve_wrapper
+
+        with pytest.raises(ValueError, match="not compatible"):
+            _resolve_wrapper("matrix", "socp")
 
     def test_formulation_branchflow_routes_to_pyomo(self):
-        """Test that 'branchflow' formulation resolves to PyomoWrapper with model_type."""
+        """BranchFlow formulation resolves to PyomoWrapper with model_type."""
         from distopf.api import _resolve_wrapper
 
         wrapper_cls, extra_kwargs = _resolve_wrapper(None, "branchflow")
@@ -56,6 +71,19 @@ class TestNlpModelCreation:
         assert hasattr(model, "power_balance_p")
         assert hasattr(model, "power_balance_q")
         assert hasattr(model, "voltage_drop")
+
+    def test_add_nlp_constraints_socp_relaxes_current_constraints(self):
+        """SOCP mode should attach both relaxed current constraint families."""
+        # Use a multiphase case because the pairwise current constraint set is
+        # empty for the one-phase small_case fixture.
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
+        model = create_nl_branchflow_model(case)
+        add_nlp_constraints(model, socp_relaxation=True)
+
+        current = next(iter(model.current_constraint.values()))
+        current_sqr = next(iter(model.current_sqr_constraint.values()))
+        assert current.equality is False
+        assert current_sqr.equality is False
 
     def test_add_nlp_constraints_with_discrete_controls(self, small_case):
         """Test that discrete control constraints can be added."""
@@ -135,7 +163,23 @@ class TestNlpBackendSolverValidation:
 
 
 class TestNlpIntegration:
-    """Integration tests for branchflow formulation with Case API."""
+    """Integration tests for nonlinear formulations with the Case API."""
+
+    def test_case_run_opf_with_socp_formulation_builds_nlp_path(
+        self, small_case, monkeypatch
+    ):
+        """Case API should route SOCP to the nonlinear Pyomo path."""
+        calls = {}
+
+        def fake_solve(self, **kwargs):
+            calls.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(PyomoWrapper, "solve", fake_solve)
+        result = small_case.run_opf(formulation="socp", raw_result=True)
+
+        assert result is not None
+        assert calls["model_type"] == "socp"
 
     def test_case_run_opf_with_branchflow_formulation(self, small_case):
         """Test that Case.run_opf() accepts formulation='branchflow'."""
@@ -208,7 +252,7 @@ class TestNlpDecomposedBoundaries:
         FBS(decomposed_cases["area4"])
 
     def test_case_run_opf_branchflow_with_initialization(self, small_case):
-        """Test that Case.run_opf() with formulation='branchflow' accepts initialize flag."""
+        """Case.run_opf() with BranchFlow accepts the initialize flag."""
         try:
             result = small_case.run_opf(
                 formulation="branchflow", initialize="fbs", raw_result=False

@@ -1,7 +1,7 @@
 """Pyomo wrapper for OPF (IPOPT solver).
 
-Supports both LinDistFlow (linear) and BranchFlow (nonlinear) models
-via the `model_type` parameter.
+Supports LinDistFlow plus the nonlinear BranchFlow and SOCP-relaxed
+BranchFlow models via the `model_type` parameter.
 """
 
 from __future__ import annotations
@@ -18,9 +18,10 @@ if TYPE_CHECKING:
 class PyomoWrapper(Wrapper):
     """Pyomo/IPOPT wrapper for OPF optimization.
 
-    Supports two model types:
+    Supports three model types:
     - "lindist" (default): LinDistFlow linear approximation
     - "branchflow": Nonlinear BranchFlow model (NLP)
+    - "socp": SOCP relaxation of the BranchFlow model
     """
 
     def solve(
@@ -47,16 +48,18 @@ class PyomoWrapper(Wrapper):
         **kwargs
             Additional options:
             - model_type : str, default "lindist"
-                "lindist" for LinDistFlow, "branchflow" for nonlinear BranchFlow.
+                "lindist" for LinDistFlow, "branchflow" for nonlinear BranchFlow,
+                or "socp" for its SOCP relaxation.
             - circular_constraints : bool
-                Use circular (quadratic) constraints. Default False for lindist, True for branchflow.
+                Use circular (quadratic) constraints. Default False for lindist,
+                True for branchflow and socp.
             - thermal_constraints : bool, default False
                 Add thermal limit constraints on branch power flows.
             - equality_only : bool, default False (lindist only)
                 Only add equality constraints (power flow, voltage drop).
             - reg_tap_change_limit : int or None (lindist only)
                 Max tap change per timestep (only if control_regulators=True)
-            - initialize : str or None (branchflow only)
+            - initialize : str or None (branchflow/socp only)
                 Warm-start strategy: 'fbs' to initialize from FBS results.
             - solver : str, default 'ipopt'
                 Solver to use. 'ipopt' for continuous, 'bonmin'/'couenne' for MINLP.
@@ -72,12 +75,13 @@ class PyomoWrapper(Wrapper):
 
         model_type = kwargs.pop("model_type", "lindist")
 
-        if model_type == "branchflow":
+        if model_type in ("branchflow", "socp"):
             return self._solve_branchflow(
                 objective=objective,
                 control_regulators=control_regulators,
                 control_capacitors=control_capacitors,
                 raw_result=raw_result,
+                socp_relaxation=model_type == "socp",
                 **kwargs,
             )
         return self._solve_lindist(
@@ -209,12 +213,13 @@ class PyomoWrapper(Wrapper):
         raw_result,
         **kwargs,
     ):
-        """Solve using nonlinear BranchFlow model."""
+        """Solve using nonlinear BranchFlow or its SOCP relaxation."""
         from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
         from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
         from distopf.pyomo_models.solvers import solve
         import pyomo.environ as pyo  # type: ignore[import-untyped]
 
+        socp_relaxation = kwargs.pop("socp_relaxation", False)
         circular_constraints = kwargs.pop("circular_constraints", True)
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         initialize = kwargs.pop("initialize", "fbs")
@@ -233,8 +238,9 @@ class PyomoWrapper(Wrapper):
         )
         if (control_regulators or control_capacitors) and solver_name == "ipopt":
             raise ValueError(
-                "Discrete controls (control_regulators/control_capacitors) require a MINLP solver. "
-                "Use solver='bonmin' or solver='couenne', or disable discrete controls."
+                "Discrete controls (control_regulators/control_capacitors) "
+                "require a MINLP solver. Use solver='bonmin' or "
+                "solver='couenne', or disable discrete controls."
             )
 
         self.model = create_nl_branchflow_model(self.case)
@@ -245,6 +251,7 @@ class PyomoWrapper(Wrapper):
             thermal_constraints=thermal_constraints,
             control_regulators=control_regulators,
             control_capacitors=control_capacitors,
+            socp_relaxation=socp_relaxation,
             free_swing_voltage=free_swing_voltage,
             free_boundary_loads=free_boundary_loads,
         )
@@ -500,8 +507,12 @@ class PyomoWrapper(Wrapper):
             "curtail": objectives.generation_curtailment_objective_rule,
             "curtail_min": objectives.generation_curtailment_objective_rule,
             "curtailment": objectives.generation_curtailment_objective_rule,
-            "generation_cost_substation_penalty": objectives.generation_cost_with_substation_quadratic_penalty_objective_rule,
-            "gen_cost_substation_penalty": objectives.generation_cost_with_substation_quadratic_penalty_objective_rule,
+            "generation_cost_substation_penalty": (
+                objectives.generation_cost_with_substation_quadratic_penalty_objective_rule
+            ),
+            "gen_cost_substation_penalty": (
+                objectives.generation_cost_with_substation_quadratic_penalty_objective_rule
+            ),
             "cost": objectives.cost_minimization_rule,
             "cost_min": objectives.cost_minimization_rule,
         }

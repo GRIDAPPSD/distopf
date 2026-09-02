@@ -1163,6 +1163,25 @@ def add_current_constraint1(m: LindistModelProtocol) -> None:
 
     m.current_constraint = pyo.Constraint(m.branch_phase_set, m.time_set, rule=_rule1)
 
+def add_current_constraint1_relaxed(m: LindistModelProtocol) -> None:
+    def _rule1(m: LindistModelProtocol, fb, tb, phases, t):
+        ph = _parse_phases(phases)[0]
+        # Use v2_reg for regulator branches
+        if (fb, tb, ph) in m.reg_phase_set:
+            return (
+                m.p_flow[fb, tb, ph, t] ** 2 + m.q_flow[fb, tb, ph, t] ** 2
+                <= m.v2_reg[fb, tb, ph, t] * m.l_flow[fb, tb, ph + ph, t]
+            )
+        fb_ph = getattr(m, "primary_phase_map", {}).get((fb, tb))
+        if fb_ph is None:
+            fb_ph = ph
+        return (
+            m.p_flow[fb, tb, ph, t] ** 2 + m.q_flow[fb, tb, ph, t] ** 2
+            <= m.v2[fb, fb_ph, t] * m.l_flow[fb, tb, ph + ph, t]
+        )
+
+    m.current_constraint = pyo.Constraint(m.branch_phase_set, m.time_set, rule=_rule1)
+
 
 def add_current_constraint1_downstream_power(m: LindistModelProtocol) -> None:
     def _rule1(m: LindistModelProtocol, fb, tb, phases, t):
@@ -1216,6 +1235,7 @@ def add_nlp_constraints(
     reg_tap_change_limit: int | None = None,
     free_swing_voltage: bool = False,
     free_boundary_loads: bool = False,
+    socp_relaxation: bool = False,
 ) -> None:
     """
     Add all constraints for the nonlinear BranchFlow model.
@@ -1304,5 +1324,9 @@ def add_nlp_constraints(
         add_circular_battery_constraints_pq_control(m)
 
     # Current constraints
-    add_current_constraint1(m)
-    add_current_constraint2(m)
+    if socp_relaxation:
+        add_current_constraint1_relaxed(m)
+        add_current_constraint2_relaxed(m)
+    else:
+        add_current_constraint1(m)
+        add_current_constraint2(m)

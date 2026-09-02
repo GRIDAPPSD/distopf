@@ -59,6 +59,12 @@ _FORMULATION_REGISTRY: dict[str, dict] = {
         "model_type": "branchflow",
         "compatible_wrappers": ["pyomo"],
     },
+    # Pyomo SOCP relaxation of BranchFlow (NLP/IPOPT path)
+    "socp": {
+        "default_wrapper": "pyomo",
+        "model_type": "socp",
+        "compatible_wrappers": ["pyomo"],
+    },
     # LinDistFlow — supported by both pyomo (default) and matrix
     "lindist": {
         "default_wrapper": "pyomo",
@@ -500,13 +506,14 @@ class Case:
             Solver wrapper to use:
             - "matrix": CVXPY/CLARABEL (fast, convex problems only)
             - "matrix_bess": Multi-period matrix model (supports batteries, schedules)
-            - "pyomo": Pyomo/IPOPT (NLP-capable, supports lindist and branchflow)
+            - "pyomo": Pyomo/IPOPT (NLP-capable, supports lindist, branchflow, and socp)
             - None: Auto-selected from ``formulation``, or defaults to "pyomo"
         formulation : str, optional
             Math formulation to use. Auto-selects the appropriate wrapper when
             ``wrapper`` is not specified. Options:
             - "lindist": Linear DistFlow (pyomo default; also in matrix)
             - "branchflow": Nonlinear BranchFlow (pyomo + IPOPT/MINLP)
+            - "socp": SOCP relaxation of BranchFlow (pyomo + IPOPT/MINLP)
             - "lindist_cap_mi": LinDist + capacitor MILP (matrix)
             - "lindist_reg_mi": LinDist + regulator MILP (matrix)
             - "lindist_cap_reg_mi": LinDist + capacitor+regulator MILP (matrix)
