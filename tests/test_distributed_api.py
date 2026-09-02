@@ -54,7 +54,7 @@ def test_admm_scaled_option_is_recorded_and_replayed(tmp_path):
         area_info=AREA_INFO,
         objective="substation_power",
         scaled=False,
-        parallel=False,
+        parallel=True,
         max_iterations=1,
         control_regulators=False,
         solver="ipopt",
@@ -63,16 +63,19 @@ def test_admm_scaled_option_is_recorded_and_replayed(tmp_path):
 
     config = json.loads((tmp_path / "run_config.json").read_text())
     assert config["call"]["arguments"]["scaled"] is False
+    assert config["call"]["arguments"]["parallel"] is True
 
     replayed = opf.replay(tmp_path / "run_config.json")
     assert replayed.metadata["call"]["arguments"]["scaled"] is False
+    assert replayed.metadata["call"]["arguments"]["parallel"] is True
+    assert replayed.raw_result["admm_parallel_used"] is True
 
 
 def test_enapp_save_and_replay(tmp_path):
     result = _case().run_enapp(
         area_info=AREA_INFO,
         objective="substation_power",
-        parallel=False,
+        parallel=True,
         max_iterations=1,
         control_regulators=False,
         solver="ipopt",
@@ -82,12 +85,15 @@ def test_enapp_save_and_replay(tmp_path):
     config = json.loads((tmp_path / "run_config.json").read_text())
     assert config["call"]["method"] == "run_enapp"
     assert config["call"]["replayable"] is True
+    assert config["call"]["arguments"]["parallel"] is True
     assert config["distributed"]["solver"] == "enapp"
     assert config["distributed"]["area_info"] == AREA_INFO
 
     replayed = opf.replay(tmp_path / "run_config.json")
     assert replayed.metadata["distributed_solver"] == "enapp"
     assert replayed.metadata["area_info"] == AREA_INFO
+    assert replayed.metadata["call"]["arguments"]["parallel"] is True
+    assert replayed.raw_result["enapp_parallel_used"] is True
 
 
 def test_distributed_callbacks_are_not_replayable(tmp_path):

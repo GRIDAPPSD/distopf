@@ -1244,7 +1244,6 @@ def replay(run_config_path: Path | str):
                 "Distributed replay does not support solve_callback or "
                 "iteration_callback"
             )
-        arguments["parallel"] = False
     return getattr(case, method)(**arguments)
 
 
