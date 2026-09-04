@@ -148,9 +148,7 @@ class TestPowerFlowResultMethods:
         # The result must remain replayable even when the original case path is
         # unavailable; snapshot replay must not consult base_path.
         config["case"]["base_path"] = "missing-original-case"
-        (tmp_path / "results" / "run_config.json").write_text(
-            json.dumps(config)
-        )
+        (tmp_path / "results" / "run_config.json").write_text(json.dumps(config))
         replayed = opf.replay(tmp_path / "results" / "run_config.json")
         replayed_load = replayed.case.bus_data["pl_a"].sum()
         assert replayed_load == pytest.approx(original_load * 1.5)

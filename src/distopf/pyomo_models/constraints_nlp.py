@@ -1163,6 +1163,7 @@ def add_current_constraint1(m: LindistModelProtocol) -> None:
 
     m.current_constraint = pyo.Constraint(m.branch_phase_set, m.time_set, rule=_rule1)
 
+
 def add_current_constraint1_relaxed(m: LindistModelProtocol) -> None:
     def _rule1(m: LindistModelProtocol, fb, tb, phases, t):
         ph = _parse_phases(phases)[0]
