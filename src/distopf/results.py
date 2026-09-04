@@ -239,9 +239,7 @@ class PowerFlowResult:
                 "path": "input",
                 "replay_source": "snapshot",
                 "kwargs": (
-                    self.case._construction_kwargs()
-                    if self.case is not None
-                    else {}
+                    self.case._construction_kwargs() if self.case is not None else {}
                 ),
                 "modifications": (
                     self.case._replay_metadata()["modifications"]
