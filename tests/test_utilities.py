@@ -16,10 +16,43 @@ from distopf.utils.input_handlers import (
     handle_reg_input,
     handle_schedules_input,
 )
+from distopf.utils.topology import find_unconstrained_bus_phases
 
 
 class TestUtilityFunctions:
     """Test the handle_*_input utility functions."""
+
+    def test_find_unconstrained_bus_phases(self):
+        """Report bus phases absent from their incoming branch phases."""
+        buses = pd.DataFrame(
+            {
+                "id": [1, 2, 3],
+                "name": ["source", "single", "mismatch"],
+                "phases": ["a", "a", "ab"],
+                "bus_type": ["SWING", "PQ", "PQ"],
+            }
+        )
+        branches = pd.DataFrame({"fb": [1, 2], "tb": [2, 3], "phases": ["a", "a"]})
+
+        result = find_unconstrained_bus_phases(buses, branches)
+
+        assert result[["id", "phase"]].to_dict("records") == [{"id": 3, "phase": "b"}]
+
+    def test_find_unconstrained_bus_phases_keeps_triplex_phases(self):
+        """Treat s1 and s2 as phase labels rather than characters."""
+        buses = pd.DataFrame(
+            {
+                "id": [1, 2],
+                "name": ["source", "triplex"],
+                "phases": ["a", "s1s2"],
+                "bus_type": ["SWING", "PQ"],
+            }
+        )
+        branches = pd.DataFrame({"fb": [1], "tb": [2], "phases": ["s1"]})
+
+        result = find_unconstrained_bus_phases(buses, branches)
+
+        assert result[["id", "phase"]].to_dict("records") == [{"id": 2, "phase": "s2"}]
 
     def test_get_existing_key(self):
         """get() should return value at existing index."""
