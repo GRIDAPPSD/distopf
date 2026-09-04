@@ -6,7 +6,7 @@ Functions are designed to work with models created by create_lindist_model().
 """
 
 import pyomo.environ as pyo  # type: ignore
-from distopf.pyomo_models.lindist import ControlVariable
+from distopf.pyomo_models.injection_registry import install_legacy_injection_registry
 from distopf.pyomo_models.protocol import LindistModelProtocol
 from distopf.pyomo_models import common_constraints as const
 from numpy import sqrt
@@ -60,15 +60,10 @@ def _voltage_drop_term1(m: LindistModelProtocol, fb, tb, ph, t):
 
 
 def add_p_flow_constraints(m: LindistModelProtocol) -> None:
-    """
-    Add LinDistFlow power balance constraints.
-    Active power: P_ij = sum(P_jk) + p_L - p_D
-    """
+    """Add active-power balance from the signed injection registry."""
+    injections = install_legacy_injection_registry(m)
 
     def p_balance_rule(m: LindistModelProtocol, fb, tb, ph, t):
-        load = m.p_load[tb, ph, t]
-        generation = m.p_gen[tb, ph, t] if (tb, ph, t) in m.p_gen else 0
-        p_bat = m.p_bat[tb, ph, t] if (tb, ph, t) in m.p_bat else 0
         incoming_flow = m.p_flow[fb, tb, ph, t]
         outgoing_flows = sum(
             m.p_flow[fb2, tb2, ph, t]
@@ -82,7 +77,9 @@ def add_p_flow_constraints(m: LindistModelProtocol) -> None:
                     for sec_ph in ("s1", "s2"):
                         if (fb2, tb2, sec_ph) in m.branch_phase_set:
                             outgoing_flows += m.p_flow[fb2, tb2, sec_ph, t]
-        return incoming_flow == outgoing_flows + load - generation - p_bat
+        return incoming_flow == outgoing_flows - injections.expression(
+            m, tb, ph, t, reactive=False
+        )
 
     m.power_balance_p = pyo.Constraint(
         m.branch_phase_set, m.time_set, rule=p_balance_rule
@@ -90,16 +87,10 @@ def add_p_flow_constraints(m: LindistModelProtocol) -> None:
 
 
 def add_q_flow_constraints(m: LindistModelProtocol) -> None:
-    """
-    Add LinDistFlow power balance constraints.
-    Reactive power: Q_ij = sum(Q_jk) + q_L - q_D - q_C
-    """
+    """Add reactive-power balance from the signed injection registry."""
+    injections = install_legacy_injection_registry(m)
 
     def q_balanced_rule(m: LindistModelProtocol, fb, tb, ph, t):
-        load = m.q_load[tb, ph, t]
-        generation = m.q_gen[tb, ph, t] if (tb, ph, t) in m.q_gen else 0
-        q_bat = m.q_bat[tb, ph, t] if (tb, ph, t) in m.q_bat else 0
-        capacitor = m.q_cap[tb, ph, t] if (tb, ph, t) in m.q_cap else 0
         incoming_flow = m.q_flow[fb, tb, ph, t]
         outgoing_flows = sum(
             m.q_flow[fb2, tb2, ph, t]
@@ -114,7 +105,9 @@ def add_q_flow_constraints(m: LindistModelProtocol) -> None:
                     for sec_ph in ("s1", "s2"):
                         if (fb2, tb2, sec_ph) in m.branch_phase_set:
                             outgoing_flows += m.q_flow[fb2, tb2, sec_ph, t]
-        return incoming_flow == outgoing_flows + load - generation - capacitor - q_bat
+        return incoming_flow == outgoing_flows - injections.expression(
+            m, tb, ph, t, reactive=True
+        )
 
     m.power_balance_q = pyo.Constraint(
         m.branch_phase_set, m.time_set, rule=q_balanced_rule
@@ -151,10 +144,9 @@ def add_voltage_drop_constraints(m: LindistModelProtocol) -> None:
     )
 
 
-
 def add_constraints(
     model: pyo.ConcreteModel,
-    circular_constraints: bool = False,
+    circular_constraints: bool = True,
     thermal_constraints: bool = False,
     equality_only: bool = False,
     control_capacitors: bool = False,
@@ -231,15 +223,18 @@ def add_constraints(
     else:
         const.add_capacitor_constraints(model)
 
-    # Regulators
-    if control_regulators:
-        const.add_regulator_tap_sos1_constraints(model)
-        if reg_tap_change_limit is not None:
-            const.add_regulator_tap_change_limit_constraints(
-                model, max_tap_change=reg_tap_change_limit
-            )
-    else:
-        const.add_regulator_constraints(model)
+    # Regulators are branch-attached and are owned by RegulatorProvider when
+    # the model was created through the provider-aware factory. Keep this
+    # fallback for direct calls to this module with a manually-built model.
+    if not hasattr(model, "_device_registry"):
+        if control_regulators:
+            const.add_regulator_tap_sos1_constraints(model)
+            if reg_tap_change_limit is not None:
+                const.add_regulator_tap_change_limit_constraints(
+                    model, max_tap_change=reg_tap_change_limit
+                )
+        else:
+            const.add_regulator_constraints(model)
 
     # Generators
     if not equality_only:

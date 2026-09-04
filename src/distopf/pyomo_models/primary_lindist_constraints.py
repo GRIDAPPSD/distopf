@@ -6,7 +6,6 @@ Functions are designed to work with models created by create_lindist_model().
 """
 
 import pyomo.environ as pyo  # type: ignore
-from distopf.pyomo_models.lindist import ControlVariable
 from distopf.pyomo_models.protocol import LindistModelProtocol
 from numpy import sqrt
 

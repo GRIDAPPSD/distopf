@@ -8,7 +8,6 @@ Functions are designed to work with models created by create_nl_branchflow_model
 from itertools import combinations
 import pyomo.environ as pyo  # type: ignore
 from distopf.pyomo_models.nl_branchflow import _parse_phases
-from distopf.pyomo_models.lindist import ControlVariable
 from distopf.pyomo_models.protocol import LindistModelProtocol
 from distopf.pyomo_models import common_constraints as const
 from numpy import sqrt
@@ -386,15 +385,18 @@ def add_nlp_constraints(
     else:
         const.add_capacitor_constraints(model)
 
-    # Regulators
-    if control_regulators:
-        const.add_regulator_tap_sos1_constraints(model)
-        if reg_tap_change_limit is not None:
-            const.add_regulator_tap_change_limit_constraints(
-                model, max_tap_change=reg_tap_change_limit
-            )
-    else:
-        const.add_regulator_constraints(model)
+    # Regulators are branch-attached and are owned by RegulatorProvider when
+    # the model was created through the provider-aware factory. Keep this
+    # fallback for direct calls to this module with a manually-built model.
+    if not hasattr(model, "_device_registry"):
+        if control_regulators:
+            const.add_regulator_tap_sos1_constraints(model)
+            if reg_tap_change_limit is not None:
+                const.add_regulator_tap_change_limit_constraints(
+                    model, max_tap_change=reg_tap_change_limit
+                )
+        else:
+            const.add_regulator_constraints(model)
 
     # Generators
     if not equality_only:

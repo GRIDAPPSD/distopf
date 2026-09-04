@@ -1,4 +1,4 @@
-"""Backward-compatible exports for the historical NLP constraints module."""
+"""Backward-compatible imports for the legacy NLP constraints module."""
 
 from distopf.pyomo_models.common_constraints import *  # noqa: F401,F403
 from distopf.pyomo_models.nl_bfm_constraints import (  # noqa: F401

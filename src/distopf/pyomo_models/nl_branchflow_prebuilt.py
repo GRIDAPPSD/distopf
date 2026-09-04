@@ -6,7 +6,7 @@ create_nl_branchflow_model() and add_nlp_constraints() directly.
 """
 
 from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
-from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
+from distopf.pyomo_models.nl_bfm_constraints import add_nlp_constraints
 from distopf.api import Case
 
 

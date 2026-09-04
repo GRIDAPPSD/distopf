@@ -4,10 +4,8 @@ Constraint functions for DistOPF Pyomo models.
 Each function takes a Pyomo ConcreteModel and data, and adds constraints to the model.
 """
 
-from itertools import combinations
 import pyomo.environ as pyo  # type: ignore
-from distopf.pyomo_models.nl_branchflow import _parse_phases
-from distopf.pyomo_models.lindist import ControlVariable
+from distopf.pyomo_models.model_types import ControlVariable
 from distopf.pyomo_models.protocol import LindistModelProtocol
 from numpy import sqrt
 

@@ -1,20 +1,18 @@
-from enum import IntEnum
+"""LinDistFlow Pyomo model construction and compatibility API."""
+
+from __future__ import annotations
+
 import warnings
-import pyomo.environ as pyo  # type: ignore
 from typing import Any
+
 import pandas as pd
+import pyomo.environ as pyo  # type: ignore
+
 from distopf.api import Case
+from distopf.pyomo_models.battery_provider import BatteryProvider
+from distopf.pyomo_models.model_types import CONTROL_VARIABLE_MAP
 from distopf.pyomo_models.protocol import LindistModelProtocol
-
-
-class ControlVariable(IntEnum):
-    NONE = 0
-    Q = 1
-    P = 2
-    PQ = 3
-
-
-CONTROL_VARIABLE_MAP = {"": 0, "Q": 1, "P": 2, "PQ": 3}
+from distopf.pyomo_models.regulator_provider import RegulatorProvider
 
 # Triplex phase names (multi-character)
 TRIPLEX_PHASES = ("s1", "s2")
@@ -110,6 +108,31 @@ def _create_sets(m: pyo.ConcreteModel, case: Case) -> None:
         initialize=_create_phase_tuples(case.bat_data, "id"), dimen=2
     )
     m.bat_set = pyo.Set(initialize=case.bat_data.id.tolist())
+    m.gen_set = pyo.Set(
+        initialize=sorted(
+            {int(_id) for _id, _ph in _create_phase_tuples(case.gen_data)}
+        ),
+        doc="Generator entity IDs",
+    )
+    gen_phase_pairs = []
+    for _id in m.gen_set:
+        phases = [ph for ph in ("a", "b", "c") if (_id, ph) in m.gen_phase_set]
+        gen_phase_pairs.extend(
+            (_id, left, right) for left, right in zip(phases, phases[1:])
+        )
+    m.gen_phase_pair_set = pyo.Set(
+        initialize=gen_phase_pairs,
+        dimen=3,
+        doc="Adjacent phase pairs for optional generator phase locking",
+    )
+    # Optional per-generator phase-lock policy. Legacy cases default to False.
+    m.gen_phase_lock = pyo.Param(
+        m.gen_set,
+        initialize={_id: False for _id in m.gen_set},
+        within=pyo.Boolean,
+        mutable=True,
+        doc="Whether generator phases share active/reactive setpoints",
+    )
 
 
 def _create_rx_parameters(m: pyo.ConcreteModel, case: Case) -> None:
@@ -643,6 +666,7 @@ def create_lindist_model(
     case: Case,
     control_capacitors: bool = False,
     control_regulators: bool = False,
+    device_providers=None,
 ) -> LindistModelProtocol:
     """
     Factory function to create a configurable Pyomo LinDistFlow model.
@@ -701,7 +725,9 @@ def create_lindist_model(
     m.start_step = pyo.Param(initialize=case.start_step)
     m.n_steps = pyo.Param(initialize=case.n_steps)
 
-    # Create all standard sets and parameters
+    # Keep the legacy factory path as the numerical compatibility baseline while
+    # provider ownership is migrated incrementally. The extracted helpers remain
+    # available for comparison and are not yet authoritative for this model.
     _create_sets(m, case)
     _create_parameters(m, case)
 
@@ -712,7 +738,7 @@ def create_lindist_model(
         domain=pyo.NonNegativeReals,
         initialize=1,
         doc="Voltage magnitude squared (v^2)",
-    )  # Voltage magnitude squared
+    )
     m.p_flow = pyo.Var(m.branch_phase_set, m.time_set)
     m.q_flow = pyo.Var(m.branch_phase_set, m.time_set, initialize=0)
     m.p_gen = pyo.Var(m.gen_phase_set, m.time_set, domain=pyo.NonNegativeReals)
@@ -724,7 +750,6 @@ def create_lindist_model(
     m.p_load = pyo.Var(m.bus_phase_set, m.time_set)
     m.q_load = pyo.Var(m.bus_phase_set, m.time_set)
 
-    # Battery variables
     m.p_charge = pyo.Var(m.bat_set, m.time_set, initialize=0)
     m.p_discharge = pyo.Var(m.bat_set, m.time_set, initialize=0)
     m.p_bat = pyo.Var(m.bat_phase_set, m.time_set, initialize=0)
@@ -775,6 +800,16 @@ def create_lindist_model(
             doc="Binary tap selection (1 if tap k is selected)",
         )
 
+    from distopf.pyomo_models.device_registry import DeviceRegistry
+
+    registry = DeviceRegistry()
+    registry.add(BatteryProvider())
+    registry.add(RegulatorProvider())
+    if device_providers is not None:
+        registry.extend(device_providers)
+    registry.create_components(m, case, config=None)
+    m._device_registry = registry
+
     return m
 
 
@@ -788,6 +823,8 @@ def add_constraints(
     reg_tap_change_limit: int | None = None,
     free_swing_voltage: bool = False,
     free_boundary_loads: bool = False,
+    injection_registry=None,
+    device_providers=None,
 ) -> None:
     """Add constraints to a LinDistFlow Pyomo model.
 
@@ -816,6 +853,9 @@ def add_constraints(
         control_regulators=True)
     reg_tap_change_limit : int or None, default None
         Max tap change per timestep (only applies if reg_mi=True)
+    injection_registry : InjectionRegistry or None, default None
+        Optional signed bus-level P/Q injection registry. When omitted, the
+        legacy one-device-per-bus adapter is installed by the constraints.
 
     Examples
     --------
@@ -825,70 +865,52 @@ def add_constraints(
     >>> model = create_lindist_model(case, control_capacitors=True)
     >>> add_constraints(model, cap_mi=True, thermal_constraints=True)
     """
-    from distopf.pyomo_models import constraints
+    from distopf.pyomo_models.injection_registry import InjectionRegistry
 
-    # Power flow (always)
-    constraints.add_p_flow_constraints(model)
-    constraints.add_q_flow_constraints(model)
+    # A caller-supplied registry is authoritative. When omitted, the balance
+    # functions install the legacy adapter so existing models retain all device
+    # injections rather than accidentally receiving an empty registry.
+    if injection_registry is not None:
+        if not isinstance(injection_registry, InjectionRegistry):
+            raise TypeError("injection_registry must be an InjectionRegistry")
+        model._injection_registry = injection_registry
 
-    # Thermal limits
-    if thermal_constraints and not equality_only:
-        if circular_constraints:
-            constraints.add_circular_thermal_constraints(model)
-        else:
-            constraints.add_octagonal_thermal_constraints(model)
+    from distopf.pyomo_models.injection_registry import (
+        install_legacy_injection_registry,
+    )
 
-    # Voltage
-    if not equality_only:
-        constraints.add_voltage_limits(model)
-    constraints.add_voltage_drop_constraints(model)
-    if not free_swing_voltage:
-        constraints.add_swing_bus_constraints(model)
-    else:
-        constraints.add_swing_bus_voltage_slack_constraints(model)
+    # Install the legacy terms first, then let providers add only new device
+    # contributions. This keeps repeated calls to add_constraints idempotent.
+    injections = install_legacy_injection_registry(model)
+    provider_registry = getattr(model, "_device_registry", None)
+    if device_providers is not None:
+        from distopf.pyomo_models.device_registry import DeviceRegistry
 
-    # Loads
-    constraints.add_cvr_load_constraints(model, free_boundary_loads)
+        provider_registry = DeviceRegistry()
+        provider_registry.add(BatteryProvider())
+        provider_registry.extend(device_providers)
+        model._device_registry = provider_registry
+    if provider_registry is not None:
+        provider_registry.register_injections(model, injections, config=None)
 
-    # Capacitors
-    if control_capacitors:
-        constraints.add_capacitor_mi_constraints(model)
-        constraints.add_capacitor_mccormick_constraints(model)
-        constraints.add_capacitor_z_bounds(model)
-    else:
-        constraints.add_capacitor_constraints(model)
+    # Canonical LinDistFlow formulation-specific assembly.
+    from distopf.pyomo_models.lindist_constraints import (
+        add_constraints as add_lindist_constraints,
+    )
 
-    # Regulators
-    if control_regulators:
-        constraints.add_regulator_tap_sos1_constraints(model)
-        constraints.add_regulator_mi_with_impedance_constraints(model)
-        if reg_tap_change_limit is not None:
-            constraints.add_regulator_tap_change_limit_constraints(
-                model, max_tap_change=reg_tap_change_limit
-            )
-    else:
-        constraints.add_regulator_constraints(model)
+    add_lindist_constraints(
+        model,
+        circular_constraints=circular_constraints,
+        thermal_constraints=thermal_constraints,
+        equality_only=equality_only,
+        control_capacitors=control_capacitors,
+        control_regulators=control_regulators,
+        reg_tap_change_limit=reg_tap_change_limit,
+        free_swing_voltage=free_swing_voltage,
+        free_boundary_loads=free_boundary_loads,
+    )
+    return
 
-    # Generators
-    if not equality_only:
-        constraints.add_generator_limits(model)
-    constraints.add_generator_constant_p_constraints_q_control(model)
-    constraints.add_generator_constant_q_constraints_p_control(model)
-    if not equality_only:
-        if circular_constraints:
-            constraints.add_circular_generator_constraints_pq_control(model)
-        else:
-            constraints.add_octagonal_inverter_constraints_pq_control(model)
-
-    # Batteries
-    constraints.add_battery_constant_q_constraints_p_control(model)
-    constraints.add_battery_energy_constraints(model)
-    constraints.add_battery_net_p_bat_equal_phase_constraints(model)
-    if not equality_only:
-        constraints.add_battery_power_limits(model)
-        constraints.add_battery_soc_limits(model)
-        if circular_constraints:
-            constraints.add_circular_battery_constraints(model)
 
 
 class LinDistModel:
