@@ -15,3 +15,7 @@ examples/layouts/*
 *.code-workspace
 scratch/*
 */.ipynb_checkpoints/*
+graphify-out/
+CLAUDE.md
+.claude/
+benchmarks/
