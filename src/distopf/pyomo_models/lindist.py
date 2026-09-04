@@ -892,6 +892,20 @@ def add_constraints(
         model._device_registry = provider_registry
     if provider_registry is not None:
         provider_registry.register_injections(model, injections, config=None)
+        # Regulator constraints are branch-attached and must be installed before
+        # the formulation-specific builder sees the provider registry. The
+        # canonical builder deliberately skips its fallback regulator assembly
+        # when a registry is present, so that providers remain the single owner.
+        regulator_provider = next(
+            (
+                provider
+                for provider in provider_registry.providers
+                if provider.name == "regulators"
+            ),
+            None,
+        )
+        if regulator_provider is not None:
+            regulator_provider.add_constraints(model, config=None)
 
     # Canonical LinDistFlow formulation-specific assembly.
     from distopf.pyomo_models.lindist_constraints import (
