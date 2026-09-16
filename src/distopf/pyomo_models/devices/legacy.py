@@ -1,76 +1,37 @@
-"""Separate providers for legacy generator, load, and capacitor components."""
+"""Compatibility shims for the organized generator, load, and capacitor APIs."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
-from distopf.pyomo_models.injection_registry import InjectionRegistry
-from distopf.pyomo_models.providers import ExistingDeviceProvider
+from distopf.pyomo_models.devices.capacitor import CapacitorProvider
+from distopf.pyomo_models.devices.generator import GeneratorProvider
+from distopf.pyomo_models.devices.load import LoadProvider
+from distopf.pyomo_models.devices.injections import InjectionRegistry
+from distopf.pyomo_models.devices.registry import DeviceProvider
 
 
-class GeneratorProvider(ExistingDeviceProvider):
-    """Own the legacy generator injection namespace."""
+@dataclass(frozen=True)
+class ExistingDeviceProvider(DeviceProvider):
+    """No-op adapter retained for callers of the pre-extraction API."""
 
-    def __init__(self) -> None:
-        super().__init__(name="generators")
+    name: str
+    supported_formulations: frozenset[str] = frozenset({"lindist", "nl_bfm"})
+    component_hook: str | None = None
 
-    def register_injections(
-        self, model: Any, injections: InjectionRegistry, config: Any
-    ) -> None:
-        if any(provider.name == self.name for provider in injections.providers):
-            return
-        injections.add(
-            self.name,
-            p_term=lambda m, bus, phase, time: (
-                m.p_gen[bus, phase, time] if (bus, phase, time) in m.p_gen else 0
-            ),
-            q_term=lambda m, bus, phase, time: (
-                m.q_gen[bus, phase, time] if (bus, phase, time) in m.q_gen else 0
-            ),
-        )
-
-
-class LoadProvider(ExistingDeviceProvider):
-    """Own the legacy load injection namespace."""
-
-    def __init__(self) -> None:
-        super().__init__(name="loads")
+    def create_components(self, model: Any, case: Any, config: Any) -> None:
+        pass
 
     def register_injections(
         self, model: Any, injections: InjectionRegistry, config: Any
     ) -> None:
-        if any(provider.name == self.name for provider in injections.providers):
-            return
-        injections.add(
-            self.name,
-            p_term=lambda m, bus, phase, time: (
-                -m.p_load[bus, phase, time] if (bus, phase, time) in m.p_load else 0
-            ),
-            q_term=lambda m, bus, phase, time: (
-                -m.q_load[bus, phase, time] if (bus, phase, time) in m.q_load else 0
-            ),
-        )
+        pass
+
+    def add_constraints(self, model: Any, config: Any) -> None:
+        pass
 
 
-class CapacitorProvider(ExistingDeviceProvider):
-    """Own the legacy capacitor injection namespace."""
-
-    def __init__(self) -> None:
-        super().__init__(name="capacitors")
-
-    def register_injections(
-        self, model: Any, injections: InjectionRegistry, config: Any
-    ) -> None:
-        if any(provider.name == self.name for provider in injections.providers):
-            return
-        injections.add(
-            self.name,
-            q_term=lambda m, bus, phase, time: (
-                m.q_cap[bus, phase, time] if (bus, phase, time) in m.q_cap else 0
-            ),
-        )
-
-
-def default_legacy_providers() -> tuple[ExistingDeviceProvider, ...]:
-    """Return separate providers for each legacy bus-device family."""
+def default_legacy_providers() -> tuple[DeviceProvider, ...]:
+    """Return organized providers through the historical factory name."""
     return (GeneratorProvider(), LoadProvider(), CapacitorProvider())

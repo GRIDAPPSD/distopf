@@ -6,7 +6,10 @@ Functions are designed to work with models created by create_lindist_model().
 """
 
 import pyomo.environ as pyo  # type: ignore
-from distopf.pyomo_models.injection_registry import install_legacy_injection_registry
+from distopf.pyomo_models.devices.injections import (
+    get_injection_registry,
+    install_legacy_injection_registry,
+)
 from distopf.pyomo_models.protocol import LindistModelProtocol
 from distopf.pyomo_models import common_constraints as const
 from numpy import sqrt
@@ -61,7 +64,9 @@ def _voltage_drop_term1(m: LindistModelProtocol, fb, tb, ph, t):
 
 def add_p_flow_constraints(m: LindistModelProtocol) -> None:
     """Add active-power balance from the signed injection registry."""
-    injections = install_legacy_injection_registry(m)
+    injections = get_injection_registry(m)
+    if injections is None:
+        injections = install_legacy_injection_registry(m)
 
     def p_balance_rule(m: LindistModelProtocol, fb, tb, ph, t):
         incoming_flow = m.p_flow[fb, tb, ph, t]
@@ -88,7 +93,9 @@ def add_p_flow_constraints(m: LindistModelProtocol) -> None:
 
 def add_q_flow_constraints(m: LindistModelProtocol) -> None:
     """Add reactive-power balance from the signed injection registry."""
-    injections = install_legacy_injection_registry(m)
+    injections = get_injection_registry(m)
+    if injections is None:
+        injections = install_legacy_injection_registry(m)
 
     def q_balanced_rule(m: LindistModelProtocol, fb, tb, ph, t):
         incoming_flow = m.q_flow[fb, tb, ph, t]
@@ -212,16 +219,17 @@ def add_constraints(
     else:
         const.add_swing_bus_constraints(model)
 
-    # Loads
-    const.add_cvr_load_constraints(model, free_boundary_loads)
-
-    # Capacitors
-    if control_capacitors:
-        const.add_capacitor_mi_constraints(model)
-        const.add_capacitor_mccormick_constraints(model)
-        const.add_capacitor_z_bounds(model)
-    else:
-        const.add_capacitor_constraints(model)
+    # Device providers own load and capacitor policy constraints when the model
+    # came from the provider-aware factory. Directly assembled models retain the
+    # legacy formulation fallback.
+    if not hasattr(model, "_device_registry"):
+        const.add_cvr_load_constraints(model, free_boundary_loads)
+        if control_capacitors:
+            const.add_capacitor_mi_constraints(model)
+            const.add_capacitor_mccormick_constraints(model)
+            const.add_capacitor_z_bounds(model)
+        else:
+            const.add_capacitor_constraints(model)
 
     # Regulators are branch-attached and are owned by RegulatorProvider when
     # the model was created through the provider-aware factory. Keep this
@@ -236,23 +244,21 @@ def add_constraints(
         else:
             const.add_regulator_constraints(model)
 
-    # Generators
-    if not equality_only:
-        const.add_generator_limits(model)
-    const.add_generator_constant_p_constraints_q_control(model)
-    const.add_generator_constant_q_constraints_p_control(model)
-    if not equality_only:
-        if circular_constraints:
-            const.add_circular_generator_constraints_pq_control(model)
-        else:
-            const.add_octagonal_inverter_constraints_pq_control(model)
-
-    # Batteries
-    const.add_battery_constant_q_constraints_p_control(model)
-    const.add_battery_energy_constraints(model)
-    const.add_battery_net_p_bat_equal_phase_constraints(model)
-    if not equality_only:
-        const.add_battery_power_limits(model)
-        const.add_battery_soc_limits(model)
-        if circular_constraints:
-            const.add_circular_battery_constraints(model)
+    if not hasattr(model, "_device_registry"):
+        if not equality_only:
+            const.add_generator_limits(model)
+        const.add_generator_constant_p_constraints_q_control(model)
+        const.add_generator_constant_q_constraints_p_control(model)
+        if not equality_only:
+            if circular_constraints:
+                const.add_circular_generator_constraints_pq_control(model)
+            else:
+                const.add_octagonal_inverter_constraints_pq_control(model)
+        const.add_battery_constant_q_constraints_p_control(model)
+        const.add_battery_energy_constraints(model)
+        const.add_battery_net_p_bat_equal_phase_constraints(model)
+        if not equality_only:
+            const.add_battery_power_limits(model)
+            const.add_battery_soc_limits(model)
+            if circular_constraints:
+                const.add_circular_battery_constraints(model)

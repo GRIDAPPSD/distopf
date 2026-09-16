@@ -3,13 +3,13 @@
 import pandas as pd
 import pyomo.environ as pyo
 
-from distopf.pyomo_models.device_data import (
+from distopf.pyomo_models.devices.data import (
     create_bus_device_map,
     normalize_device_table,
 )
-from distopf.pyomo_models.device_registry import DeviceRegistry
-from distopf.pyomo_models.injection_providers import MappedInjectionProvider
-from distopf.pyomo_models.injection_registry import InjectionRegistry
+from distopf.pyomo_models.devices.registry import DeviceRegistry
+from distopf.pyomo_models.devices.injection_providers import MappedInjectionProvider
+from distopf.pyomo_models.devices.injections import InjectionRegistry
 
 
 def test_normalize_legacy_rows_supports_duplicate_bus_devices():

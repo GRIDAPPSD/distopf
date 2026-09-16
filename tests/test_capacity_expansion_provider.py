@@ -3,11 +3,11 @@
 import pandas as pd
 import pyomo.environ as pyo
 
-from distopf.pyomo_models.capacity_expansion_constraints import (
+from distopf.pyomo_models.extensions.capacity_expansion import (
     add_capacity_expansion_as_fraction_of_load,
 )
-from distopf.pyomo_models.capacity_expansion_provider import CapacityExpansionProvider
-from distopf.pyomo_models.injection_registry import InjectionRegistry
+from distopf.pyomo_models.extensions.capacity_expansion_provider import CapacityExpansionProvider
+from distopf.pyomo_models.devices.injections import InjectionRegistry
 
 
 def test_capacity_budget_defaults_are_not_mutable():

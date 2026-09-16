@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from distopf.pyomo_models.capacity_expansion_constraints import (
+from distopf.pyomo_models.extensions.capacity_expansion import (
     add_bess_capacity_constraints,
     add_capacity_expansion_variables,
     add_der_capacity_injection_constraints,
     add_pv_capacity_constraints,
     add_zone_capacity_expansion_constraints,
 )
-from distopf.pyomo_models.injection_registry import InjectionRegistry
+from distopf.pyomo_models.devices.injections import InjectionRegistry
 
 
 class CapacityExpansionProvider:
