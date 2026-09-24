@@ -216,6 +216,9 @@ class TestCaseMethods:
         assert result.currents is not None
         assert result.current_angles is not None
         assert result.solver == "fbs"
+        assert result.iterations > 0
+        assert result.solve_time is not None
+        assert result.solve_time >= 0
 
         assert len(result.voltages) > 0
         assert len(result.currents) > 0

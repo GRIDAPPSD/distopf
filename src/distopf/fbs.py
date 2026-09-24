@@ -1,8 +1,13 @@
+import json
 import re
+import time
+from pathlib import Path
+from typing import Optional
+
 import numpy as np
 import pandas as pd
+
 from distopf.api import Case
-from typing import Optional
 from distopf.utils.input_handlers import get
 from distopf.results import PowerFlowResult
 
@@ -48,6 +53,7 @@ class FBS:
         self.gen_data = case.gen_data
         self.cap_data = case.cap_data
         self.reg_data = case.reg_data
+        self.bat_data = case.bat_data
 
         # Build network topology
         self.topology = self._build_topology()
@@ -56,6 +62,7 @@ class FBS:
         self.node_generations = self._build_node_generations()
         self.node_capacitors = self._build_node_capacitors()
         self.phase_connections = self._build_phase_connections()
+        self.node_batteries = self._build_node_batteries()
 
         # Find the real or decomposed input swing bus.
         swing_buses = self.bus_data[
@@ -70,6 +77,7 @@ class FBS:
         self.currents = {}
         self.converged = False
         self.iterations = 0
+        self.solve_time = None
 
     def _is_secondary_node(self, node):
         return 3 in self.phase_connections[node] or 4 in self.phase_connections[node]
@@ -225,6 +233,39 @@ class FBS:
                 generations[node_id] = S_gen
         return generations
 
+    def _build_node_batteries(self) -> dict[int, np.ndarray]:
+        """Build battery injections, mapped only to the battery's phases.
+
+        Native battery input stores net ``p``/``q`` at a bus and distributes it
+        equally over the declared phases.  Per-phase ``p_*``/``q_*`` columns,
+        when present, are used directly instead.
+        """
+        batteries = {}
+        if self.bat_data is None or len(self.bat_data) == 0:
+            return batteries
+        for _, bat in self.bat_data.iterrows():
+            phases = [
+                phase
+                for phase in _parse_phases(str(get(bat, "phases", "abc")).lower())
+                if phase in PHASE_IDX_MAP
+            ]
+            values = np.zeros(5, dtype=complex)
+            has_phase_values = any(
+                f"p_{phase}" in bat.index or f"q_{phase}" in bat.index
+                for phase in PHASE_IDX_MAP
+            )
+            if has_phase_values:
+                for phase in phases:
+                    values[PHASE_IDX_MAP[phase]] = complex(
+                        get(bat, f"p_{phase}", 0), get(bat, f"q_{phase}", 0)
+                    )
+            elif phases:
+                value = complex(get(bat, "p", 0), get(bat, "q", 0)) / len(phases)
+                for phase in phases:
+                    values[PHASE_IDX_MAP[phase]] = value
+            batteries[int(bat["id"])] = values
+        return batteries
+
     def _build_node_capacitors(self) -> dict[int, np.ndarray]:
         """Build capacitor data for each node."""
         capacitors = {}
@@ -307,6 +348,13 @@ class FBS:
             for ph in connected_phases:
                 if abs(v_node[ph]) > 1e-10 and abs(s_gen[ph]) > 1e-10:
                     I_injection[ph] += np.conj(s_gen[ph] / v_node[ph])
+
+        # Battery current
+        if node in self.node_batteries:
+            s_bat = self.node_batteries[node]
+            for ph in connected_phases:
+                if abs(v_node[ph]) > 1e-10 and abs(s_bat[ph]) > 1e-10:
+                    I_injection[ph] += np.conj(s_bat[ph] / v_node[ph])
 
         # Capacitor current
         if node in self.node_capacitors:
@@ -563,6 +611,8 @@ class FBS:
         dict
             Results containing voltages, currents, and convergence info
         """
+        start_time = time.perf_counter()
+
         # Initialize
         v_old = self._initialize_voltages()
         self.converged = False
@@ -612,6 +662,7 @@ class FBS:
         # Store results
         self.voltages = v_new
         self.currents = i_branches
+        self.solve_time = time.perf_counter() - start_time
 
         return self.results()
 
@@ -1056,6 +1107,8 @@ class FBS:
             active_power_loads=p_load_df,
             reactive_power_loads=q_load_df,
             converged=self.converged,
+            iterations=self.iterations,
+            solve_time=self.solve_time,
             solver="fbs",
             result_type="fbs",  # FBS - iteration returns 6 values
             model=self,  # for plotting helpers expecting result.model
@@ -1441,52 +1494,383 @@ def fbs_solve(
 
 
 def run_fbs_with_opf_setpoints(
-    case: Case,
-    opf_result=None,
+    case: Case, opf_result=None, *, p_gens=None, q_gens=None,
+    max_iterations: int = 100, tolerance: float = 1e-6, verbose: bool = False,
+) -> "PowerFlowResult":
+    """Replay OPF load, generator, and native battery setpoints through FBS."""
+    if opf_result is not None:
+        p_gens = p_gens if p_gens is not None else getattr(opf_result, "active_power_generation", None)
+        q_gens = q_gens if q_gens is not None else getattr(opf_result, "reactive_power_generation", None)
+    loads = (getattr(opf_result, "active_power_loads", None), getattr(opf_result, "reactive_power_loads", None)) if opf_result is not None else (None, None)
+    bats = (getattr(opf_result, "battery_active_power", None), getattr(opf_result, "battery_reactive_power", None)) if opf_result is not None else (None, None)
+    frames = [*loads, p_gens, q_gens, *bats]
+    periods = _replay_periods(case, frames)
+    results = []
+    for t in periods:
+        current = case.copy()
+        if any(f is not None and len(f) for f in loads):
+            _apply_load_setpoints_to_case(current, _at_period(loads[0], t), _at_period(loads[1], t))
+            current.ignore_schedule = True
+        elif current.schedules is not None and len(current.schedules):
+            _apply_schedule_to_case(current, t)
+            current.ignore_schedule = True
+        _apply_gen_setpoints_to_case(current, _at_period(p_gens, t), _at_period(q_gens, t)) if p_gens is not None or q_gens is not None else None
+        _apply_battery_setpoints_to_case(current, _at_period(bats[0], t), _at_period(bats[1], t))
+        current.start_step, current.n_steps = 0, 1
+        result = current.run_fbs(max_iterations=max_iterations, tolerance=tolerance, verbose=verbose)
+        _set_result_period(result, t)
+        for name, frame in zip(("battery_active_power", "battery_reactive_power"), bats):
+            selected = _at_period(frame, t)
+            if selected is not None and len(selected):
+                setattr(result, name, selected)
+        results.append(result)
+    return results[0] if len(results) == 1 else _aggregate_fbs_results(results, case)
+
+
+def run_fbs_from_saved_results(
+    results_dir: Path | str,
+    case: Optional[Case] = None,
     *,
-    p_gens: Optional[pd.DataFrame] = None,
-    q_gens: Optional[pd.DataFrame] = None,
     max_iterations: int = 100,
     tolerance: float = 1e-6,
     verbose: bool = False,
-) -> "PowerFlowResult":
-    """Run FBS using OPF generator setpoints.
+) -> PowerFlowResult:
+    """Run FBS using setpoints saved by :meth:`PowerFlowResult.save`.
 
-    This prefers `p_gens`/`q_gens` if provided, otherwise extracts them
-    from `opf_result` (a :class:`PowerFlowResult`). Returns a
-    :class:`PowerFlowResult` with `result_type='fbs'`.
+    This helper reads the saved result CSVs and replays those setpoints through
+    :func:`run_fbs_with_opf_setpoints`; it never re-executes the recorded OPF
+    call.  When ``case`` is omitted, the materialized ``input`` snapshot is
+    reconstructed with :func:`distopf.api.create_case`.
+
+    Parameters
+    ----------
+    results_dir : Path or str
+        Directory containing result CSVs written by ``PowerFlowResult.save``.
+    case : Case, optional
+        Explicit case to use instead of reconstructing ``results_dir/input``.
+    max_iterations, tolerance, verbose
+        FBS solver options.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the result directory, input snapshot, or required setpoint CSV is
+        missing.
+    ValueError
+        If saved setpoints cannot be applied to the selected case.
     """
-    # Local import to avoid circular import at module import time
+    results_path = Path(results_dir)
+    if not results_path.exists() or not results_path.is_dir():
+        raise FileNotFoundError(f"Results directory does not exist: {results_path}")
+
+    # ``PowerFlowResult.save`` omits fields whose value is ``None``.  Generator
+    # setpoint files are emitted by OPF results even when empty, while load
+    # files may be absent (in which case the centralized replay path uses the
+    # reconstructed case schedules).  Require the generator pair and reject a
+    # partially written pair of files; battery files remain optional below.
+    required = ("active_power_generation.csv", "reactive_power_generation.csv")
+    missing = [name for name in required if not (results_path / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "Saved results are missing required setpoint file(s): "
+            + ", ".join(missing)
+        )
+    load_files = ("active_power_loads", "reactive_power_loads")
+    present_load_files = [name for name in load_files if (results_path / f"{name}.csv").is_file()]
+    if present_load_files and len(present_load_files) != len(load_files):
+        missing_load = [f"{name}.csv" for name in load_files if name not in present_load_files]
+        raise FileNotFoundError(
+            "Saved load setpoints are incomplete; missing: " + ", ".join(missing_load)
+        )
+
+    run_config = {}
+    config_path = results_path / "run_config.json"
+    if config_path.is_file():
+        try:
+            with config_path.open() as stream:
+                run_config = json.load(stream)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Could not read {config_path}: {exc}") from exc
+
+    if case is None:
+        input_path = results_path / "input"
+        if not input_path.is_dir():
+            raise FileNotFoundError(
+                f"No case supplied and saved input snapshot is missing: {input_path}"
+            )
+        from distopf.api import create_case
+
+        case_info = run_config.get("case", {})
+        kwargs = case_info.get("kwargs", {}) if isinstance(case_info, dict) else {}
+        allowed = {
+            "start_step",
+            "n_steps",
+            "delta_t",
+            "ignore_schedule",
+            "ignore_gen",
+            "ignore_bat",
+            "ignore_cap",
+            "ignore_reg",
+        }
+        kwargs = {key: value for key, value in kwargs.items() if key in allowed}
+        case = create_case(input_path, model_type="csv", **kwargs)
+
+    frames = {
+        name: pd.read_csv(results_path / f"{name}.csv")
+        for name in (
+            "active_power_generation",
+            "reactive_power_generation",
+        )
+    }
+    if present_load_files:
+        frames.update(
+            {
+                name: pd.read_csv(results_path / f"{name}.csv")
+                for name in load_files
+            }
+        )
+    else:
+        frames.update({name: None for name in load_files})
+    for name, frame in frames.items():
+        if frame is not None and frame.empty:
+            frames[name] = None
+        elif frame is not None and "id" not in frame.columns:
+            raise ValueError(f"Saved setpoint file {name}.csv must contain an 'id' column")
+
+    def _validate_ids(name, frame, target, target_label):
+        if frame is None or frame.empty or target is None or len(target) == 0:
+            if frame is not None and not frame.empty and (target is None or len(target) == 0):
+                raise ValueError(
+                    f"Saved {name} setpoints contain IDs, but the selected case has no {target_label}"
+                )
+            return
+        saved_ids = set(frame["id"].dropna())
+        case_ids = set(target["id"].dropna())
+        if not saved_ids.issubset(case_ids):
+            raise ValueError(
+                f"Saved {name} IDs are incompatible with the selected case; "
+                f"unknown IDs: {sorted(saved_ids - case_ids)}"
+            )
+
+    _validate_ids("active_power_loads", frames.get("active_power_loads"), case.bus_data, "buses")
+    _validate_ids("reactive_power_loads", frames.get("reactive_power_loads"), case.bus_data, "buses")
+    _validate_ids("active_power_generation", frames["active_power_generation"], case.gen_data, "generators")
+    _validate_ids("reactive_power_generation", frames["reactive_power_generation"], case.gen_data, "generators")
+
+    # Battery setpoints are optional: OPF results without batteries do not
+    # write meaningful battery files, and cases without batteries should not
+    # require or attempt to consume them.
+    battery_frames = {}
+    if case.bat_data is not None and len(case.bat_data):
+        for name in ("battery_active_power", "battery_reactive_power"):
+            path = results_path / f"{name}.csv"
+            if path.is_file():
+                frame = pd.read_csv(path)
+                if "id" not in frame.columns:
+                    raise ValueError(f"Saved setpoint file {name}.csv must contain an 'id' column")
+                _validate_ids(name, frame, case.bat_data, "batteries")
+                battery_frames[name] = frame
+
+    replay_result = PowerFlowResult(
+        active_power_loads=frames.get("active_power_loads"),
+        reactive_power_loads=frames.get("reactive_power_loads"),
+        active_power_generation=frames["active_power_generation"],
+        reactive_power_generation=frames["reactive_power_generation"],
+        battery_active_power=battery_frames.get("battery_active_power"),
+        battery_reactive_power=battery_frames.get("battery_reactive_power"),
+        case=case,
+    )
+    return run_fbs_with_opf_setpoints(
+        case,
+        replay_result,
+        max_iterations=max_iterations,
+        tolerance=tolerance,
+        verbose=verbose,
+    )
+
+
+def replay_exact_power_flow(
+    results_dir: Path | str,
+    *,
+    output_dir: Optional[Path | str] = None,
+    case: Optional[Case] = None,
+    save: bool = True,
+    overwrite: bool = False,
+    max_iterations: int = 100,
+    tolerance: float = 1e-6,
+    verbose: bool = False,
+) -> PowerFlowResult:
+    """Replay a saved OPF operating point through the exact FBS power flow.
+
+    The saved OPF result is treated as a set of operating-point decisions; the
+    recorded optimization is not run again. By default, the exact result is
+    saved in an ``exact`` subdirectory of ``results_dir``.
+    """
+    results_path = Path(results_dir)
+    exact_path = Path(output_dir) if output_dir is not None else results_path / "exact"
+
+    if save and exact_path.exists() and not overwrite:
+        raise FileExistsError(
+            f"Exact power-flow result directory already exists: {exact_path}. "
+            "Pass overwrite=True to replace it."
+        )
+    if save and overwrite and exact_path.exists():
+        import shutil
+
+        shutil.rmtree(exact_path)
+
+    result = run_fbs_from_saved_results(
+        results_path,
+        case=case,
+        max_iterations=max_iterations,
+        tolerance=tolerance,
+        verbose=verbose,
+    )
+    result.metadata = {
+        **(result.metadata or {}),
+        "analysis": "exact_power_flow_replay",
+        "source_results_dir": str(results_path),
+        "reference_solver": "fbs",
+    }
+    if save:
+        result.save(exact_path)
+    return result
+
+
+def _at_period(frame, t):
+    if frame is None:
+        return None
+    if "t" not in frame.columns:
+        return frame.copy()
+    return frame[frame["t"] == t].copy()
+
+
+def _replay_periods(case, frames):
+    """Return replay labels, falling back to the case's configured horizon."""
+    labelled = [
+        value
+        for frame in frames
+        if frame is not None and len(frame) and "t" in frame.columns
+        for value in frame["t"].dropna()
+    ]
+    if labelled:
+        return list(dict.fromkeys(labelled))
+    start = int(getattr(case, "start_step", 0) or 0)
+    n_steps = int(getattr(case, "n_steps", 1) or 1)
+    return list(range(start, start + n_steps)) if n_steps > 1 else [start]
+
+
+def _apply_frame_setpoints(target, frame, prefixes):
+    """Apply phase-column result data to native ``prefix_phase`` columns."""
+    if frame is None or len(frame) == 0 or target is None or len(target) == 0:
+        return target
+    indexed = target.set_index("id").copy()
+    for prefix in prefixes:
+        phase_columns = {
+            phase: f"{prefix}_{phase}"
+            for phase in PHASE_IDX_MAP
+            if phase in frame.columns and f"{prefix}_{phase}" in indexed.columns
+        }
+        if not phase_columns:
+            continue
+        update = frame[["id"] + list(phase_columns)].rename(
+            columns={phase: column for phase, column in phase_columns.items()}
+        ).set_index("id")
+        indexed.update(update)
+    return indexed.reset_index()
+
+
+def _apply_load_setpoints_to_case(case, p_loads, q_loads):
+    case.bus_data = _apply_frame_setpoints(case.bus_data, p_loads, ["pl"]) if p_loads is not None else case.bus_data
+    case.bus_data = _apply_frame_setpoints(case.bus_data, q_loads, ["ql"]) if q_loads is not None else case.bus_data
+
+
+def _apply_battery_setpoints_to_case(case, p_bats, q_bats):
+    if case.bat_data is None or len(case.bat_data) == 0:
+        return
+    for frame, column in ((p_bats, "p"), (q_bats, "q")):
+        if frame is None or len(frame) == 0:
+            continue
+        indexed = frame.set_index("id")
+        for i, row in case.bat_data.iterrows():
+            if row["id"] not in indexed.index:
+                continue
+            source = indexed.loc[row["id"]]
+            if isinstance(source, pd.DataFrame):
+                source = source.iloc[0]
+            phases = _parse_phases(str(row.get("phases", "abc")).lower())
+            values = [source[p] for p in phases if p in source.index] or [source[f"{column}_{p}"] for p in phases if f"{column}_{p}" in source.index]
+            if values:
+                case.bat_data.at[i, column] = float(np.nansum(values))
+
+
+def _apply_schedule_to_case(case, t):
+    """Apply one schedule row, preferring phase-specific p/q multipliers."""
+    if case.schedules is None or t not in case.schedules.index:
+        return
+    bus = case.bus_data.copy()
+    for i, row in bus.iterrows():
+        shape = str(row.get("load_shape", "default"))
+        for phase in PHASE_IDX_MAP:
+            for prefix, schedule_suffix in (("pl", "p"), ("ql", "q")):
+                column = f"{prefix}_{phase}"
+                if column not in bus.columns:
+                    continue
+                phase_schedule = f"{shape}.{phase}.{schedule_suffix}"
+                schedule = (
+                    phase_schedule
+                    if phase_schedule in case.schedules.columns
+                    else shape
+                )
+                multiplier = (
+                    case.schedules.at[t, schedule]
+                    if schedule in case.schedules.columns
+                    else 1.0
+                )
+                bus.at[i, column] = row.get(column, 0) * multiplier
+    case.bus_data = bus
+
+
+def _set_result_period(result, t):
+    for name in ("voltages", "voltage_angles", "active_power_flows", "reactive_power_flows", "active_power_generation", "reactive_power_generation", "active_power_loads", "reactive_power_loads", "battery_active_power", "battery_reactive_power", "currents", "current_angles"):
+        frame = getattr(result, name, None)
+        if frame is not None:
+            frame = frame.copy()
+            frame["t"] = t
+            setattr(result, name, frame)
+
+
+def _aggregate_fbs_results(results, case):
     from distopf.results import PowerFlowResult
+    names = ("voltages", "voltage_angles", "active_power_flows", "reactive_power_flows", "active_power_generation", "reactive_power_generation", "active_power_loads", "reactive_power_loads", "battery_active_power", "battery_reactive_power", "currents", "current_angles")
+    values = {name: pd.concat([getattr(r, name) for r in results if getattr(r, name, None) is not None], ignore_index=True) if any(getattr(r, name, None) is not None for r in results) else None for name in names}
+    return PowerFlowResult(**values, converged=all(r.converged for r in results), iterations=sum(r.iterations or 0 for r in results), solve_time=sum(r.solve_time or 0 for r in results), solver="fbs", result_type="fbs", case=case.copy())
 
-    if opf_result is not None:
-        if p_gens is None:
-            p_gens = opf_result.active_power_generation
-        if q_gens is None:
-            q_gens = opf_result.reactive_power_generation
 
-    case_copy = case.copy()
-
-    if p_gens is not None or q_gens is not None:
-        _apply_gen_setpoints_to_case(case_copy, p_gens, q_gens)
-
-    fbs_res = case_copy.run_fbs(
-        max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+def replay_exact_power_flow_from_opf_result(
+    case: Case,
+    opf_result: PowerFlowResult,
+    *,
+    output_dir: Optional[Path | str] = None,
+    max_iterations: int = 100,
+    tolerance: float = 1e-6,
+    verbose: bool = False,
+) -> PowerFlowResult:
+    """Run exact FBS using an in-memory OPF result's setpoints."""
+    result = run_fbs_with_opf_setpoints(
+        case,
+        opf_result,
+        max_iterations=max_iterations,
+        tolerance=tolerance,
+        verbose=verbose,
     )
-
-    if isinstance(fbs_res, PowerFlowResult):
-        return fbs_res
-
-    result = PowerFlowResult(
-        voltages=fbs_res.get("voltages"),
-        currents=fbs_res.get("currents"),
-        converged=fbs_res.get("converged", True),
-        iterations=fbs_res.get("iterations"),
-        solver="fbs",
-        result_type="fbs",
-        case=case_copy,
-    )
-
+    result.metadata = {
+        **(result.metadata or {}),
+        "analysis": "exact_power_flow_replay",
+        "reference_solver": "fbs",
+    }
+    if output_dir is not None:
+        result.save(output_dir)
     return result
 
 
@@ -1494,6 +1878,10 @@ def _apply_gen_setpoints_to_case(
     case: Case, p_gens: Optional[pd.DataFrame], q_gens: Optional[pd.DataFrame]
 ) -> None:
     """Apply OPF p/q setpoints to `case.gen_data` (vectorized updates)."""
+    if case.gen_data is None or len(case.gen_data) == 0:
+        return
+    if (p_gens is None or len(p_gens) == 0) and (q_gens is None or len(q_gens) == 0):
+        return
     gen_indexed = case.gen_data.set_index("id")
 
     # p_gens
@@ -1551,6 +1939,6 @@ if __name__ == "__main__":
     print(dss_parser.get_v_solved())
 
     # Compare results with both reference solver and OpenDSS
-    comparison = compare_with_reference(
-        upf, model=m, dss_parser=dss_parser, verbose=True
-    )
+    # comparison = compare_with_reference(
+    #     upf, model=m, dss_parser=dss_parser, verbose=True
+    # )

@@ -14,6 +14,20 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 from distopf.results import PowerFlowResult
 
+
+def compare_voltage_results(
+    approximate_result: PowerFlowResult,
+    exact_result: PowerFlowResult,
+    *,
+    nominal_voltage: float = 1.0,
+) -> Dict[str, Any]:
+    """Compare approximate and exact result-object voltage tables."""
+    return compare_voltage_tables(
+        approximate_result.voltages,
+        exact_result.voltages,
+        nominal_voltage=nominal_voltage,
+    )
+
 # For backward compatibility, SolverResult is now an alias for PowerFlowResult
 SolverResult = PowerFlowResult
 
@@ -49,6 +63,69 @@ class ComparisonResult:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for JSON serialization."""
         return asdict(self)
+
+
+def compare_voltage_tables(
+    approximate: pd.DataFrame,
+    exact: pd.DataFrame,
+    *,
+    nominal_voltage: float = 1.0,
+) -> Dict[str, Any]:
+    """Compare approximate and exact voltage tables using explicit keys.
+
+    Results are aligned on ``id`` and, when present in either table, ``t``.
+    The returned ``errors`` table contains one row per bus, period, and phase.
+    Percent errors are relative to nominal voltage, which is well behaved near
+    zero voltage differences and directly interpretable in per-unit systems.
+    """
+    if approximate is None or exact is None:
+        raise ValueError("Both approximate and exact voltage tables are required")
+    key_columns = ["id"]
+    if "t" in approximate.columns or "t" in exact.columns:
+        if "t" not in approximate.columns or "t" not in exact.columns:
+            raise ValueError("Both voltage tables must contain 't' for multi-period comparison")
+        key_columns.append("t")
+    for name, frame in (("approximate", approximate), ("exact", exact)):
+        missing = [key for key in key_columns if key not in frame.columns]
+        if missing:
+            raise ValueError(f"{name} voltage table is missing key columns: {missing}")
+        if frame.duplicated(key_columns).any():
+            raise ValueError(f"{name} voltage table contains duplicate keys: {key_columns}")
+
+    phases = [phase for phase in ("a", "b", "c", "s1", "s2")
+              if phase in approximate.columns and phase in exact.columns]
+    if not phases:
+        raise ValueError("No common phase columns found in voltage tables")
+
+    left = approximate[key_columns + phases].rename(columns={p: f"{p}_approximate" for p in phases})
+    right = exact[key_columns + phases].rename(columns={p: f"{p}_exact" for p in phases})
+    merged = left.merge(right, on=key_columns, how="inner", validate="one_to_one")
+    if len(merged) != len(left) or len(merged) != len(right):
+        raise ValueError("Voltage tables do not contain the same bus/period keys")
+
+    error_frames = []
+    for phase in phases:
+        frame = merged[key_columns + [f"{phase}_approximate", f"{phase}_exact"]].copy()
+        frame["phase"] = phase
+        frame = frame.rename(columns={f"{phase}_approximate": "approximate", f"{phase}_exact": "exact"})
+        frame["error_pu"] = (frame["exact"] - frame["approximate"]).abs()
+        frame["error_pct_nominal"] = 100.0 * frame["error_pu"] / abs(nominal_voltage)
+        error_frames.append(frame)
+    errors = pd.concat(error_frames, ignore_index=True)
+    stats = errors["error_pu"].describe(percentiles=[0.95, 0.99])
+    worst_index = errors["error_pu"].idxmax()
+    worst = errors.loc[worst_index].to_dict() if len(errors) else None
+    return {
+        "errors": errors,
+        "max_abs_pu": float(errors["error_pu"].max()),
+        "mean_abs_pu": float(errors["error_pu"].mean()),
+        "std_abs_pu": float(errors["error_pu"].std()),
+        "p95_abs_pu": float(stats["95%"]),
+        "p99_abs_pu": float(stats["99%"]),
+        "max_pct_nominal": float(errors["error_pct_nominal"].max()),
+        "mean_pct_nominal": float(errors["error_pct_nominal"].mean()),
+        "worst_case": worst,
+    }
 
 
 def compute_voltage_deltas(v1: pd.DataFrame, v2: pd.DataFrame) -> Dict[str, Any]:
