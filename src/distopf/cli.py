@@ -512,28 +512,44 @@ def _emit_comparison(response: dict[str, Any], as_json: bool) -> None:
 
 
 def _compare_exact_source(task: tuple[Path, Path | None, bool, Path | None, Path, float]) -> dict[str, Any]:
-    """Compare one exact-replay source; kept module-level for process pickling."""
-    source, right_folder, batch, output_dir, folder, nominal_voltage = task
-    exact_source = right_folder or source
-    exact_folder = exact_source / "exact"
-    replay_run = False
-    if not exact_folder.exists():
-        from distopf.fbs import replay_exact_power_flow as replay_api
+    """Compare one exact-replay source; kept module-level for process pickling.
 
-        replay_api(exact_source, output_dir=exact_folder, overwrite=False)
-        replay_run = True
-    if batch and output_dir:
-        destination = output_dir / source.relative_to(folder)
-    else:
-        destination = output_dir or source / "comparison"
-    return _write_comparison(
-        source,
-        exact_folder,
-        destination,
-        nominal_voltage,
-        exact_source_folder=exact_source,
-        exact_replay_run=replay_run,
-    )
+    Batch tasks convert an individual exception into a stable result record so
+    that ``ProcessPoolExecutor.map`` can continue yielding later results.
+    Non-batch tasks intentionally re-raise and retain fail-fast behavior.
+    """
+    source, right_folder, batch, output_dir, folder, nominal_voltage = task
+    try:
+        exact_source = right_folder or source
+        exact_folder = exact_source / "exact"
+        replay_run = False
+        if not exact_folder.exists():
+            from distopf.fbs import replay_exact_power_flow as replay_api
+
+            replay_api(exact_source, output_dir=exact_folder, overwrite=False)
+            replay_run = True
+        if batch and output_dir:
+            destination = output_dir / source.relative_to(folder)
+        else:
+            destination = output_dir or source / "comparison"
+        return _write_comparison(
+            source,
+            exact_folder,
+            destination,
+            nominal_voltage,
+            exact_source_folder=exact_source,
+            exact_replay_run=replay_run,
+        )
+    except Exception as exc:
+        if not batch:
+            raise
+        return {
+            "ok": False,
+            "left_folder": str(source),
+            "exact_source_folder": str(right_folder or source),
+            "error": type(exc).__name__,
+            "message": str(exc),
+        }
 
 
 @distopf.command(name="compare")
@@ -614,14 +630,47 @@ def compare_exact(folder: Path, right_folder: Path | None, batch: bool, depth: i
         ]
         if batch and workers > 1:
             with ProcessPoolExecutor(max_workers=workers) as executor:
-                responses = list(executor.map(_compare_exact_source, tasks))
+                result_iterator = executor.map(_compare_exact_source, tasks)
+                responses = []
+                for index, item in enumerate(result_iterator, start=1):
+                    responses.append(item)
+                    status = "failed" if not item["ok"] else "finished"
+                    click.echo(
+                        f"[{index}/{len(tasks)}] {status}: {item['left_folder']}",
+                        err=as_json,
+                    )
         else:
-            responses = [_compare_exact_source(task) for task in tasks]
+            responses = []
+            for index, task in enumerate(tasks, start=1):
+                item = _compare_exact_source(task)
+                responses.append(item)
+                if batch:
+                    status = "failed" if not item["ok"] else "finished"
+                    click.echo(
+                        f"[{index}/{len(tasks)}] {status}: {item['left_folder']}",
+                        err=as_json,
+                    )
         if batch:
-            response = {"ok": True, "format": "distopf.result_comparison.batch.v1", "folder": str(folder), "depth": depth, "workers": workers, "folders": [item["left_folder"] for item in responses], "comparisons": responses}
+            failed = [item for item in responses if not item["ok"]]
+            response = {
+                # ``ok`` is the aggregate case status.  A batch with failures
+                # still exits zero because discovery/setup and every case were
+                # processed successfully from the CLI's perspective.
+                "ok": not failed,
+                "format": "distopf.result_comparison.batch.v1",
+                "folder": str(folder),
+                "depth": depth,
+                "workers": workers,
+                "folders": [item["left_folder"] for item in responses],
+                "comparisons": responses,
+                "failed": len(failed),
+                "succeeded": len(responses) - len(failed),
+            }
             _emit(response, as_json)
             if not as_json:
                 click.echo(f"Compared {len(responses)} folders at depth {depth} under {folder}")
+                if failed:
+                    click.echo(f"{len(failed)} folder(s) failed; see the per-folder records above")
         else:
             _emit_comparison(responses[0], as_json)
     except click.exceptions.Exit:

@@ -290,7 +290,7 @@ def test_compare_exact_batch_processes_sorted_immediate_subdirectories(tmp_path)
     result = CliRunner().invoke(distopf, ["compare-exact", str(parent), "--batch", "--json"])
 
     assert result.exit_code == 0
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
     assert payload["depth"] == 1
     assert payload["workers"] == 1
     assert payload["folders"] == [str(second), str(first)]
@@ -299,6 +299,156 @@ def test_compare_exact_batch_processes_sorted_immediate_subdirectories(tmp_path)
     ]
     assert (second / "comparison" / "comparison.json").exists()
     assert (first / "comparison" / "comparison.json").exists()
+
+
+def test_compare_exact_batch_reports_finished_folders_in_human_output(tmp_path, monkeypatch):
+    parent = tmp_path / "results"
+    parent.mkdir()
+    failed = _write_compare_tables(parent / "a-failed", power_delta=0.0)
+    succeeded = _write_compare_tables(parent / "b-succeeded", power_delta=0.0)
+    _write_compare_tables(failed / "exact", power_delta=1.0)
+    _write_compare_tables(succeeded / "exact", power_delta=2.0)
+
+    from distopf import cli
+
+    original = cli._write_comparison
+
+    def fail_one(left_folder, *args, **kwargs):
+        if left_folder == failed:
+            raise RuntimeError("comparison failed")
+        return original(left_folder, *args, **kwargs)
+
+    monkeypatch.setattr(cli, "_write_comparison", fail_one)
+    result = CliRunner().invoke(distopf, ["compare-exact", str(parent), "--batch"])
+
+    assert result.exit_code == 0
+    assert f"[1/2] failed: {failed}" in result.output
+    assert f"[2/2] finished: {succeeded}" in result.output
+    assert "Compared 2 folders" in result.output
+
+
+def test_compare_exact_batch_progress_does_not_corrupt_json_output(tmp_path):
+    parent = tmp_path / "results"
+    parent.mkdir()
+    first = _write_compare_tables(parent / "a-case", power_delta=0.0)
+    second = _write_compare_tables(parent / "b-case", power_delta=0.0)
+    _write_compare_tables(first / "exact", power_delta=1.0)
+    _write_compare_tables(second / "exact", power_delta=2.0)
+
+    result = CliRunner().invoke(distopf, ["compare-exact", str(parent), "--batch", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["folders"] == [str(first), str(second)]
+    assert "finished:" not in result.stdout
+    assert f"[1/2] finished: {first}" in result.stderr
+    assert f"[2/2] finished: {second}" in result.stderr
+
+
+def test_compare_exact_batch_continues_after_source_failure(tmp_path, monkeypatch):
+    parent = tmp_path / "results"
+    parent.mkdir()
+    failed = _write_compare_tables(parent / "a-failed", power_delta=0.0)
+    succeeded = _write_compare_tables(parent / "b-succeeded", power_delta=0.0)
+    _write_compare_tables(failed / "exact", power_delta=1.0)
+    _write_compare_tables(succeeded / "exact", power_delta=2.0)
+
+    from distopf import cli
+
+    original = cli._write_comparison
+
+    def fail_one(left_folder, *args, **kwargs):
+        if left_folder == failed:
+            raise RuntimeError("comparison failed")
+        return original(left_folder, *args, **kwargs)
+
+    monkeypatch.setattr(cli, "_write_comparison", fail_one)
+    result = CliRunner().invoke(distopf, ["compare-exact", str(parent), "--batch", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["failed"] == 1
+    assert payload["succeeded"] == 1
+    assert [item["left_folder"] for item in payload["comparisons"]] == [
+        str(failed), str(succeeded)
+    ]
+    assert payload["comparisons"][0] == {
+        "ok": False,
+        "left_folder": str(failed),
+        "exact_source_folder": str(failed),
+        "error": "RuntimeError",
+        "message": "comparison failed",
+    }
+    assert payload["comparisons"][1]["ok"] is True
+    assert (succeeded / "comparison" / "comparison.json").exists()
+
+
+def test_compare_exact_non_batch_failure_remains_fail_fast(tmp_path, monkeypatch):
+    left = _write_compare_tables(tmp_path / "left")
+    (left / "exact").mkdir()
+    from distopf import cli
+
+    monkeypatch.setattr(
+        cli,
+        "_write_comparison",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("comparison failed")),
+    )
+
+    result = CliRunner().invoke(distopf, ["compare-exact", str(left), "--json"])
+
+    assert result.exit_code == 2
+    assert json.loads(result.output) == {
+        "error": "RuntimeError",
+        "message": "comparison failed",
+        "ok": False,
+    }
+
+
+def test_compare_exact_batch_failure_record_is_preserved_with_workers(tmp_path, monkeypatch):
+    parent = tmp_path / "results"
+    parent.mkdir()
+    failed = _write_compare_tables(parent / "a-failed", power_delta=0.0)
+    succeeded = _write_compare_tables(parent / "b-succeeded", power_delta=0.0)
+    _write_compare_tables(failed / "exact", power_delta=1.0)
+    _write_compare_tables(succeeded / "exact", power_delta=2.0)
+
+    from distopf import cli
+
+    original = cli._write_comparison
+
+    def fail_one(left_folder, *args, **kwargs):
+        if left_folder == failed:
+            raise OSError("unreadable comparison")
+        return original(left_folder, *args, **kwargs)
+
+    monkeypatch.setattr(cli, "_write_comparison", fail_one)
+
+    class FakeProcessPoolExecutor:
+        def __init__(self, *, max_workers):
+            assert max_workers == 2
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def map(self, function, tasks):
+            return [function(task) for task in tasks]
+
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", FakeProcessPoolExecutor)
+    result = CliRunner().invoke(
+        distopf, ["compare-exact", str(parent), "--batch", "--workers", "2", "--json"]
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["failed"] == 1
+    assert payload["succeeded"] == 1
+    assert payload["comparisons"][0]["message"] == "unreadable comparison"
+    assert payload["comparisons"][1]["ok"] is True
 
 
 def test_compare_exact_batch_supports_depth_two_and_relative_output_paths(tmp_path):
@@ -318,7 +468,7 @@ def test_compare_exact_batch_supports_depth_two_and_relative_output_paths(tmp_pa
     )
 
     assert result.exit_code == 0
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
     assert payload["folders"] == [str(second), str(first)]
     assert [item["output_dir"] for item in payload["comparisons"]] == [
         str(output / "dirA" / "results1A"),
@@ -369,7 +519,7 @@ def test_compare_exact_batch_uses_process_pool_and_preserves_order(tmp_path, mon
     )
 
     assert result.exit_code == 0
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
     assert executor_calls["max_workers"] == 2
     assert executor_calls["function"] is cli._compare_exact_source
     assert pickle.loads(pickle.dumps(cli._compare_exact_source)) is cli._compare_exact_source
