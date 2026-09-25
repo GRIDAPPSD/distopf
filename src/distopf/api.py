@@ -1254,6 +1254,10 @@ def replay(run_config_path: Path | str):
     return getattr(case, method)(**arguments)
 
 
+def run(run_config_path: Path | str):
+    return replay(run_config_path)
+
+
 def _validate_area_info(area_info: dict[str, dict[str, list]]) -> None:
     """Validate the JSON-safe topology contract used by spatial solvers."""
     import json
