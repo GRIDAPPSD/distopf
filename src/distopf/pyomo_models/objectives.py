@@ -225,6 +225,24 @@ def combined_energy_and_demand_charge_objective_rule(model: LindistModelProtocol
     return substation_cost_objective_rule(model) + demand_charge_objective_rule(model)
 
 
+def voltage_min_objective_rule(model):
+    """
+    Minimize voltages
+
+    Parameters
+    ----------
+    model : LindistModelProtocol
+        Pyomo model
+
+    Returns
+    -------
+    Pyomo expression for total voltage deviation
+    """
+    return pyo.quicksum(
+        model.v2[_id, ph, t] for _id, ph in model.bus_phase_set for t in model.time_set
+    )
+
+
 # ============ Penalty Functions for Soft Constraints ==================================
 # ======================================================================================
 #
