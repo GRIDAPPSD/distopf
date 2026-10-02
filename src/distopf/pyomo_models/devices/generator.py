@@ -34,15 +34,25 @@ def create_generator_parameters(model: Any, case: Any) -> None:
                     try:
                         multiplier = float(case.schedules.at[time, shape])
                     except (TypeError, ValueError):
-                        warnings.warn(f"Non-numeric generator schedule {shape!r}; using 1.0")
-                p_data[(key[0], key[1], time)] = getattr(row, f"p_{phase}", 0.0) * multiplier
+                        warnings.warn(
+                            f"Non-numeric generator schedule {shape!r}; using 1.0"
+                        )
+                p_data[(key[0], key[1], time)] = (
+                    getattr(row, f"p_{phase}", 0.0) * multiplier
+                )
                 q_data[(key[0], key[1], time)] = getattr(row, f"q_{phase}", 0.0)
-    model.p_gen_nom = pyo.Param(model.gen_phase_set, model.time_set, initialize=p_data, default=0.0)
-    model.q_gen_nom = pyo.Param(model.gen_phase_set, model.time_set, initialize=q_data, default=0.0)
+    model.p_gen_nom = pyo.Param(
+        model.gen_phase_set, model.time_set, initialize=p_data, default=0.0
+    )
+    model.q_gen_nom = pyo.Param(
+        model.gen_phase_set, model.time_set, initialize=q_data, default=0.0
+    )
     model.s_rated = pyo.Param(model.gen_phase_set, initialize=rating, default=1000.0)
     model.q_gen_min = pyo.Param(model.gen_phase_set, initialize=q_min, default=-1000.0)
     model.q_gen_max = pyo.Param(model.gen_phase_set, initialize=q_max, default=1000.0)
-    model.gen_control_type = pyo.Param(model.gen_phase_set, initialize=control, default=0)
+    model.gen_control_type = pyo.Param(
+        model.gen_phase_set, initialize=control, default=0
+    )
     model.gen_cost = pyo.Param(model.gen_phase_set, initialize=cost, default=0.0)
 
 
@@ -54,13 +64,17 @@ class GeneratorProvider:
 
     def create_components(self, model: Any, case: Any, config: Any) -> None:
         if not hasattr(model, "gen_phase_set"):
-            model.gen_phase_set = pyo.Set(initialize=phase_tuples(case.gen_data), dimen=2)
+            model.gen_phase_set = pyo.Set(
+                initialize=phase_tuples(case.gen_data), dimen=2
+            )
         if not hasattr(model, "gen_set"):
             model.gen_set = pyo.Set(
                 initialize=sorted({device for device, _ in model.gen_phase_set})
             )
         if not hasattr(model, "p_gen"):
-            model.p_gen = pyo.Var(model.gen_phase_set, model.time_set, domain=pyo.NonNegativeReals)
+            model.p_gen = pyo.Var(
+                model.gen_phase_set, model.time_set, domain=pyo.NonNegativeReals
+            )
         if not hasattr(model, "q_gen"):
             model.q_gen = pyo.Var(model.gen_phase_set, model.time_set, initialize=0)
         if not hasattr(model, "p_gen_nom"):
@@ -71,16 +85,26 @@ class GeneratorProvider:
                     (device, left, right)
                     for device in model.gen_set
                     for left, right in zip(
-                        [phase for phase in ("a", "b", "c") if (device, phase) in model.gen_phase_set],
-                        [phase for phase in ("a", "b", "c") if (device, phase) in model.gen_phase_set][1:],
+                        [
+                            phase
+                            for phase in ("a", "b", "c")
+                            if (device, phase) in model.gen_phase_set
+                        ],
+                        [
+                            phase
+                            for phase in ("a", "b", "c")
+                            if (device, phase) in model.gen_phase_set
+                        ][1:],
                     )
                 ],
                 dimen=3,
             )
         if not hasattr(model, "gen_phase_lock"):
             model.gen_phase_lock = pyo.Param(
-                model.gen_set, initialize={device: False for device in model.gen_set},
-                within=pyo.Boolean, mutable=True,
+                model.gen_set,
+                initialize={device: False for device in model.gen_set},
+                within=pyo.Boolean,
+                mutable=True,
             )
 
     def register_injections(
@@ -91,14 +115,10 @@ class GeneratorProvider:
         injections.add(
             self.name,
             p_term=lambda m, bus, phase, time: (
-                m.p_gen[bus, phase, time]
-                if (bus, phase, time) in m.p_gen
-                else 0
+                m.p_gen[bus, phase, time] if (bus, phase, time) in m.p_gen else 0
             ),
             q_term=lambda m, bus, phase, time: (
-                m.q_gen[bus, phase, time]
-                if (bus, phase, time) in m.q_gen
-                else 0
+                m.q_gen[bus, phase, time] if (bus, phase, time) in m.q_gen else 0
             ),
         )
 

@@ -12,7 +12,11 @@ from distopf.pyomo_models.devices.data import parse_phases
 
 def create_regulator_parameters(model: Any, case: Any) -> None:
     """Create regulator ratio parameter components from case data."""
-    ratio = {(int(row.fb), int(row.tb), phase): getattr(row, f"ratio_{phase}", 1.0) for _, row in case.reg_data.iterrows() for phase in parse_phases(str(row.phases))}
+    ratio = {
+        (int(row.fb), int(row.tb), phase): getattr(row, f"ratio_{phase}", 1.0)
+        for _, row in case.reg_data.iterrows()
+        for phase in parse_phases(str(row.phases))
+    }
     model.reg_ratio = pyo.Param(model.reg_phase_set, initialize=ratio, default=1.0)
 
 
@@ -30,7 +34,8 @@ class RegulatorProvider:
                     (int(row.fb), int(row.tb), phase)
                     for _, row in case.reg_data.iterrows()
                     for phase in parse_phases(str(row.phases))
-                ], dimen=3,
+                ],
+                dimen=3,
             )
         if not hasattr(model, "reg_ratio"):
             create_regulator_parameters(model, case)
@@ -39,11 +44,14 @@ class RegulatorProvider:
             ratios = {index: 0.9 + index * 0.00625 for index in range(33)}
             model.tap_ratio = pyo.Param(model.tap_set, initialize=ratios)
             model.tap_ratio_squared = pyo.Param(
-                model.tap_set, initialize={key: value**2 for key, value in ratios.items()}
+                model.tap_set,
+                initialize={key: value**2 for key, value in ratios.items()},
             )
             model.reg_big_m = pyo.Param(initialize=1e3)
             model.u_reg = pyo.Var(
-                model.reg_phase_set, model.tap_set, model.time_set,
+                model.reg_phase_set,
+                model.tap_set,
+                model.time_set,
                 domain=pyo.Binary,
                 initialize=lambda _m, _fb, _tb, _ph, tap, _t: 1 if tap == 16 else 0,
             )

@@ -35,8 +35,12 @@ def create_load_parameters(model: Any, case: Any) -> None:
                     multiplier_q = case.schedules.at[time, f"{shape}.{phase}.q"]
                 p_data[row.id, phase, time] = p_load * multiplier_p
                 q_data[row.id, phase, time] = q_load * multiplier_q
-    model.p_load_nom = pyo.Param(model.bus_phase_set, model.time_set, initialize=p_data, default=0.0)
-    model.q_load_nom = pyo.Param(model.bus_phase_set, model.time_set, initialize=q_data, default=0.0)
+    model.p_load_nom = pyo.Param(
+        model.bus_phase_set, model.time_set, initialize=p_data, default=0.0
+    )
+    model.q_load_nom = pyo.Param(
+        model.bus_phase_set, model.time_set, initialize=q_data, default=0.0
+    )
     model.cvr_p = pyo.Param(model.bus_phase_set, initialize=cvr_p, default=0.0)
     model.cvr_q = pyo.Param(model.bus_phase_set, initialize=cvr_q, default=0.0)
 
@@ -65,14 +69,10 @@ class LoadProvider:
         injections.add(
             self.name,
             p_term=lambda m, bus, phase, time: (
-                -m.p_load[bus, phase, time]
-                if (bus, phase, time) in m.p_load
-                else 0
+                -m.p_load[bus, phase, time] if (bus, phase, time) in m.p_load else 0
             ),
             q_term=lambda m, bus, phase, time: (
-                -m.q_load[bus, phase, time]
-                if (bus, phase, time) in m.q_load
-                else 0
+                -m.q_load[bus, phase, time] if (bus, phase, time) in m.q_load else 0
             ),
         )
 

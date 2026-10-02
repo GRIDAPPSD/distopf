@@ -881,7 +881,9 @@ def add_constraints(
             raise TypeError("injection_registry must be an InjectionRegistry")
         model._injection_registry = injection_registry
 
-    from distopf.pyomo_models.devices.injections import install_legacy_injection_registry
+    from distopf.pyomo_models.devices.injections import (
+        install_legacy_injection_registry,
+    )
 
     # The compatibility adapter supplies the same signed namespaces while the
     # organized providers own component and constraint construction. Providers
@@ -932,7 +934,6 @@ def add_constraints(
         free_boundary_loads=free_boundary_loads,
     )
     return
-
 
 
 class LinDistModel:

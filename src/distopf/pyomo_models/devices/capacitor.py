@@ -13,7 +13,11 @@ from distopf.pyomo_models.devices.injections import InjectionRegistry
 
 def create_capacitor_parameters(model: Any, case: Any) -> None:
     """Create capacitor parameter components from case data."""
-    q_data = {(row.id, phase): getattr(row, f"q_{phase}", 0.0) for _, row in case.cap_data.iterrows() for phase in parse_phases(str(row.phases))}
+    q_data = {
+        (row.id, phase): getattr(row, f"q_{phase}", 0.0)
+        for _, row in case.cap_data.iterrows()
+        for phase in parse_phases(str(row.phases))
+    }
     model.q_cap_nom = pyo.Param(model.cap_phase_set, initialize=q_data, default=0.0)
 
 
@@ -25,14 +29,23 @@ class CapacitorProvider:
 
     def create_components(self, model: Any, case: Any, config: Any) -> None:
         if not hasattr(model, "cap_phase_set"):
-            model.cap_phase_set = pyo.Set(initialize=phase_tuples(case.cap_data), dimen=2)
+            model.cap_phase_set = pyo.Set(
+                initialize=phase_tuples(case.cap_data), dimen=2
+            )
         if not hasattr(model, "q_cap"):
             model.q_cap = pyo.Var(model.cap_phase_set, model.time_set)
         if not hasattr(model, "q_cap_nom"):
             create_capacitor_parameters(model, case)
         if getattr(model, "cap_mi_enabled", False) and not hasattr(model, "u_cap"):
-            model.u_cap = pyo.Var(model.cap_phase_set, model.time_set, domain=pyo.Binary, initialize=1)
-            model.z_cap = pyo.Var(model.cap_phase_set, model.time_set, domain=pyo.NonNegativeReals, initialize=1)
+            model.u_cap = pyo.Var(
+                model.cap_phase_set, model.time_set, domain=pyo.Binary, initialize=1
+            )
+            model.z_cap = pyo.Var(
+                model.cap_phase_set,
+                model.time_set,
+                domain=pyo.NonNegativeReals,
+                initialize=1,
+            )
 
     def register_injections(
         self, model: Any, injections: InjectionRegistry, config: Any
@@ -42,9 +55,7 @@ class CapacitorProvider:
         injections.add(
             self.name,
             q_term=lambda m, bus, phase, time: (
-                m.q_cap[bus, phase, time]
-                if (bus, phase, time) in m.q_cap
-                else 0
+                m.q_cap[bus, phase, time] if (bus, phase, time) in m.q_cap else 0
             ),
         )
 

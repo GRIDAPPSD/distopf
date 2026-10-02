@@ -2,7 +2,12 @@
 
 from .battery import BatteryProvider
 from .capacitor import CapacitorProvider, create_capacitor_parameters
-from .data import DeviceTable, create_bus_device_map, normalize_device_table, parse_phases
+from .data import (
+    DeviceTable,
+    create_bus_device_map,
+    normalize_device_table,
+    parse_phases,
+)
 from .generator import GeneratorProvider, create_generator_parameters
 from .injections import InjectionRegistry
 from .legacy import ExistingDeviceProvider, default_legacy_providers

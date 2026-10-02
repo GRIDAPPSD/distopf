@@ -6,7 +6,9 @@ import pyomo.environ as pyo
 from distopf.pyomo_models.extensions.capacity_expansion import (
     add_capacity_expansion_as_fraction_of_load,
 )
-from distopf.pyomo_models.extensions.capacity_expansion_provider import CapacityExpansionProvider
+from distopf.pyomo_models.extensions.capacity_expansion_provider import (
+    CapacityExpansionProvider,
+)
 from distopf.pyomo_models.devices.injections import InjectionRegistry
 
 
