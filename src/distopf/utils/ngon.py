@@ -1,33 +1,19 @@
 import numpy as np
 
 
-def ngon_line_equations(n, theta0=0):
+def ngon_line_equations(n, theta0=0, decimals=12):
     """
-    Generate line equations for a regular n-gon inscribed in a unit circle.
-
-    Parameters:
-        n      : number of sides
-        theta0 : starting angle in radians (where first vertex is located)
+    Generate line equations ax + by = 1 for a regular n-gon
+    inscribed in a unit circle.
 
     Returns:
-        List of tuples (a, b) for equations ax + by = 1
+        List of (a, b) tuples of Python floats.
     """
-    # Calculate vertex angles
-    angles = [theta0 + k * (2 * np.pi / n) for k in range(n)]
-    # Calculate vertex coordinates
-    vertices = [(np.cos(angle), np.sin(angle)) for angle in angles]
-    # Calculate line equations for each side
-    lines = []
-    for k in range(n):
-        # Get consecutive vertices
-        x1, y1 = vertices[k]
-        x2, y2 = vertices[(k + 1) % n]
-        # Calculate coefficients
-        a = y1 - y2
-        b = x2 - x1
-        c = a * x1 + b * y1
-        lines.append([a / c, b / c])
-    return np.array(lines)
+    r = 1.0 / np.cos(np.pi / n)
+    angles = theta0 + np.pi/n + np.arange(n) * (2 * np.pi / n)
+    eqs = np.column_stack((r * np.cos(angles), r * np.sin(angles)))
+    eqs = np.round(eqs, decimals) + 0.0
+    return [tuple(row) for row in eqs.tolist()]
 
 
 def print_table(n, theta0=0):
@@ -54,10 +40,18 @@ def get_ngon_info(n, theta0=0):
     """
     side_length = 2 * np.sin(np.pi / n)
     apothem = np.cos(np.pi / n)
-
+    area = 0.5 * n * side_length * apothem
+    circle_area = np.pi
+    percent_of_circle = (area / circle_area) * 100
+    print(f"Percent of circle area: {percent_of_circle:.2f}%")
     print(f"Side length: {side_length:.6f}")
     print(f"Apothem (distance from center to side): {apothem:.6f}")
-    print()
+    import time
+
+    start_time = time.perf_counter()
+    ngon_line_equations(n, theta0)
+    time_to_compute = time.perf_counter() - start_time
+    print(f"time to compute: {time_to_compute:.6f} seconds")
 
 
 # Example usage
@@ -65,14 +59,19 @@ if __name__ == "__main__":
     # Square with sides parallel to axes
     print("=" * 50)
     print_table(4, theta0=0)
-
+    get_ngon_info(4, theta0=0)
     # Hexagon with vertex on x-axis
     print("=" * 50)
     print_table(6, theta0=0)
+    get_ngon_info(6, theta0=0)
 
     # Octagon with vertex on x-axis
     print("=" * 50)
     print_table(8, theta0=0)
+    get_ngon_info(8, theta0=0)
     # Octagon with vertex on x-axis
     print("=" * 50)
     print_table(16, theta0=0)
+    get_ngon_info(16, theta0=0)
+    print("=" * 50)
+    get_ngon_info(1e3, theta0=0)
