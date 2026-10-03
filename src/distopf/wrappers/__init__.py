@@ -11,10 +11,12 @@ from distopf.wrappers.base import Wrapper
 from distopf.wrappers.matrix_wrapper import MatrixWrapper
 from distopf.wrappers.matrix_bess_wrapper import MatrixBessWrapper
 from distopf.wrappers.pyomo_wrapper import PyomoWrapper
+from distopf.wrappers.new_pyomo_wrapper import NewPyomoWrapper
 
 __all__ = [
     "Wrapper",
     "MatrixWrapper",
     "MatrixBessWrapper",
     "PyomoWrapper",
+    "NewPyomoWrapper",
 ]

@@ -40,12 +40,14 @@ def _get_wrapper_registry() -> dict:
             MatrixWrapper,
             MatrixBessWrapper,
             PyomoWrapper,
+            NewPyomoWrapper,
         )
 
         _WRAPPER_REGISTRY = {
             "matrix": MatrixWrapper,
             "matrix_bess": MatrixBessWrapper,
             "pyomo": PyomoWrapper,
+            "new_pyomo": NewPyomoWrapper,
         }
     return _WRAPPER_REGISTRY
 
@@ -57,19 +59,19 @@ _FORMULATION_REGISTRY: dict[str, dict] = {
     "branchflow": {
         "default_wrapper": "pyomo",
         "model_type": "branchflow",
-        "compatible_wrappers": ["pyomo"],
+        "compatible_wrappers": ["pyomo", "new_pyomo"],
     },
     # Pyomo SOCP relaxation of BranchFlow (NLP/IPOPT path)
     "socp": {
         "default_wrapper": "pyomo",
         "model_type": "socp",
-        "compatible_wrappers": ["pyomo"],
+        "compatible_wrappers": ["pyomo", "new_pyomo"],
     },
     # LinDistFlow — supported by both pyomo (default) and matrix
     "lindist": {
         "default_wrapper": "pyomo",
         "model_type": "lindist",
-        "compatible_wrappers": ["pyomo", "matrix"],
+        "compatible_wrappers": ["pyomo", "matrix", "new_pyomo"],
     },
     # Matrix single-step formulations
     "lindist_cap_mi": {
