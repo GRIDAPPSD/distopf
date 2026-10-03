@@ -515,6 +515,7 @@ class PyomoWrapper(Wrapper):
             ),
             "cost": objectives.cost_minimization_rule,
             "cost_min": objectives.cost_minimization_rule,
+            "voltage_min": objectives.voltage_min_objective_rule,
         }
 
         if obj_lower in objective_map:

@@ -3,8 +3,12 @@
 This directory contains a comprehensive set of examples showing how to use DistOPF
 for various optimal power flow (OPF) problems, organized by topic.
 
-Some examples are Marimo notebooks. To use these, run `marimo edit`. Marimo will
-open the browser and list the available notebooks.
+Most `.py` files in this directory are ordinary Python scripts. Run them from the
+repository root with, for example, `uv run examples/tutorials/01_simple_power_flow.py`.
+Some files are Marimo apps (marked `Marimo` in the tables below); open one with
+`uv run marimo edit examples/basics/basic_power_flow_examples.py` or start Marimo
+and select the file in its browser UI. A Marimo app is edited/run through Marimo,
+not executed as a plain script when interactive cells are required.
 
 ## Directory Structure
 
@@ -21,11 +25,15 @@ examples/
 
 ## How to Run Examples
 
-Each example is standalone and can be run independently:
+Each ordinary script is standalone and can be run independently:
 
     uv run examples/tutorials/01_simple_power_flow.py
-    uv run examples/pyomo/build_your_own_opf.py
+    uv run examples/pyomo/pyomo_multiperiod.py
     uv run examples/data_import/cim_example.py
+
+For a Marimo app, use Marimo's editor instead:
+
+    uv run marimo edit examples/basics/basic_power_flow_examples.py
 
 ---
 
@@ -129,8 +137,8 @@ Performance benchmarking, distributed algorithms, and experimental scripts.
 
 **Objective**
   The goal of optimization:
-  - `"loss_min"`: Minimize real power losses
-  - `"voltage_dev"`: Minimize voltage deviations
+  - `"loss_min"` (or `"loss"`): Minimize real power losses
+  - `"voltage_deviation"`: Minimize voltage deviations (Pyomo)
 
 **Control Variable**
   What DERs (generators, batteries, inverters) are allowed to control:
@@ -141,9 +149,14 @@ Performance benchmarking, distributed algorithms, and experimental scripts.
 
 **Wrapper / Formulation**
   Which optimization engine to use:
-  - `"matrix"`: CVXPY + CLARABEL (fast, convex problems)
-  - `"pyomo"`: Pyomo + IPOPT (flexible, nonlinear problems; supports `model_type="branchflow"` for exact NLP)
-  - `"matrix_bess"`: Multi-period with batteries (CVXPY + CLARABEL)
+  - `"matrix"`: Single-period matrix LinDistFlow models using CVXPY/SciPy backends
+  - `"pyomo"`: Pyomo models using `formulation="lindist"`, `"branchflow"`, or `"socp"`
+  - `"matrix_bess"`: Multi-period matrix models with batteries and schedules
+
+`model_type` is an internal wrapper/model-selection term; public users should
+prefer `Case.run_opf(formulation=...)` and the public `Case` APIs rather than
+constructing wrapper classes directly. `formulation="branchflow"` selects the
+nonlinear Pyomo model; it is not an argument named `model_type` on `run_opf()`.
 
 **Results**
   After solving, you get:
@@ -175,5 +188,5 @@ Performance benchmarking, distributed algorithms, and experimental scripts.
 ## Resources
 
 - [Project README](../README.md): Project overview
-- `src/distopf/wrappers/base.py`: Wrapper API documentation
+- [`src/distopf/wrappers/base.py`](../src/distopf/wrappers/base.py): Internal/advanced wrapper base reference; ordinary users should start with the public `Case` APIs in [`src/distopf/api.py`](../src/distopf/api.py)
 - `tests/`: Unit tests with more detailed usage patterns

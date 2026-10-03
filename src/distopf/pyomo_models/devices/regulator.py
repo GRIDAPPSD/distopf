@@ -47,7 +47,7 @@ class RegulatorProvider:
                 model.tap_set,
                 initialize={key: value**2 for key, value in ratios.items()},
             )
-            model.reg_big_m = pyo.Param(initialize=1e3)
+            model.reg_big_m = pyo.Param(initialize=1e6)
             model.u_reg = pyo.Var(
                 model.reg_phase_set,
                 model.tap_set,

@@ -76,13 +76,14 @@ result.plot_network().show(renderer="browser")
 ```python
 import distopf as opf
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
-result = case.run_opf(objective="curtail_min", control_variable="P", v_max=1.05, v_min=0.95, gen_mult=10)
+case.modify(v_max=1.05, v_min=0.95, gen_mult=10)
+result = case.run_opf(objective="curtail_min", control_variable="P")
 result.plot_network().show(renderer="browser")
 ```
 
 ## Spatial ENAPP and ADMM solvers
 
-The spatial solvers are available through the public [`Case.run_enapp()`](src/distopf/api.py:577) and [`Case.run_admm()`](src/distopf/api.py:617) methods. Supply an area topology as a JSON-safe dictionary keyed by area name. Each area must define `up_areas`, `down_areas`, and exactly one `up_buses` entry; bus names must match the selected case.
+The spatial solvers are available through the public [`Case.run_enapp()`](src/distopf/api.py:590) and [`Case.run_admm()`](src/distopf/api.py:630) methods. Supply an area topology as a JSON-safe dictionary keyed by area name. Each area must define `up_areas`, `down_areas`, and exactly one `up_buses` entry; bus names must match the selected case.
 
 ```python
 area_info = {
@@ -110,7 +111,7 @@ result = case.run_enapp(
 
 Set `parallel=True` to solve the independent area subproblems with multiprocessing. The coordination iterations themselves remain sequential: each iteration waits for all area solves before exchanging boundary messages. Use `parallel=False` for serial execution or when debugging.
 
-Runs made through these methods are recorded by [`record_call()`](src/distopf/utils/call_recorder.py:90). Calling [`PowerFlowResult.save()`](src/distopf/results.py:209) writes `run_config.json`, including the distributed solver, topology, and `parallel` setting, so named-objective runs can be reproduced with [`replay()`](src/distopf/api.py:1140):
+Runs made through these methods are recorded by [`record_call()`](src/distopf/utils/call_recorder.py:90). Calling [`PowerFlowResult.save()`](src/distopf/results.py:209) writes `run_config.json`, including the distributed solver, topology, and `parallel` setting, so named-objective runs can be reproduced with [`replay()`](src/distopf/api.py:1165):
 
 ```python
 result.save("results/ieee13-enapp")
@@ -118,6 +119,42 @@ replayed = opf.replay("results/ieee13-enapp/run_config.json")
 ```
 
 Replay preserves the recorded `parallel` setting for ENAPP and ADMM. Parallel replay requires a normal multiprocessing-capable execution environment; arbitrary custom objective callables and solve/iteration callbacks remain non-replayable because they cannot be reconstructed from JSON.
+
+### Command-line interface
+
+The installed `distopf` command provides human-readable and JSON output for saved runs, user-authored TOML scenarios, and result comparisons. Run `distopf --help` or any subcommand with `--help` for the complete option list.
+
+```bash
+distopf inspect results/ieee13-enapp/run_config.json
+distopf validate results/ieee13-enapp/run_config.json
+distopf run results/ieee13-enapp/run_config.json --output-dir results/replayed
+```
+
+Public commands are:
+
+- `run CONFIG [--output-dir DIR] [--verbose] [--json]` runs a JSON `run_config.json` replay artifact or a TOML scenario. Scenario analysis types are `pf`/`power_flow`, `fbs`, `opf`, `enapp`, and `admm`.
+- `inspect CONFIG [--json]` displays scenario or replay metadata without solving.
+- `validate CONFIG [--json]` checks configuration structure, referenced paths, replayability, and case data.
+- `replay-exact-power-flow INPUT_PATH [OUTPUT_PATH] [--overwrite] [--json]` replays saved OPF setpoints through the exact FBS power flow. The output defaults to `INPUT_PATH/exact`; existing output is preserved unless `--overwrite` is supplied.
+- `compare LEFT_FOLDER RIGHT_FOLDER [--output-dir DIR] [--nominal-voltage VALUE] [--json]` compares common result CSV tables and writes `comparison.json` plus difference CSVs. `--nominal-voltage` defaults to `1.0` and is used for voltage metrics.
+- `compare-exact FOLDER [RIGHT_FOLDER] [--batch] [--depth N] [--workers N] [--output-dir DIR] [--nominal-voltage VALUE] [--json]` compares a result folder with its `exact` FBS replay, creating that replay when needed. With `--batch`, it processes directories exactly `--depth` levels below `FOLDER`; `RIGHT_FOLDER` cannot be combined with `--batch`.
+
+Add `--json` to any command for machine-readable output. Successful commands return `0`; validation failures return `1`; run and comparison runtime failures return `2`.
+
+Use `distopf run --help` for the full scenario format. A minimal `scenario.toml` is:
+
+```toml
+[case]
+path = "../cases/csv/ieee13"
+
+[analysis]
+type = "opf"
+objective = "loss"
+```
+
+TOML scenarios require only `case.path` and `analysis.type`; `pf`/`power_flow`, `fbs`, `opf`, `enapp`, and `admm` are supported. Case options go directly under `[case]`, modifications under `[case.modifications]`, and ENAPP/ADMM topology under `[analysis.area_info.<area>]`. The `version` field is optional and defaults to `1`.
+
+JSON `run_config.json` files generated by `PowerFlowResult.save()` remain supported as exact replay artifacts. Use `--json` on any subcommand for automation. `inspect` reads metadata without solving. `validate` checks the schema, referenced case directory, replayability, and case data. `run` executes either format and can persist result CSV files and metadata with `--output-dir`. Successful commands return exit code `0`; validation failures return `1`; run/runtime failures return `2`.
 
 
 
@@ -207,12 +244,14 @@ result = case.run_opf(wrapper="matrix_bess", objective="loss")
 ```
 
 #### Wrapper Comparison
-| Feature | Matrix/Matrix BESS | Pyomo  |
-|---------|---|---|
-| Model Type | LinDistFlow (linear) | LinDistFlow, BranchFlow, or SOCP-relaxed BranchFlow |
-| Formulation | Matrix-based | Algebraic equations |
-| Solver API | Scipy or CVXPY | Pyomo |
-| Prefered Solver | HiGHs or Clarabel | IPOPT, Gurobi, Knitro |
+| Feature | Matrix | Matrix BESS | Pyomo |
+|---------|---|---|---|
+| Primary role | Single-period convex LinDistFlow OPF | Multi-period LinDistFlow OPF with batteries and schedules | LinDistFlow, BranchFlow, or SOCP-relaxed BranchFlow |
+| Solver API | SciPy or CVXPY | CVXPY | Pyomo |
+| Default solver path | CVXPY with CLARABEL | CVXPY with CLARABEL | IPOPT |
+| Other supported solver choices | Depends on installed CVXPY/SciPy backends | Depends on installed CVXPY backend | MINLP solvers such as Bonmin/Couenne for supported discrete models |
+
+The default `Case.run_opf()` wrapper is Pyomo unless a `formulation` selects another wrapper. Matrix is intended for fast single-period convex models; Matrix BESS is the time-series/battery backend. Pyomo is the backend for nonlinear BranchFlow, SOCP, Pyomo dual extraction, and its supported discrete formulations. Solver availability depends on the installed backend and model.
 
 #### Solver Requirements
 - **IPOPT**: Install via `conda install -c conda-forge ipopt`. On Ubuntu, `apt-get install coinor-libipopt-dev` only installs headers and shared libraries; it does not provide the `ipopt` executable that Pyomo's `SolverFactory("ipopt")` expects.
@@ -223,11 +262,11 @@ DistOPF supports multiple optimization objectives for distribution system OPF:
 
 | Objective | String | Supported Wrappers | Description |
 |-----------|--------|-------------------|-------------|
-| **Loss Minimization** | `"loss"`, `"loss_min"` | All | Minimize distribution losses (most common) |
-| **Substation Power** | `"substation"`, `"substation_power"` | Pyomo, Matrix | Minimize power imported from substation |
+| **Loss Minimization** | `"loss"`, `"loss_min"` | Matrix, Matrix BESS, Pyomo | Minimize distribution losses (most common) |
+| **Substation Power** | `"substation"`, `"substation_power"` | Pyomo | Minimize power imported from substation |
 | **Voltage Deviation** | `"voltage_deviation"` | Pyomo | Minimize deviations from nominal voltage (1.0 p.u.) |
-| **Generation Curtailment** | `"curtail"`, `"curtail_min"`, `"curtailment"` | Pyomo | Minimize DER curtailment |
-| **Cost Minimization** | `"cost"`, `"cost_min"` | Pyomo (LinDistFlow, BranchFlow, SOCP) | Minimize energy procurement cost from swing bus |
+| **Generation Curtailment** | `"curtail"`, `"curtail_min"`, `"curtailment"` | Matrix, Matrix BESS, Pyomo | Minimize DER curtailment |
+| **Cost Minimization** | `"cost"`, `"cost_min"` | Pyomo | Minimize energy procurement cost from the swing bus; requires price data and a time horizon |
 
 #### Cost Minimization with Price Data
 
@@ -237,10 +276,10 @@ To use cost minimization, add an hourly `price` column to the case schedules (in
 import pandas as pd
 import distopf as opf
 
-case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der")
+case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_30der", n_steps=24)
 
 # Add hourly electricity prices
-case.schedules['price'] = [38, 35, 34, 32, 30, 32, 38, 45, 52, 58, 62, 65, 
+case.schedules['price'] = [38, 35, 34, 32, 30, 32, 38, 45, 52, 58, 62, 65,
                             68, 65, 62, 58, 55, 60, 75, 82, 78, 65, 50, 42]
 
 # Run OPF minimizing energy cost
@@ -250,10 +289,15 @@ print(f"Total energy cost: ${result.objective_value:.2f}")
 
 ### Result Fields
 
-`PowerFlowResult` uses descriptive field names. Short aliases are also accepted for backward compatibility.
+`PowerFlowResult` uses descriptive field names. Short aliases are also accepted for backward compatibility. Fields are optional: availability depends on the analysis, backend, case devices, and requested options.
+
+Core fields include `voltages`/`voltage_magnitudes`, `voltage_angles`, active and reactive power flows, active and reactive generation, and active and reactive loads. FBS results provide `voltage_angles`, `currents`, and `current_angles` (angles are in degrees); these fields can also be present when another backend has computed them.
+
+Battery and device fields include `battery_active_power`, `battery_reactive_power`, `p_charge`, `p_discharge`, and `soc`; regulator/capacitor-related fields include `tap_ratios`, `reg_taps`, `z_caps`, and `u_caps`, where supported by the selected model. `capacitor_reactive_power` is also available for capacitor outputs. Mixed-integer binary details may remain available through `raw_result` rather than the unified result fields.
 
 | Field Name | Alias |
 |---|---|
+| `voltages` | — |
 | `active_power_flows` | `p_flows` |
 | `reactive_power_flows` | `q_flows` |
 | `active_power_generation` | `p_gens` |
@@ -262,18 +306,24 @@ print(f"Total energy cost: ${result.objective_value:.2f}")
 | `reactive_power_loads` | `q_loads` |
 | `capacitor_reactive_power` | `q_caps` |
 | `battery_active_power` | `p_bats` |
-| `voltage_magnitudes` | `voltages` |
+| `battery_reactive_power` | `q_bats` |
 
-#### Dual Variables
-When running with `duals=True`, dual variables are accessible on the result object:
+#### Plotting and Dual Variables
+
+The public plotting methods return Plotly figures: `plot_voltages(t=None)`, `plot_power_flows(t=None)`, `plot_gens(t=None)`, `plot_batteries()`, `plot_schedules()`, `plot_network(v_min=0.95, v_max=1.05, show_phases="abc", show_reactive_power=False, t=None)`, `plot_voltage_vs_distance(title=..., color_by="algorithm", include_secondary_phases=False)`, and `plot_line_flow_vs_distance(power_type="active", title=..., color_by="algorithm", include_secondary_phases=False)`. Methods that require unavailable result data or a case reference raise `RuntimeError`.
+
+When running with `duals=True` using the Pyomo wrapper, dual variables are accessible on the result object. The unified names are:
 
 ```python
 result = case.run_opf(wrapper="pyomo", objective="loss", duals=True)
 result.dual_power_balance_p
 result.dual_power_balance_q
 result.dual_voltage_drop
-result.dual_voltage_limits
+result.dual_voltage_limits_lower
+result.dual_voltage_limits_upper
 ```
+
+Dual extraction is Pyomo-only; matrix and FBS results do not populate these fields.
 
 ## Using a custom model.
 Create CSVs formatted as shown below and store them in a single folder. The csv names must match exactly as shown. 
