@@ -25,8 +25,8 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 REFERENCE_FILE = Path(__file__).parent / "integration_references.json"
 
 # np.isclose tolerance: |actual - expected| <= ATOL + RTOL * |expected|
-ATOL = 1e-4
-RTOL = 1e-5
+ATOL = 1e-6
+RTOL = 1e-6
 
 # ---------------------------------------------------------------------------
 # Scenario definitions
@@ -231,6 +231,106 @@ SCENARIOS = [
     },
     {"id": "ieee13_heavy_pf", "case": "ieee13", "method": "pf", "load_mult": 1.5},
     {"id": "ieee13_vswing_pf", "case": "ieee13", "method": "pf", "v_swing": 1.03},
+    
+    # ── Pyomo wrapper (IPOPT) ──
+    {
+        "id": "minimal_triplex_pyo_loss",
+        "case": "minimal_triplex",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "new_pyomo",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "triplex_pv_pyo_loss",
+        "case": "triplex_pv",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "new_pyomo",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee13_pyo_loss",
+        "case": "ieee13",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "new_pyomo",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee13_pyo_loss_Q",
+        "case": "ieee13",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "new_pyomo",
+        "control_variable": "Q",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_pyo_loss_Q",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "new_pyomo",
+        "control_variable": "Q",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee13_pyo_loss_PQ",
+        "case": "ieee13",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "new_pyomo",
+        "control_variable": "PQ",
+        "requires_ipopt": True,
+    },
+    
+    # ── Nonlinear branchflow (Pyomo / IPOPT) ──
+    # {
+    #     "id": "minimal_triplex_nlp_loss",
+    #     "case": "minimal_triplex",
+    #     "method": "opf",
+    #     "objective": "loss_min",
+    #     "formulation": "branchflow",
+    #     "requires_ipopt": True,
+    # },
+    {
+        "id": "triplex_pv_nlp_loss",
+        "case": "triplex_pv",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "new_pyomo",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_loss",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "new_pyomo",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_loss_Q",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "new_pyomo",
+        "formulation": "branchflow",
+        "control_variable": "Q",
+        "requires_ipopt": True,
+    },
+    {
+        "id": "ieee123_nlp_vdev",
+        "case": "ieee123_30der",
+        "method": "opf",
+        "objective": "voltage_deviation",
+        "wrapper": "new_pyomo",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
 ]
 
 

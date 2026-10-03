@@ -9,7 +9,7 @@ from distopf.pyomo_models.extensions.capacity_expansion import (
 from distopf.pyomo_models.extensions.capacity_expansion_provider import (
     CapacityExpansionProvider,
 )
-from distopf.pyomo_models.devices.injections import InjectionRegistry
+from distopf.pyomo_models.common.registry import DeviceRegistry
 
 
 def test_capacity_budget_defaults_are_not_mutable():
@@ -36,9 +36,9 @@ def test_capacity_provider_registers_virtual_active_injection():
     model.bus_phase_set = pyo.Set(initialize=[(1, "a")], dimen=2)
     model.time_set = pyo.RangeSet(0, 0)
     model.p_der_inj = pyo.Var(model.bus_phase_set, model.time_set, initialize=2)
-    registry = InjectionRegistry()
+    registry = DeviceRegistry()
     provider = CapacityExpansionProvider(case=None, zones={}, enabled=True)
-    provider.register_injections(model, registry, None)
+    registry.add(provider)
 
-    assert pyo.value(registry.expression(model, 1, "a", 0, reactive=False)) == 2
-    assert pyo.value(registry.expression(model, 1, "a", 0, reactive=True)) == 0
+    assert pyo.value(registry.active_power_injection(model, 1, "a", 0)) == 2
+    assert pyo.value(registry.reactive_power_injection(model, 1, "a", 0)) == 0
