@@ -7,35 +7,35 @@ import pyomo.environ as pyo  # type: ignore
 
 from distopf.api import Case
 
-from distopf.pyomo_models.protocol import LindistModelProtocol
-from distopf.pyomo_models.common_constraints import (
-    add_battery_constant_q_constraints_p_control,
-    add_battery_energy_constraints,
-    add_battery_net_p_bat_equal_phase_constraints,
-    add_battery_power_limits,
-    add_battery_soc_limits,
-    add_capacitor_constraints,
-    add_octagonal_inverter_constraints_pq_control,
-    add_cvr_load_constraints,
-    add_generator_constant_p_constraints_q_control,
-    add_generator_constant_q_constraints_p_control,
-    add_generator_limits,
-    add_regulator_constraints,
-    add_swing_bus_constraints,
-    add_regulator_tap_sos1_constraints,
-    add_regulator_tap_change_limit_constraints,
-    add_capacitor_mi_constraints,
-    add_capacitor_z_bounds,
-    add_capacitor_mccormick_constraints,
-)
-from distopf.pyomo_models.lindist_constraints import (
-    add_q_flow_constraints,
-    add_voltage_drop_constraints,
-)
-from distopf.pyomo_models.common_constraints import (
-    add_thermal_slack_constraints,
-    add_voltage_slack_constraints,
-)
+from distopf.pyomo_models.common.protocol import LindistModelProtocol
+# from distopf.pyomo_models.common_constraints import (
+#     add_battery_constant_q_constraints_p_control,
+#     add_battery_energy_constraints,
+#     add_battery_net_p_bat_equal_phase_constraints,
+#     add_battery_power_limits,
+#     add_battery_soc_limits,
+#     add_capacitor_constraints,
+#     add_octagonal_inverter_constraints_pq_control,
+#     add_cvr_load_constraints,
+#     add_generator_constant_p_constraints_q_control,
+#     add_generator_constant_q_constraints_p_control,
+#     add_generator_limits,
+#     add_regulator_constraints,
+#     add_swing_bus_constraints,
+#     add_regulator_tap_sos1_constraints,
+#     add_regulator_tap_change_limit_constraints,
+#     add_capacitor_mi_constraints,
+#     add_capacitor_z_bounds,
+#     add_capacitor_mccormick_constraints,
+# )
+# from distopf.pyomo_models.lindist_constraints import (
+#     add_q_flow_constraints,
+#     add_voltage_drop_constraints,
+# )
+# from distopf.pyomo_models.common_constraints import (
+#     add_thermal_slack_constraints,
+#     add_voltage_slack_constraints,
+# )
 
 
 def create_zones_from_edge_names(case: Case, border_edges):
@@ -290,47 +290,47 @@ def add_der_capacity_injection_constraints(m):
     m.der_inj_map = pyo.Constraint(m.bus_phase_set, m.time_set, rule=_der_inj)
 
 
-def add_capacity_expansion_with_slack_constraints(
-    m, case, zones, control_regs, control_caps, reg_tap_change_limit=None
-):
-    add_capacity_expansion_variables(m, case, zones)
-    add_zone_capacity_expansion_constraints(m)
-    add_capacity_expansion_p_flow_constraints(m)
-    add_q_flow_constraints(m)
-    add_voltage_drop_constraints(m)
-    add_swing_bus_constraints(m)
-    add_cvr_load_constraints(m)
-    add_generator_constant_p_constraints_q_control(m)
-    add_generator_constant_q_constraints_p_control(m)
-    add_octagonal_inverter_constraints_pq_control(m)
-    # add_circular_generator_constraints_pq_control(m)
-    if control_caps:
-        add_capacitor_mi_constraints(m)
-        add_capacitor_mccormick_constraints(m)
-        add_capacitor_z_bounds(m)
-    else:
-        add_capacitor_constraints(m)
+# def add_capacity_expansion_with_slack_constraints(
+#     m, case, zones, control_regs, control_caps, reg_tap_change_limit=None
+# ):
+#     add_capacity_expansion_variables(m, case, zones)
+#     add_zone_capacity_expansion_constraints(m)
+#     add_capacity_expansion_p_flow_constraints(m)
+#     add_q_flow_constraints(m)
+#     add_voltage_drop_constraints(m)
+#     add_swing_bus_constraints(m)
+#     add_cvr_load_constraints(m)
+#     add_generator_constant_p_constraints_q_control(m)
+#     add_generator_constant_q_constraints_p_control(m)
+#     add_octagonal_inverter_constraints_pq_control(m)
+#     # add_circular_generator_constraints_pq_control(m)
+#     if control_caps:
+#         add_capacitor_mi_constraints(m)
+#         add_capacitor_mccormick_constraints(m)
+#         add_capacitor_z_bounds(m)
+#     else:
+#         add_capacitor_constraints(m)
 
-    if control_regs:
-        add_regulator_tap_sos1_constraints(m)
-        if reg_tap_change_limit is not None:
-            add_regulator_tap_change_limit_constraints(
-                m, max_tap_change=reg_tap_change_limit
-            )
-    else:
-        add_regulator_constraints(m)
+#     if control_regs:
+#         add_regulator_tap_sos1_constraints(m)
+#         if reg_tap_change_limit is not None:
+#             add_regulator_tap_change_limit_constraints(
+#                 m, max_tap_change=reg_tap_change_limit
+#             )
+#     else:
+#         add_regulator_constraints(m)
 
-    # add_voltage_limits(m)
-    add_generator_limits(m)
-    add_battery_constant_q_constraints_p_control(m)
-    add_battery_energy_constraints(m)
-    add_battery_net_p_bat_equal_phase_constraints(m)
-    add_battery_power_limits(m)
-    add_battery_soc_limits(m)
-    # slack constraints
-    add_voltage_slack_constraints(m)
-    add_thermal_slack_constraints(m)
-    # capacity expansion constraints
-    add_pv_capacity_constraints(m)
-    add_bess_capacity_constraints(m)
-    add_der_capacity_injection_constraints(m)
+#     # add_voltage_limits(m)
+#     add_generator_limits(m)
+#     add_battery_constant_q_constraints_p_control(m)
+#     add_battery_energy_constraints(m)
+#     add_battery_net_p_bat_equal_phase_constraints(m)
+#     add_battery_power_limits(m)
+#     add_battery_soc_limits(m)
+#     # slack constraints
+#     add_voltage_slack_constraints(m)
+#     add_thermal_slack_constraints(m)
+#     # capacity expansion constraints
+#     add_pv_capacity_constraints(m)
+#     add_bess_capacity_constraints(m)
+#     add_der_capacity_injection_constraints(m)

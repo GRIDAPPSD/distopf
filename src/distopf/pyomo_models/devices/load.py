@@ -6,9 +6,8 @@ from typing import Any
 
 import pyomo.environ as pyo  # type: ignore
 
-from distopf.pyomo_models import common_constraints
-from distopf.pyomo_models.devices.data import parse_phases
-from distopf.pyomo_models.devices.injections import InjectionRegistry
+from distopf.pyomo_models.common.protocol import LindistModelProtocol
+from distopf.pyomo_models.common.data import parse_phases
 
 
 def create_load_parameters(model: Any, case: Any) -> None:
@@ -49,10 +48,8 @@ class LoadProvider:
     """Own load parameters, variables, CVR constraints, and signed injections."""
 
     name = "loads"
-    supported_formulations = frozenset({"lindist", "nl_bfm"})
 
     def create_components(self, model: Any, case: Any, config: Any) -> None:
-        """Create load components without replacing legacy factory components."""
         if not hasattr(model, "p_load"):
             model.p_load = pyo.Var(model.bus_phase_set, model.time_set)
         if not hasattr(model, "q_load"):
@@ -60,28 +57,49 @@ class LoadProvider:
         if not hasattr(model, "p_load_nom"):
             create_load_parameters(model, case)
 
-    def register_injections(
-        self, model: Any, injections: InjectionRegistry, config: Any
-    ) -> None:
-        """Register consumption as negative network injection."""
-        if any(provider.name == self.name for provider in injections.providers):
-            return
-        injections.add(
-            self.name,
-            p_term=lambda m, bus, phase, time: (
-                -m.p_load[bus, phase, time] if (bus, phase, time) in m.p_load else 0
-            ),
-            q_term=lambda m, bus, phase, time: (
-                -m.q_load[bus, phase, time] if (bus, phase, time) in m.q_load else 0
-            ),
-        )
+    def active_power_injection(
+        self, model: Any, bus: int, phase: str, time: Any
+    ) -> Any:
+        key = (bus, phase, time)
+        return -model.p_load[key] if key in model.p_load else 0
+
+    def reactive_power_injection(
+        self, model: Any, bus: int, phase: str, time: Any
+    ) -> Any:
+        key = (bus, phase, time)
+        return -model.q_load[key] if key in model.q_load else 0
 
     def add_constraints(self, model: Any, config: Any) -> None:
         """Add voltage-dependent load equations exactly once."""
         if len(model.bus_phase_set) == 0 or hasattr(model, "cvr_p_load"):
             return
         free_boundary_loads = getattr(config, "free_boundary_loads", False)
-        common_constraints.add_cvr_load_constraints(model, free_boundary_loads)
+        # add_cvr_load_constraints(model, free_boundary_loads)
+
+        def cvr_p_rule(m: LindistModelProtocol, _id, ph, t):
+            if free_boundary_loads and _id in m.boundary_out_set:
+                return pyo.Constraint.Skip
+            p_nom = m.p_load_nom[_id, ph, t]
+            cvr_p = m.cvr_p[_id, ph]
+            return m.p_load[_id, ph, t] == p_nom + cvr_p * p_nom / 2 * (
+                m.v2[_id, ph, t] - 1
+            )
+
+        def cvr_q_rule(m: LindistModelProtocol, _id, ph, t):
+            if free_boundary_loads and _id in m.boundary_out_set:
+                return pyo.Constraint.Skip
+            q_nom = m.q_load_nom[_id, ph, t]
+            cvr_q = m.cvr_q[_id, ph]
+            return m.q_load[_id, ph, t] == q_nom + cvr_q * q_nom / 2 * (
+                m.v2[_id, ph, t] - 1
+            )
+
+        model.cvr_p_load = pyo.Constraint(
+            model.bus_phase_set, model.time_set, rule=cvr_p_rule
+        )
+        model.cvr_q_load = pyo.Constraint(
+            model.bus_phase_set, model.time_set, rule=cvr_q_rule
+        )
 
 
 __all__ = ["LoadProvider", "create_load_parameters"]

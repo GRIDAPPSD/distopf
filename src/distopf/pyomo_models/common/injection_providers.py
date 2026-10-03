@@ -6,16 +6,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from distopf.pyomo_models.devices.injections import InjectionRegistry
-
-
 DeviceBus = Callable[[Any, Any], Any]
 DeviceTerm = Callable[[Any, Any, str, Any], Any]
 
 
 @dataclass(frozen=True)
 class MappedInjectionProvider:
-    """Register a device variable whose entities map to buses and phases.
+    """Provide injection terms for entities mapped to buses and phases.
 
     Parameters
     ----------
@@ -59,10 +56,18 @@ class MappedInjectionProvider:
             expressions.append(term(model, device, phase, time))
         return sum(expressions, 0)
 
-    def register(self, model: Any, registry: InjectionRegistry) -> None:
-        """Register this provider with an injection registry."""
-        registry.add(
-            self.name,
-            p_term=lambda m, bus, ph, t: self._term(m, bus, ph, t, self.p_term),
-            q_term=lambda m, bus, ph, t: self._term(m, bus, ph, t, self.q_term),
-        )
+    def create_components(self, model: Any, case: Any, config: Any) -> None:
+        pass
+
+    def active_power_injection(
+        self, model: Any, bus: Any, phase: str, time: Any
+    ) -> Any:
+        return self._term(model, bus, phase, time, self.p_term)
+
+    def reactive_power_injection(
+        self, model: Any, bus: Any, phase: str, time: Any
+    ) -> Any:
+        return self._term(model, bus, phase, time, self.q_term)
+
+    def add_constraints(self, model: Any, config: Any) -> None:
+        pass

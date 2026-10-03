@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+import re
 from typing import Any
 
 import pandas as pd
@@ -27,10 +28,8 @@ class DeviceTable:
 
 
 def parse_phases(phases_str: str) -> list[str]:
-    """Parse standard or triplex phase labels without importing a model module."""
-    if "s1" in phases_str or "s2" in phases_str:
-        return [phase for phase in ("s1", "s2") if phase in phases_str]
-    return list(phases_str)
+    """Parse phase labels while preserving token order and repetition."""
+    return re.findall(r"[A-Za-z]\d|.", phases_str)
 
 
 def phase_tuples(data: pd.DataFrame, id_column: str = "id") -> list[tuple[Any, str]]:

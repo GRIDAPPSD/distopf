@@ -11,14 +11,12 @@ from distopf.pyomo_models.extensions.capacity_expansion import (
     add_pv_capacity_constraints,
     add_zone_capacity_expansion_constraints,
 )
-from distopf.pyomo_models.devices.injections import InjectionRegistry
 
 
 class CapacityExpansionProvider:
     """Own capacity-expansion components without replacing power balance."""
 
     name = "capacity_expansion"
-    supported_formulations = frozenset({"lindist"})
 
     def __init__(self, case: Any, zones: dict, *, enabled: bool = True):
         self.case = case
@@ -29,19 +27,18 @@ class CapacityExpansionProvider:
         if self.enabled:
             add_capacity_expansion_variables(model, self.case, self.zones)
 
-    def register_injections(
-        self, model: Any, injections: InjectionRegistry, config: Any
-    ) -> None:
-        if not self.enabled:
-            return
-        injections.add(
-            self.name,
-            p_term=lambda m, bus, phase, time: (
-                m.p_der_inj[bus, phase, time]
-                if (bus, phase, time) in m.p_der_inj
-                else 0
-            ),
-        )
+    def active_power_injection(
+        self, model: Any, bus: int, phase: str, time: Any
+    ) -> Any:
+        key = (bus, phase, time)
+        if self.enabled and key in model.p_der_inj:
+            return model.p_der_inj[key]
+        return 0
+
+    def reactive_power_injection(
+        self, model: Any, bus: int, phase: str, time: Any
+    ) -> Any:
+        return 0
 
     def add_constraints(self, model: Any, config: Any) -> None:
         if not self.enabled:

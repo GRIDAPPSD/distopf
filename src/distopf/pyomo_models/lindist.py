@@ -764,7 +764,7 @@ def create_lindist_model(
             doc="Squared voltage ratio for each tap position",
         )
         m.reg_big_m = pyo.Param(
-            initialize=1e6, doc="Big-M value for regulator tap constraints"
+            initialize=1e3, doc="Big-M value for regulator tap constraints"
         )
         m.u_reg = pyo.Var(
             m.reg_phase_set,

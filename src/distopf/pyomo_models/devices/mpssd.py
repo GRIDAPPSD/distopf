@@ -4,28 +4,26 @@ from __future__ import annotations
 
 from typing import Any
 
+
+from math import sqrt
 import pandas as pd
 import pyomo.environ as pyo  # type: ignore
 
-from distopf.pyomo_models.devices.registry import DeviceProvider
-from distopf.pyomo_models.devices.injections import InjectionRegistry
-from distopf.pyomo_models.devices.mpssd_constraints import (
-    add_circular_mpssd_constraints,
-    add_dc_bus_balance_constraints,
-    add_mpssd_constant_p_constraints_q_control,
-    add_mpssd_constant_q_constraints_p_control,
-    add_mpssd_limits,
-    add_octagonal_mpssd_constraints,
-)
-from distopf.pyomo_models.devices.data import parse_phases
-from distopf.pyomo_models.model_types import CONTROL_VARIABLE_MAP
+from distopf.pyomo_models.common.registry import DeviceProvider
+from distopf.pyomo_models.common.data import parse_phases
+from distopf.pyomo_models.common.model_types import CONTROL_VARIABLE_MAP
+
+from distopf.pyomo_models.common.model_types import ControlVariable
+from distopf.pyomo_models.common.protocol import LindistModelProtocol
+
+
+sqrt2 = sqrt(2)
 
 
 class MpssdProvider(DeviceProvider):
     """Own MPSSD sets, parameters, variables, injections, and constraints."""
 
     name = "mpssd"
-    supported_formulations = frozenset({"lindist"})
 
     def create_components(self, model: Any, case: Any, config: Any) -> None:
         data = getattr(case, "mpssd_data", pd.DataFrame())
@@ -104,19 +102,20 @@ class MpssdProvider(DeviceProvider):
             model.mpssd_phase_set, model.time_set, initialize=values["q_nom"], default=0
         )
 
-    def register_injections(
-        self, model: Any, injections: InjectionRegistry, config: Any
-    ) -> None:
-        injections.add(
-            self.name,
-            p_term=lambda m, bus, phase, time: sum(
-                m.p_mpssd[device, phase, time]
-                for device in m.mpssd_bus_map.get((bus, phase), [])
-            ),
-            q_term=lambda m, bus, phase, time: sum(
-                m.q_mpssd[device, phase, time]
-                for device in m.mpssd_bus_map.get((bus, phase), [])
-            ),
+    def active_power_injection(
+        self, model: Any, bus: int, phase: str, time: Any
+    ) -> Any:
+        return sum(
+            model.p_mpssd[device, phase, time]
+            for device in model.mpssd_bus_map.get((bus, phase), [])
+        )
+
+    def reactive_power_injection(
+        self, model: Any, bus: int, phase: str, time: Any
+    ) -> Any:
+        return sum(
+            model.q_mpssd[device, phase, time]
+            for device in model.mpssd_bus_map.get((bus, phase), [])
         )
 
     def add_constraints(self, model: Any, config: Any) -> None:
@@ -132,3 +131,134 @@ class MpssdProvider(DeviceProvider):
             add_octagonal_mpssd_constraints(model)
         if len(model.dc_bus_set) > 0:
             add_dc_bus_balance_constraints(model)
+
+
+def add_mpssd_constant_p_constraints_q_control(m: LindistModelProtocol) -> None:
+    """Fix active MPSSD power for non-P-controlled ports."""
+
+    def rule(m, device, phase, time):
+        control = m.mpssd_control_type[device, phase]
+        if control in (ControlVariable.NONE, ControlVariable.Q):
+            return m.p_mpssd[device, phase, time] == m.p_mpssd_nom[device, phase, time]
+        return pyo.Constraint.Skip
+
+    m.mpssd_constant_p = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=rule)
+
+
+def add_mpssd_constant_q_constraints_p_control(m: LindistModelProtocol) -> None:
+    """Fix reactive MPSSD power for non-Q-controlled ports."""
+
+    def rule(m, device, phase, time):
+        control = m.mpssd_control_type[device, phase]
+        if control in (ControlVariable.NONE, ControlVariable.P):
+            return m.q_mpssd[device, phase, time] == m.q_mpssd_nom[device, phase, time]
+        return pyo.Constraint.Skip
+
+    m.mpssd_constant_q = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=rule)
+
+
+def add_mpssd_limits(m: LindistModelProtocol) -> None:
+    """Add rectangular P/Q operating limits for MPSSD ports."""
+
+    def p_bounds(m, device, phase, time):
+        rating = m.mpssd_s_rated[device, phase]
+        return (-rating, m.p_mpssd[device, phase, time], rating)
+
+    def q_bounds(m, device, phase, time):
+        rating = m.mpssd_s_rated[device, phase]
+        return (
+            max(-rating, m.mpssd_q_min[device, phase]),
+            m.q_mpssd[device, phase, time],
+            min(rating, m.mpssd_q_max[device, phase]),
+        )
+
+    m.mpssd_p_limits = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=p_bounds)
+    m.mpssd_q_limits = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=q_bounds)
+
+
+def add_circular_mpssd_constraints(m: LindistModelProtocol) -> None:
+    """Add exact apparent-power limits for MPSSD ports."""
+
+    def rule(m, device, phase, time):
+        return (
+            m.p_mpssd[device, phase, time] ** 2 + m.q_mpssd[device, phase, time] ** 2
+            <= m.mpssd_s_rated[device, phase] ** 2
+        )
+
+    m.mpssd_circle = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=rule)
+
+
+def add_octagonal_mpssd_constraints(m: LindistModelProtocol) -> None:
+    """Add an eight-sided linear approximation of apparent-power limits."""
+    c = sqrt2 - 1
+
+    def r1(m, device, phase, time):
+        return (
+            c * m.p_mpssd[device, phase, time] + m.q_mpssd[device, phase, time]
+            <= m.mpssd_s_rated[device, phase]
+        )
+
+    def r2(m, device, phase, time):
+        return (
+            m.p_mpssd[device, phase, time] + c * m.q_mpssd[device, phase, time]
+            <= m.mpssd_s_rated[device, phase]
+        )
+
+    def r3(m, device, phase, time):
+        return (
+            m.p_mpssd[device, phase, time] - c * m.q_mpssd[device, phase, time]
+            <= m.mpssd_s_rated[device, phase]
+        )
+
+    def r4(m, device, phase, time):
+        return (
+            c * m.p_mpssd[device, phase, time] - m.q_mpssd[device, phase, time]
+            <= m.mpssd_s_rated[device, phase]
+        )
+
+    def r5(m, device, phase, time):
+        return (
+            -c * m.p_mpssd[device, phase, time] - m.q_mpssd[device, phase, time]
+            <= m.mpssd_s_rated[device, phase]
+        )
+
+    def r6(m, device, phase, time):
+        return (
+            -m.p_mpssd[device, phase, time] - c * m.q_mpssd[device, phase, time]
+            <= m.mpssd_s_rated[device, phase]
+        )
+
+    def r7(m, device, phase, time):
+        return (
+            -m.p_mpssd[device, phase, time] + c * m.q_mpssd[device, phase, time]
+            <= m.mpssd_s_rated[device, phase]
+        )
+
+    def r8(m, device, phase, time):
+        return (
+            -c * m.p_mpssd[device, phase, time] + m.q_mpssd[device, phase, time]
+            <= m.mpssd_s_rated[device, phase]
+        )
+
+    for index, rule in enumerate((r1, r2, r3, r4, r5, r6, r7, r8), start=1):
+        setattr(
+            m,
+            f"mpssd_oct_{index}",
+            pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=rule),
+        )
+
+
+def add_dc_bus_balance_constraints(m: LindistModelProtocol) -> None:
+    """Enforce zero net active injection for each shared DC bus."""
+
+    def rule(m, dc_bus, time):
+        return (
+            sum(
+                m.p_mpssd[device, phase, time]
+                for device, phase in m.mpssd_phase_set
+                if m.mpssd_dc_bus[device, phase] == dc_bus
+            )
+            == 0
+        )
+
+    m.dc_bus_balance = pyo.Constraint(m.dc_bus_set, m.time_set, rule=rule)

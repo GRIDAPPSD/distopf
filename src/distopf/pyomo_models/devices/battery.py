@@ -12,10 +12,10 @@ from typing import Any
 
 import pyomo.environ as pyo  # type: ignore
 
-from distopf.pyomo_models import common_constraints
-from distopf.pyomo_models.devices.data import parse_phases, phase_tuples
-from distopf.pyomo_models.devices.injections import InjectionRegistry
-from distopf.pyomo_models.model_types import CONTROL_VARIABLE_MAP
+from distopf.pyomo_models.common.model_types import ControlVariable
+from distopf.pyomo_models.common.protocol import LindistModelProtocol
+from distopf.pyomo_models.common.data import parse_phases, phase_tuples
+from distopf.pyomo_models.common.model_types import CONTROL_VARIABLE_MAP
 
 
 def create_battery_parameters(model: Any, case: Any) -> None:
@@ -70,22 +70,21 @@ def create_battery_parameters(model: Any, case: Any) -> None:
     model.q_bat_min = pyo.Param(model.bat_phase_set, initialize=q_min, default=-1000.0)
     model.q_bat_max = pyo.Param(model.bat_phase_set, initialize=q_max, default=1000.0)
     model.bat_control_type = pyo.Param(model.bat_set, initialize=control, default=0)
-    for name, values, default in (
-        ("energy_capacity", energy, 0),
-        ("soc_min", soc_min, 0),
-        ("soc_max", soc_max, 1),
-        ("start_soc", start_soc, 0.5),
-        ("charge_efficiency", charge_eff, 1.0),
-        ("discharge_efficiency", discharge_eff, 1.0),
-        ("annual_cycle_limit", cycles, 365),
-        ("battery_has_a_phase", has_a, True),
-        ("battery_has_b_phase", has_b, True),
-        ("battery_has_c_phase", has_c, True),
-        ("battery_n_phases", n_phases, 3),
-    ):
-        setattr(
-            model, name, pyo.Param(model.bat_set, initialize=values, default=default)
-        )
+    model.energy_capacity = pyo.Param(model.bat_set, initialize=energy, default=0)
+    model.soc_min = pyo.Param(model.bat_set, initialize=soc_min, default=0)
+    model.soc_max = pyo.Param(model.bat_set, initialize=soc_max, default=1)
+    model.start_soc = pyo.Param(model.bat_set, initialize=start_soc, default=0.5)
+    model.charge_efficiency = pyo.Param(
+        model.bat_set, initialize=charge_eff, default=1.0
+    )
+    model.discharge_efficiency = pyo.Param(
+        model.bat_set, initialize=discharge_eff, default=1.0
+    )
+    model.annual_cycle_limit = pyo.Param(model.bat_set, initialize=cycles, default=365)
+    model.battery_has_a_phase = pyo.Param(model.bat_set, initialize=has_a, default=True)
+    model.battery_has_b_phase = pyo.Param(model.bat_set, initialize=has_b, default=True)
+    model.battery_has_c_phase = pyo.Param(model.bat_set, initialize=has_c, default=True)
+    model.battery_n_phases = pyo.Param(model.bat_set, initialize=n_phases, default=3)
     model.battery_has_phase = pyo.Param(
         model.bat_set, ("a", "b", "c"), initialize=has_phase, default=True
     )
@@ -95,7 +94,6 @@ class BatteryProvider:
     """Create and constrain battery variables for a Pyomo model."""
 
     name = "batteries"
-    supported_formulations = frozenset({"lindist", "nl_bfm"})
 
     def create_components(self, model: Any, case: Any, config: Any) -> None:
         """Attach battery components only when the factory did not create them."""
@@ -119,21 +117,17 @@ class BatteryProvider:
         if not hasattr(model, "p_bat_nom"):
             create_battery_parameters(model, case)
 
-    def register_injections(
-        self, model: Any, injections: InjectionRegistry, config: Any
-    ) -> None:
-        """Register battery net active and reactive injection."""
-        if any(provider.name == self.name for provider in injections.providers):
-            return
-        injections.add(
-            self.name,
-            p_term=lambda m, bus, phase, time: (
-                m.p_bat[bus, phase, time] if (bus, phase, time) in m.p_bat else 0
-            ),
-            q_term=lambda m, bus, phase, time: (
-                m.q_bat[bus, phase, time] if (bus, phase, time) in m.q_bat else 0
-            ),
-        )
+    def active_power_injection(
+        self, model: Any, bus: int, phase: str, time: Any
+    ) -> Any:
+        key = (bus, phase, time)
+        return model.p_bat[key] if key in model.p_bat else 0
+
+    def reactive_power_injection(
+        self, model: Any, bus: int, phase: str, time: Any
+    ) -> Any:
+        key = (bus, phase, time)
+        return model.q_bat[key] if key in model.q_bat else 0
 
     def add_constraints(self, model: Any, config: Any) -> None:
         """Attach shared battery operating constraints once."""
@@ -142,12 +136,12 @@ class BatteryProvider:
         for name, builder in (
             (
                 "battery_constant_q_bat",
-                common_constraints.add_battery_constant_q_constraints_p_control,
+                add_battery_constant_q_constraints_p_control,
             ),
-            ("storage", common_constraints.add_battery_energy_constraints),
+            ("storage", add_battery_energy_constraints),
             (
                 "net_discharge",
-                common_constraints.add_battery_net_p_bat_equal_phase_constraints,
+                add_battery_net_p_bat_equal_phase_constraints,
             ),
         ):
             if not hasattr(model, name):
@@ -157,12 +151,130 @@ class BatteryProvider:
         if equality_only:
             return
         if not hasattr(model, "battery_discharging_limits"):
-            common_constraints.add_battery_power_limits(model)
+            add_battery_power_limits(model)
         if not hasattr(model, "battery_soc_limits"):
-            common_constraints.add_battery_soc_limits(model)
+            add_battery_soc_limits(model)
         circular = getattr(config, "circular_constraints", True) if config else True
         if circular and not hasattr(model, "bat_circle_constraint"):
-            common_constraints.add_circular_battery_constraints(model)
+            add_circular_battery_constraints_pq_control(model)
+
+
+# Constraints ----------------------------------------------------------------
+
+
+def add_battery_power_limits(m: LindistModelProtocol) -> None:
+    def _d(m: LindistModelProtocol, _id, ph, t):
+        return (0, m.p_discharge[_id, t], m.s_bat_rated[_id, ph])
+
+    def _c(m: LindistModelProtocol, _id, ph, t):
+        return (0, m.p_charge[_id, t], m.s_bat_rated[_id, ph])
+
+    m.battery_discharging_limits = pyo.Constraint(m.bat_phase_set, m.time_set, rule=_d)
+    m.battery_charging_limits = pyo.Constraint(m.bat_phase_set, m.time_set, rule=_c)
+
+
+def add_battery_soc_limits(m: LindistModelProtocol) -> None:
+    def battery_soc_limits(m: LindistModelProtocol, _id, t):
+        return (m.soc_min[_id], m.soc[_id, t], m.soc_max[_id])
+
+    m.battery_soc_limits = pyo.Constraint(
+        m.bat_set, m.time_set, rule=battery_soc_limits
+    )
+
+
+def add_battery_net_p_bat_constraints(m: LindistModelProtocol) -> None:
+    def net_discharge(m: LindistModelProtocol, _id, t):
+        p_bat_a = m.p_bat[_id, "a", t] if m.battery_has_phase[_id, "a"] else 0
+        p_bat_b = m.p_bat[_id, "b", t] if m.battery_has_phase[_id, "b"] else 0
+        p_bat_c = m.p_bat[_id, "c", t] if m.battery_has_phase[_id, "c"] else 0
+        return p_bat_a + p_bat_b + p_bat_c == m.p_discharge[_id, t] - m.p_charge[_id, t]
+
+    m.net_discharge = pyo.Constraint(m.bat_phase_set, m.time_set, rule=net_discharge)
+
+
+def add_battery_net_p_bat_equal_phase_constraints(m: LindistModelProtocol) -> None:
+    def net_discharge_equal_phases(m: LindistModelProtocol, _id, ph, t):
+        n_phases = m.battery_n_phases[_id]
+        return (
+            m.p_bat[_id, ph, t]
+            == (m.p_discharge[_id, t] - m.p_charge[_id, t]) / n_phases
+        )
+
+    m.net_discharge = pyo.Constraint(
+        m.bat_phase_set, m.time_set, rule=net_discharge_equal_phases
+    )
+
+
+def add_battery_energy_constraints(m: LindistModelProtocol) -> None:
+    def storage(m: LindistModelProtocol, _id, t):
+        eta_d = m.discharge_efficiency[_id]
+        eta_c = m.charge_efficiency[_id]
+        if t == m.start_step:
+            soc0 = m.start_soc[_id]
+        else:
+            soc0 = m.soc[_id, t - 1]
+        return (
+            m.soc[_id, t] - soc0
+            == eta_c * m.delta_t * m.p_charge[_id, t]
+            - (1 / eta_d) * m.delta_t * m.p_discharge[_id, t]
+        )
+
+    m.storage = pyo.Constraint(m.bat_set, m.time_set, rule=storage)
+
+
+def add_battery_constant_q_constraints_p_control(m: LindistModelProtocol) -> None:
+    def _rule(m: LindistModelProtocol, _id, ph, t):
+        if m.bat_control_type[_id] != ControlVariable.P:
+            return pyo.Constraint.Skip
+        return m.q_bat[_id, ph, t] == m.q_bat_nom[_id, ph, t]
+
+    m.battery_constant_q_bat = pyo.Constraint(m.bat_phase_set, m.time_set, rule=_rule)
+
+
+def add_circular_battery_constraints_pq_control(m: LindistModelProtocol) -> None:
+    """
+    Add circular battery apparent power constraints.
+
+    Enforces the exact quadratic constraint:
+        P_bat^2 + Q_bat^2 <= S_rated^2
+
+    This is a nonlinear (quadratic) constraint requiring a nonlinear solver
+    (e.g., IPOPT) or a solver supporting second-order cone constraints.
+    """
+
+    def bat_circle(m: LindistModelProtocol, _id, ph, t):
+        if m.bat_control_type[_id] != ControlVariable.PQ:
+            return pyo.Constraint.Skip
+        return (
+            m.p_bat[_id, ph, t] ** 2 + m.q_bat[_id, ph, t] ** 2
+            <= m.s_bat_rated[_id, ph] ** 2
+        )
+
+    m.bat_circle_constraint = pyo.Constraint(
+        m.bat_phase_set, m.time_set, rule=bat_circle
+    )
+
+
+def add_circular_battery_constraints(m: LindistModelProtocol) -> None:
+    """
+    Add circular battery apparent power constraints.
+
+    Enforces the exact quadratic constraint:
+        P_bat^2 + Q_bat^2 <= S_rated^2
+
+    This is a nonlinear (quadratic) constraint requiring a nonlinear solver
+    (e.g., IPOPT) or a solver supporting second-order cone constraints.
+    """
+
+    def bat_circle(m: LindistModelProtocol, _id, ph, t):
+        return (
+            m.p_bat[_id, ph, t] ** 2 + m.q_bat[_id, ph, t] ** 2
+            <= m.s_bat_rated[_id, ph] ** 2
+        )
+
+    m.bat_circle_constraint = pyo.Constraint(
+        m.bat_phase_set, m.time_set, rule=bat_circle
+    )
 
 
 __all__ = ["BatteryProvider", "create_battery_parameters"]
