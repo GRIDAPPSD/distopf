@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional, Union
 from distopf.wrappers.base import Wrapper
-from distopf.pyomo_models import objectives
+from distopf.pyomo_models.common import objectives
+from distopf.pyomo_models.common.data import parse_phases
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -101,9 +102,8 @@ class PyomoWrapper(Wrapper):
         **kwargs,
     ):
         """Solve using LinDistFlow model."""
-        from distopf.pyomo_models import (
+        from distopf.pyomo_models.common import (
             create_lindist_model,
-            add_constraints,
             solve,
             set_objective,
         )
@@ -143,15 +143,9 @@ class PyomoWrapper(Wrapper):
             self.case,
             control_capacitors=control_capacitors,
             control_regulators=control_regulators,
-        )
-
-        add_constraints(
-            self.model,
             circular_constraints=circular_constraints,
             thermal_constraints=thermal_constraints,
             equality_only=equality_only,
-            control_capacitors=control_capacitors,
-            control_regulators=control_regulators,
             reg_tap_change_limit=reg_tap_change_limit,
             free_swing_voltage=free_swing_voltage,
             free_boundary_loads=free_boundary_loads,
@@ -214,9 +208,8 @@ class PyomoWrapper(Wrapper):
         **kwargs,
     ):
         """Solve using nonlinear BranchFlow or its SOCP relaxation."""
-        from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
-        from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
-        from distopf.pyomo_models.solvers import solve
+        from distopf.pyomo_models.common.factory import create_nl_branchflow_model
+        from distopf.pyomo_models.common.solvers import solve
         import pyomo.environ as pyo  # type: ignore[import-untyped]
 
         socp_relaxation = kwargs.pop("socp_relaxation", False)
@@ -243,14 +236,12 @@ class PyomoWrapper(Wrapper):
                 "solver='couenne', or disable discrete controls."
             )
 
-        self.model = create_nl_branchflow_model(self.case)
-
-        add_nlp_constraints(
-            self.model,
+        self.model = create_nl_branchflow_model(
+            self.case,
+            control_capacitors=control_capacitors,
+            control_regulators=control_regulators,
             circular_constraints=circular_constraints,
             thermal_constraints=thermal_constraints,
-            control_regulators=control_regulators,
-            control_capacitors=control_capacitors,
             socp_relaxation=socp_relaxation,
             free_swing_voltage=free_swing_voltage,
             free_boundary_loads=free_boundary_loads,
@@ -436,8 +427,7 @@ class PyomoWrapper(Wrapper):
 
         # Initialize cross-phase current magnitudes
         for fb, tb, phases in self.model.branch_phase_pair_set:
-            ph1 = phases[0]
-            ph2 = phases[1]
+            ph1, ph2 = parse_phases(phases)
             if ph1 == ph2:
                 continue
             for t in self.model.time_set:
@@ -515,7 +505,6 @@ class PyomoWrapper(Wrapper):
             ),
             "cost": objectives.cost_minimization_rule,
             "cost_min": objectives.cost_minimization_rule,
-            "voltage_min": objectives.voltage_min_objective_rule,
         }
 
         if obj_lower in objective_map:

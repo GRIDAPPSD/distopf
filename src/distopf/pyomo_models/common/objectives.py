@@ -124,10 +124,10 @@ def substation_cost_objective_rule(model: LindistModelProtocol):
     using the schedule_price and substation load.
     """
     total_cost = 0
-    for _id, ph in model.branch_phase_set:
+    for fb, tb, ph in model.branch_phase_set:
         for t in model.time_set:
-            if model.from_bus_map[_id] in model.swing_bus_set:
-                total_cost += model.p_flow[_id, ph, t] * model.schedule_price[t]
+            if fb in model.swing_bus_set:
+                total_cost += model.p_flow[fb, tb, ph, t] * model.schedule_price[t]
     return total_cost
 
 
@@ -179,10 +179,10 @@ def generation_cost_with_substation_quadratic_penalty_objective_rule(
             generation_cost += model.p_gen[_id, ph, t] * energy_price
 
     substation_penalty = 0
-    for _id, ph in model.branch_phase_set:
+    for fb, tb, ph in model.branch_phase_set:
         for t in model.time_set:
-            if model.from_bus_map[_id] in model.swing_bus_set:
-                substation_penalty += model.p_flow[_id, ph, t] ** 2
+            if fb in model.swing_bus_set:
+                substation_penalty += model.p_flow[fb, tb, ph, t] ** 2
 
     return gen_cost_rule(model) + 1e6 * substation_penalty
 
@@ -206,10 +206,10 @@ def demand_charge_objective_rule(model: LindistModelProtocol):
     if not hasattr(model, "demand_charge"):
         return 0
     peak_power = 0
-    for _id, ph in model.branch_phase_set:
+    for fb, tb, ph in model.branch_phase_set:
         for t in model.time_set:
-            if model.from_bus_map[_id] in model.swing_bus_set:
-                peak_power = pyo.maximize(peak_power, model.p_flow[_id, ph, t])
+            if fb in model.swing_bus_set:
+                peak_power = pyo.maximize(peak_power, model.p_flow[fb, tb, ph, t])
     return peak_power * model.demand_charge
 
 
@@ -776,9 +776,9 @@ def thermal_slack_penalty(m, weight=1e3):
         return 0
 
     penalty = 0
-    for _id, ph in m.branch_phase_set:
+    for fb, tb, ph in m.branch_phase_set:
         for t in m.time_set:
-            penalty += m.thermal_slack[_id, ph, t]
+            penalty += m.thermal_slack[fb, tb, ph, t]
     return weight * penalty
 
 

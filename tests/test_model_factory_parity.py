@@ -1,20 +1,20 @@
 """Parity checks for the active legacy-compatible model factories."""
 
+from itertools import combinations_with_replacement, product
+
 import distopf as opf
 
-from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
 from distopf.pyomo_models.common.factory import (
     create_lindist_model as create_refactored_lindist_model,
     create_nl_branchflow_model as create_refactored_nl_branchflow_model,
 )
 from distopf.pyomo_models.common.data import parse_phases
-from distopf.wrappers.new_pyomo_wrapper import NewPyomoWrapper
+from distopf.wrappers.pyomo_wrapper import PyomoWrapper
 
 
 def test_lindist_factory_has_required_network_and_device_components():
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-    model = create_lindist_model(case)
+    model = create_refactored_lindist_model(case)
 
     for name in (
         "time_set",
@@ -41,7 +41,7 @@ def test_lindist_factory_has_required_network_and_device_components():
 
 def test_branchflow_factory_has_formulation_specific_components():
     case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-    model = create_nl_branchflow_model(case)
+    model = create_refactored_nl_branchflow_model(case)
 
     for name in (
         "time_set",
@@ -70,18 +70,28 @@ def test_refactored_linear_factory_omits_branchflow_components():
         assert not hasattr(model, name), name
 
 
-def test_refactored_branchflow_factory_matches_legacy_phase_pair_sets():
+def test_branchflow_factory_builds_phase_pair_sets_from_case_data():
     for case_name in ("ieee13", "minimal_triplex", "triplex_pv"):
         case = opf.create_case(opf.CASES_DIR / "csv" / case_name)
         model = create_refactored_nl_branchflow_model(case)
-        legacy_model = create_nl_branchflow_model(case)
 
-        assert set(model.branch_phase_pair_set) == set(
-            legacy_model.branch_phase_pair_set
-        )
-        assert set(model.branch_angle_phase_pair_set) == set(
-            legacy_model.branch_angle_phase_pair_set
-        )
+        expected_pairs = set()
+        expected_angle_pairs = set()
+        for _, row in case.branch_data.iterrows():
+            fb, tb = int(row.fb), int(row.tb)
+            phases = parse_phases(str(row.phases))
+            expected_pairs.update(
+                (fb, tb, phase_1 + phase_2)
+                for phase_1, phase_2 in combinations_with_replacement(sorted(phases), 2)
+            )
+            if tb not in model.swing_bus_set:
+                expected_angle_pairs.update(
+                    (fb, tb, phase_1 + phase_2)
+                    for phase_1, phase_2 in product(phases, repeat=2)
+                )
+
+        assert set(model.branch_phase_pair_set) == expected_pairs
+        assert set(model.branch_angle_phase_pair_set) == expected_angle_pairs
         assert hasattr(model, "current_constraint")
         assert hasattr(model, "current_sqr_constraint")
         assert hasattr(model, "voltage_drop")
@@ -129,13 +139,13 @@ def test_refactored_battery_circle_respects_control_mode():
     )
 
 
-def test_new_pyomo_wrapper_initializes_branchflow_state_from_fbs():
+def test_pyomo_wrapper_initializes_branchflow_state_from_fbs():
     import math
     import pyomo.environ as pyo
 
     for case_name in ("ieee13", "minimal_triplex", "triplex_pv"):
         case = opf.create_case(opf.CASES_DIR / "csv" / case_name)
-        wrapper = NewPyomoWrapper(case)
+        wrapper = PyomoWrapper(case)
         wrapper.model = create_refactored_nl_branchflow_model(case)
         wrapper._initialize_from_fbs()
 

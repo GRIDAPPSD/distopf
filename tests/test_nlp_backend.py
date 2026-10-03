@@ -5,8 +5,7 @@ import distopf as opf
 from distopf.distributed.spatial.decompose import decompose
 from distopf.fbs import FBS
 from distopf.wrappers.pyomo_wrapper import PyomoWrapper
-from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
-from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
+from distopf.pyomo_models.common.factory import create_nl_branchflow_model
 
 
 @pytest.fixture
@@ -63,40 +62,34 @@ class TestNlpModelCreation:
         assert hasattr(model, "p_gen")
         assert hasattr(model, "q_gen")
 
-    def test_add_nlp_constraints_basic(self, small_case):
-        """Test that constraints can be added to NL model."""
+    def test_branchflow_factory_adds_constraints(self, small_case):
+        """The provider factory constructs BranchFlow constraints."""
         model = create_nl_branchflow_model(small_case)
-        add_nlp_constraints(model, circular_constraints=True)
         # Check that key constraints were added
         assert hasattr(model, "power_balance_p")
         assert hasattr(model, "power_balance_q")
         assert hasattr(model, "voltage_drop")
 
-    def test_add_nlp_constraints_socp_relaxes_current_constraints(self):
+    def test_branchflow_factory_socp_relaxes_current_constraints(self):
         """SOCP mode should attach both relaxed current constraint families."""
         # Use a multiphase case because the pairwise current constraint set is
         # empty for the one-phase small_case fixture.
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
-        model = create_nl_branchflow_model(case)
-        add_nlp_constraints(model, socp_relaxation=True)
+        model = create_nl_branchflow_model(case, socp_relaxation=True)
 
         current = next(iter(model.current_constraint.values()))
         current_sqr = next(iter(model.current_sqr_constraint.values()))
         assert current.equality is False
         assert current_sqr.equality is False
 
-    def test_add_nlp_constraints_with_discrete_controls(self, small_case):
+    def test_branchflow_factory_adds_discrete_control_constraints(self):
         """Test that discrete control constraints can be added."""
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         model = create_nl_branchflow_model(
-            small_case,
+            case,
             control_capacitors=True,
             control_regulators=True,
-        )
-        add_nlp_constraints(
-            model,
             circular_constraints=True,
-            control_regulators=True,
-            control_capacitors=True,
         )
         # Check that discrete control constraints were added
         assert hasattr(model, "reg_tap_sos1")
@@ -115,11 +108,7 @@ class TestNlpModelCreation:
     def test_nlp_wrapper_model_building(self, small_case):
         """Test that branchflow model can be built without solving."""
         wrapper = PyomoWrapper(small_case)
-        from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
-        from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
-
         wrapper.model = create_nl_branchflow_model(small_case)
-        add_nlp_constraints(wrapper.model)
         assert wrapper.model is not None
 
 
@@ -150,13 +139,7 @@ class TestNlpBackendSolverValidation:
         """Test that continuous optimization (no discrete controls) allows IPOPT."""
         wrapper = PyomoWrapper(small_case)
         try:
-            from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
-            from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
-
             wrapper.model = create_nl_branchflow_model(small_case)
-            add_nlp_constraints(
-                wrapper.model, control_regulators=False, control_capacitors=False
-            )
             assert True
         except Exception:
             pass
@@ -224,10 +207,8 @@ class TestNlpDecomposedBoundaries:
         assert len(out_ids) == 1
         assert in_ids <= set(model.swing_bus_set)
 
-        add_nlp_constraints(
-            model,
-            free_swing_voltage=True,
-            free_boundary_loads=True,
+        model = create_nl_branchflow_model(
+            area_case, free_swing_voltage=True, free_boundary_loads=True
         )
         out_id = next(iter(out_ids))
         assert not any(index[0] == out_id for index in model.cvr_p_load)

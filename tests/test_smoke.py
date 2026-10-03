@@ -96,10 +96,9 @@ class TestSmokeTests:
         )
 
     def test_smoke_pyomo_model_creation_and_constraints(self):
-        """Create pyomo model → add constraints → verify."""
+        """Create a pyomo model and verify its provider-built constraints."""
         case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
         model = opf.pyomo_models.create_lindist_model(case)
-        opf.pyomo_models.add_constraints(model)
         assert hasattr(model, "power_balance_p")
         assert hasattr(model, "power_balance_q")
         assert hasattr(model, "voltage_drop")

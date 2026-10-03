@@ -1,6 +1,6 @@
 from pathlib import Path
 import distopf as opf
-from distopf.pyomo_models.objectives import substation_cost_objective_rule
+from distopf.pyomo_models.common.objectives import substation_cost_objective_rule
 
 from distopf.distributed.spatial.enapp import Case, solve_enapp, PowerFlowResult
 

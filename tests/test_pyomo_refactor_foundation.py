@@ -10,6 +10,7 @@ from distopf.pyomo_models.common.data import (
 )
 from distopf.pyomo_models.common.registry import DeviceRegistry
 from distopf.pyomo_models.common.injection_providers import MappedInjectionProvider
+from distopf.pyomo_models.common.objectives import substation_cost_objective_rule
 
 
 def test_parse_phases_preserves_order_and_repeated_triplex_phases():
@@ -148,3 +149,18 @@ def test_device_registry_rejects_duplicate_provider_names():
         assert "already registered" in str(exc)
     else:
         raise AssertionError("duplicate providers should be rejected")
+
+
+def test_substation_cost_objective_uses_branch_endpoints():
+    model = pyo.ConcreteModel()
+    model.branch_phase_set = pyo.Set(initialize=[(1, 2, "a"), (2, 3, "a")], dimen=3)
+    model.time_set = pyo.RangeSet(0, 0)
+    model.swing_bus_set = pyo.Set(initialize=[1])
+    model.p_flow = pyo.Var(
+        model.branch_phase_set,
+        model.time_set,
+        initialize={(1, 2, "a", 0): 2, (2, 3, "a", 0): 7},
+    )
+    model.schedule_price = pyo.Param(model.time_set, initialize={0: 3})
+
+    assert pyo.value(substation_cost_objective_rule(model)) == 6

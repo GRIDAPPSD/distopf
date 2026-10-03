@@ -40,14 +40,12 @@ def _get_wrapper_registry() -> dict:
             MatrixWrapper,
             MatrixBessWrapper,
             PyomoWrapper,
-            NewPyomoWrapper,
         )
 
         _WRAPPER_REGISTRY = {
             "matrix": MatrixWrapper,
             "matrix_bess": MatrixBessWrapper,
             "pyomo": PyomoWrapper,
-            "new_pyomo": NewPyomoWrapper,
         }
     return _WRAPPER_REGISTRY
 
@@ -59,19 +57,19 @@ _FORMULATION_REGISTRY: dict[str, dict] = {
     "branchflow": {
         "default_wrapper": "pyomo",
         "model_type": "branchflow",
-        "compatible_wrappers": ["pyomo", "new_pyomo"],
+        "compatible_wrappers": ["pyomo"],
     },
     # Pyomo SOCP relaxation of BranchFlow (NLP/IPOPT path)
     "socp": {
         "default_wrapper": "pyomo",
         "model_type": "socp",
-        "compatible_wrappers": ["pyomo", "new_pyomo"],
+        "compatible_wrappers": ["pyomo"],
     },
     # LinDistFlow — supported by both pyomo (default) and matrix
     "lindist": {
         "default_wrapper": "pyomo",
         "model_type": "lindist",
-        "compatible_wrappers": ["pyomo", "matrix", "new_pyomo"],
+        "compatible_wrappers": ["pyomo", "matrix"],
     },
     # Matrix single-step formulations
     "lindist_cap_mi": {
@@ -776,8 +774,7 @@ class Case:
         --------
         >>> case = create_case(CASES_DIR / "csv" / "ieee13")
         >>> model = case.to_pyomo_model()
-        >>> from distopf.pyomo_models import add_constraints, solve
-        >>> add_constraints(model)
+        >>> from distopf.pyomo_models import solve
         >>> results = solve(model)
         """
         from distopf.pyomo_models import create_lindist_model

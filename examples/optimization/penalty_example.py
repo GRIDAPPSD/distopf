@@ -10,8 +10,8 @@ constraints for voltage and generator limits. This approach is useful when:
 
 import distopf as opf
 import pyomo.environ as pyo
-from distopf.pyomo_models import create_lindist_model, add_constraints
-from distopf.pyomo_models import objectives
+from distopf.pyomo_models.common.factory import create_lindist_model
+from distopf.pyomo_models.common import objectives
 
 # Load IEEE 123 bus case
 case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123")
@@ -22,8 +22,7 @@ case.bus_data.loc[:, ["ql_a", "ql_b", "ql_c"]] *= 1.5
 
 # Build model with equality constraints only (no hard voltage/thermal limits)
 # This uses equality_only=True to skip inequality constraints
-model = create_lindist_model(case)
-add_constraints(model, equality_only=True)
+model = create_lindist_model(case, equality_only=True)
 
 # Add penalized loss objective
 # The optimizer will minimize: loss + voltage_penalty + thermal_penalty + ...

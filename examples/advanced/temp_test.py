@@ -1,9 +1,12 @@
 from pyomo.core.base.var import VarData
 import distopf as opf
 import pyomo.environ as pyo
-from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.pyomo_models import constraints
-from distopf.pyomo_models.results import PyoResult
+from distopf.pyomo_models.common.factory import create_lindist_model
+from distopf.pyomo_models.common.objectives import (
+    loss_objective_rule,
+    substation_power_objective_rule,
+)
+from distopf.pyomo_models.common.results import PyoResult
 from distopf.api import create_case
 from pyomo.core.expr.calculus.derivatives import differentiate
 
@@ -29,25 +32,12 @@ def add_final_constraint(model):
 
 
 def add_loss_objective(model):
-    model.objective = pyo.Objective(
-        rule=pyo.quicksum(
-            (model.p_flow[j, p, t] ** 2 + model.q_flow[j, p, t] ** 2)
-            * model.r[j, p + p]
-            for j, p in model.branch_phase_set
-            for t in model.time_set
-        ),
-        sense=pyo.minimize,
-    )
+    model.objective = pyo.Objective(rule=loss_objective_rule, sense=pyo.minimize)
 
 
 def add_load_objective(model):
     model.objective = pyo.Objective(
-        rule=pyo.quicksum(
-            model.p_flow[model.to_bus_map[j], p, t]
-            for j, p in model.swing_phase_set
-            for t in model.time_set
-            for i in model.to_bus_map[1]
-        ),
+        rule=substation_power_objective_rule,
         sense=pyo.minimize,
     )
 
@@ -65,31 +55,6 @@ case.gen_data.control_variable = "PQ"
 # Create the pyomo ConcreteModel containint all of the
 # necessary parameters, sets, and variables for the LinDist model.
 model = create_lindist_model(case)
-# Now we need to add the constraints
-# Power Flow Constraints
-constraints.add_p_flow_constraints(model)
-constraints.add_q_flow_constraints(model)
-# Node Voltage Constraints
-constraints.add_voltage_limits(model)
-constraints.add_voltage_drop_constraints(model)
-constraints.add_swing_bus_constraints(model)
-# Loads, Capacitors and Regulators
-constraints.add_cvr_load_constraints(model)
-constraints.add_capacitor_constraints(model)
-constraints.add_regulator_constraints(model)
-# Generators
-constraints.add_generator_limits(model)
-constraints.add_generator_constant_p_constraints_q_control(model)
-constraints.add_generator_constant_q_constraints_p_control(model)
-#  - Choose the quadratic circular constraint or the linear octagonal constraint.
-# constraints.add_circular_generator_constraints_pq_control(model)
-constraints.add_octagonal_inverter_constraints_pq_control(model)
-# Battery models
-constraints.add_battery_constant_q_constraints_p_control(model)
-constraints.add_battery_energy_constraints(model)
-constraints.add_battery_net_p_bat_equal_phase_constraints(model)
-constraints.add_battery_power_limits(model)
-constraints.add_battery_soc_limits(model)
 
 model.rc = pyo.Suffix(direction=pyo.Suffix.IMPORT)
 model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
@@ -128,11 +93,11 @@ ipopt.options["warm_start_bound_push"] = 1e-6
 ipopt.options["warm_start_mult_bound_push"] = 1e-6
 ipopt.options["mu_init"] = 1e-6
 
-ipopt.solve(model, tee=True)
+results = ipopt.solve(model, tee=True)
 
 
 # Extract result dataframes from model
-sol = PyoResult(model)
+sol = PyoResult(model, results)
 
 
 _gradient = {}

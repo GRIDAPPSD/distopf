@@ -1,9 +1,8 @@
 import distopf as opf
 import pyomo.environ as pyo
-from distopf.pyomo_models.lindist import create_lindist_model
+from distopf.pyomo_models.common.factory import create_lindist_model
 from distopf.api import create_case
-from distopf.pyomo_models import constraints
-from distopf.pyomo_models.results import PyoResult
+from distopf.pyomo_models.common.results import PyoResult
 from distopf import (
     plot_voltages,
     # plot_gens,
@@ -40,28 +39,6 @@ q_gen = matrix_model.get_q_gens(results_matrix.x)
 # case_matrix.plot_network(show_reactive_power=True).show(renderer="browser")
 t3 = perf_counter()
 model = create_lindist_model(case)
-constraints.add_p_flow_constraints(model)
-constraints.add_q_flow_constraints(model)
-# Node Voltages
-constraints.add_voltage_limits(model)
-constraints.add_voltage_drop_constraints(model)
-constraints.add_swing_bus_constraints(model)
-# Loads, Capacitors and Regulators
-constraints.add_cvr_load_constraints(model)
-constraints.add_capacitor_constraints(model)
-constraints.add_regulator_constraints(model)
-# Generators
-constraints.add_generator_limits(model)
-constraints.add_generator_constant_p_constraints_q_control(model)
-constraints.add_generator_constant_q_constraints_p_control(model)
-# constraints.add_circular_generator_constraints_pq_control(model)
-constraints.add_octagonal_inverter_constraints_pq_control(model)
-# Battery models
-constraints.add_battery_constant_q_constraints_p_control(model)
-constraints.add_battery_energy_constraints(model)
-constraints.add_battery_net_p_bat_equal_phase_constraints(model)
-constraints.add_battery_power_limits(model)
-constraints.add_battery_soc_limits(model)
 
 
 def loss_objective_rule(model):
@@ -70,10 +47,14 @@ def loss_objective_rule(model):
     For each branch-phase combination, calculates (P² + Q²) * R
     """
     total_loss = 0
-    for _id, ph in model.branch_phase_set:
+    for fb, tb, phase in model.branch_phase_set:
         for t in model.time_set:
-            total_loss += (model.p_flow[_id, ph, t] ** 2) * model.r[_id, ph + ph]
-            total_loss += (model.q_flow[_id, ph, t] ** 2) * model.r[_id, ph + ph]
+            total_loss += (
+                model.p_flow[fb, tb, phase, t] ** 2 * model.r[fb, tb, phase + phase]
+            )
+            total_loss += (
+                model.q_flow[fb, tb, phase, t] ** 2 * model.r[fb, tb, phase + phase]
+            )
     return total_loss
 
 
@@ -91,7 +72,7 @@ if results.solver.status == pyo.SolverStatus.ok:
     # print("Optimization successful!")
     # print(f"Objective value: {pyo.value(model.objective)}")
     # # data = get_all_results(model, case)
-    res = PyoResult(model)
+    res = PyoResult(model, results)
     # s = res.p_flow.copy()
     # s = s.drop(["a", "b", "c"], axis=1)
     # s["a"] = res.p_flow.a + 1j * res.q_flow.a

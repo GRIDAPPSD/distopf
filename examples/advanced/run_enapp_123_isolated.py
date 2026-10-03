@@ -1,6 +1,6 @@
 from pathlib import Path
 import distopf as opf
-from distopf.pyomo_models.objectives import (
+from distopf.pyomo_models.common.objectives import (
     total_cost_rule,
 )
 

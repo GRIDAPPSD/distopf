@@ -11,11 +11,11 @@ Uses IPOPT for NLP solving with continuous regulator tap control.
 import pandas as pd
 import distopf as opf
 import pyomo.environ as pyo
-from distopf.pyomo_models import create_lindist_model, add_constraints
-from distopf.pyomo_models.objectives import (
+from distopf.pyomo_models.common.factory import create_lindist_model
+from distopf.pyomo_models.common.objectives import (
     substation_power_objective_rule,
 )
-from distopf.pyomo_models.results import PyoResult
+from distopf.pyomo_models.common.results import PyoResult
 
 # Load IEEE 123 bus with 30 DERs for 24 hours
 case = opf.create_case(
@@ -45,14 +45,8 @@ model = create_lindist_model(
     case,
     control_regulators=True,  # Enable regulator tap control variables
     control_capacitors=False,
-)
-
-# Add constraints with continuous regulator control (NLP)
-# Using octagonal (linear) constraints - less restrictive
-add_constraints(
-    model,
-    circular_constraints=True,  # Use linear constraints
-    control_regulators=True,  # mixed integer regulator tap control
+    reg_tap_change_limit=2,
+    circular_constraints=True,
 )
 
 # Set loss minimization objective
@@ -73,11 +67,11 @@ print(f"Solver status: {result.solver.termination_condition}")
 
 if result.solver.termination_condition == pyo.TerminationCondition.optimal:
     # Extract results
-    pyo_result = PyoResult(model)
+    pyo_result = PyoResult(model, result)
     u_reg = pd.DataFrame(
         data=[
-            [model.from_bus_map[_id], _id, ph, k, t, val]
-            for ((_id, ph, k, t), val) in model.u_reg.extract_values().items()
+            [fb, tb, ph, k, t, val]
+            for ((fb, tb, ph, k, t), val) in model.u_reg.extract_values().items()
         ],
         columns=["fb", "tb", "phase", "k", "t", "value"],
     )

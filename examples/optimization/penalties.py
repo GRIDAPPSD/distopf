@@ -15,9 +15,8 @@ import pandas as pd
 
 # Import from distopf (adjust path as needed)
 from distopf.api import Case
-from distopf.pyomo_models.lindist import create_lindist_model
-from distopf.pyomo_models import constraints
-from distopf.pyomo_models import objectives
+from distopf.pyomo_models.common.factory import create_lindist_model
+from distopf.pyomo_models.common import objectives
 
 
 def create_test_case() -> Case:
@@ -155,60 +154,23 @@ def create_test_case() -> Case:
 
 def build_model_with_hard_constraints(case: Case) -> pyo.ConcreteModel:
     """Build model with standard hard constraints."""
-    model = create_lindist_model(
-        case, control_capacitors=False, control_regulators=False
+    return create_lindist_model(
+        case,
+        control_capacitors=False,
+        control_regulators=False,
+        circular_constraints=False,
+        thermal_constraints=True,
     )
-
-    # Power flow
-    constraints.add_p_flow_constraints(model)
-    constraints.add_q_flow_constraints(model)
-
-    # Voltage
-    constraints.add_voltage_limits(model)
-    constraints.add_voltage_drop_constraints(model)
-    constraints.add_swing_bus_constraints(model)
-
-    # Loads and devices
-    constraints.add_cvr_load_constraints(model)
-    constraints.add_capacitor_constraints(model)
-
-    # Generators
-    constraints.add_generator_limits(model)
-    constraints.add_generator_constant_p_constraints_q_control(model)
-    constraints.add_generator_constant_q_constraints_p_control(model)
-    constraints.add_octagonal_inverter_constraints_pq_control(model)
-
-    # Thermal limits
-    constraints.add_octagonal_thermal_constraints(model)
-
-    return model
 
 
 def build_model_without_hard_limits(case: Case) -> pyo.ConcreteModel:
     """Build model without voltage/thermal hard constraints (for penalty testing)."""
-    model = create_lindist_model(
-        case, control_capacitors=False, control_regulators=False
+    return create_lindist_model(
+        case,
+        control_capacitors=False,
+        control_regulators=False,
+        equality_only=True,
     )
-
-    # Power flow
-    constraints.add_p_flow_constraints(model)
-    constraints.add_q_flow_constraints(model)
-
-    # Voltage (no limits, just drop equations)
-    constraints.add_voltage_drop_constraints(model)
-    constraints.add_swing_bus_constraints(model)
-
-    # Loads and devices
-    constraints.add_cvr_load_constraints(model)
-    constraints.add_capacitor_constraints(model)
-
-    # Generators (no octagonal constraints - will use penalty)
-    constraints.add_generator_constant_p_constraints_q_control(model)
-    constraints.add_generator_constant_q_constraints_p_control(model)
-
-    # No thermal constraints - will use penalty
-
-    return model
 
 
 def solve_model(model: pyo.ConcreteModel, solver_name: str = "ipopt") -> bool:
@@ -261,11 +223,11 @@ def extract_results(model: pyo.ConcreteModel) -> dict:
             results["voltages"][(_id, ph, t)] = v
 
     # Power flows
-    for _id, ph in model.branch_phase_set:
+    for fb, tb, phase in model.branch_phase_set:
         for t in model.time_set:
-            p = pyo.value(model.p_flow[_id, ph, t])
-            q = pyo.value(model.q_flow[_id, ph, t])
-            results["power_flows"][(_id, ph, t)] = {"p": p, "q": q}
+            p = pyo.value(model.p_flow[fb, tb, phase, t])
+            q = pyo.value(model.q_flow[fb, tb, phase, t])
+            results["power_flows"][(fb, tb, phase, t)] = {"p": p, "q": q}
 
     # Generator output
     for _id, ph in model.gen_phase_set:

@@ -14,12 +14,11 @@ def _(mo):
 def _():
     import distopf as opf
     import pyomo.environ as pyo
-    from distopf.pyomo_models.lindist import create_lindist_model
-    from distopf.pyomo_models import constraints
-    from distopf.pyomo_models.results import PyoResult
+    from distopf.pyomo_models.common.factory import create_lindist_model
+    from distopf.pyomo_models.common.results import PyoResult
     from distopf.api import create_case
 
-    return PyoResult, constraints, create_case, create_lindist_model, opf, pyo
+    return PyoResult, create_case, create_lindist_model, opf, pyo
 
 
 @app.cell(hide_code=True)
@@ -59,36 +58,14 @@ def _(create_case, create_lindist_model, opf):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""The `model` does not have any constraints yet so we need to add them.""")
+    mo.md(
+        r"""The factory creates the network and device constraints through providers."""
+    )
     return
 
 
 @app.cell
-def _(constraints, model, pyo):
-    # Power Flow Constraints
-    constraints.add_p_flow_constraints(model)
-    constraints.add_q_flow_constraints(model)
-    # Node Voltage Constraints
-    constraints.add_voltage_limits(model)
-    constraints.add_voltage_drop_constraints(model)
-    constraints.add_swing_bus_constraints(model)
-    # Loads, Capacitors and Regulators
-    constraints.add_cvr_load_constraints(model)
-    constraints.add_capacitor_constraints(model)
-    constraints.add_regulator_constraints(model)
-    # Generators
-    constraints.add_generator_limits(model)
-    constraints.add_generator_constant_p_constraints_q_control(model)
-    constraints.add_generator_constant_q_constraints_p_control(model)
-    #  - Choose the quadratic circular constraint or the linear octagonal constraint.
-    # constraints.add_circular_generator_constraints_pq_control(model)
-    constraints.add_octagonal_inverter_constraints_pq_control(model)
-    # Battery models
-    constraints.add_battery_constant_q_constraints_p_control(model)
-    constraints.add_battery_energy_constraints(model)
-    constraints.add_battery_net_p_bat_equal_phase_constraints(model)
-    constraints.add_battery_power_limits(model)
-    constraints.add_battery_soc_limits(model)
+def _(model, pyo):
     model.rc = pyo.Suffix(direction=pyo.Suffix.IMPORT)
     model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
     return
@@ -108,10 +85,14 @@ def _(model, pyo):
         For each branch-phase combination, calculates (P² + Q²) * R
         """
         total_loss = 0
-        for _id, ph in model.branch_phase_set:
+        for fb, tb, phase in model.branch_phase_set:
             for t in model.time_set:
-                total_loss += (model.p_flow[_id, ph, t] ** 2) * model.r[_id, ph + ph]
-                total_loss += (model.q_flow[_id, ph, t] ** 2) * model.r[_id, ph + ph]
+                total_loss += (
+                    model.p_flow[fb, tb, phase, t] ** 2 * model.r[fb, tb, phase + phase]
+                )
+                total_loss += (
+                    model.q_flow[fb, tb, phase, t] ** 2 * model.r[fb, tb, phase + phase]
+                )
         return total_loss
 
     model.objective = pyo.Objective(
@@ -133,7 +114,7 @@ def _(PyoResult, model, pyo):
     results = opt.solve(model)
     print(results.solver.status)
     # Extract result dataframes from model
-    sol = PyoResult(model)
+    sol = PyoResult(model, results)
     return (sol,)
 
 
