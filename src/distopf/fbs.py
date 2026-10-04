@@ -387,7 +387,8 @@ class FBS:
         if node in self.node_generations:
             s_gen = self.node_generations[node][3:]
             if all(abs(v_node[3:]) > 1e-10):
-                I_injection[3:] += np.conj(s_gen / v_node[3:])
+                I_gen = np.conj(s_gen / v_node[3:])
+                I_injection[3:] += np.array([[1, 0], [0, -1]]) @ I_gen
 
         return I_injection
 
