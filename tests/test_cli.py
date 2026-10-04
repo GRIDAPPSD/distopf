@@ -62,7 +62,9 @@ def test_compare_prints_and_writes_default_outputs(tmp_path):
     assert (output / "comparison.json").exists()
     assert (output / "voltages_differences.csv").exists()
     assert (output / "active_power_loads_differences.csv").exists()
-    voltage_differences = (output / "voltages_differences.csv").read_text(encoding="utf-8")
+    voltage_differences = (output / "voltages_differences.csv").read_text(
+        encoding="utf-8"
+    )
     assert "id,phase,left,right,difference_signed,difference_abs" in voltage_differences
     payload = json.loads((output / "comparison.json").read_text(encoding="utf-8"))
     assert payload["format"] == "distopf.result_comparison.v1"
@@ -147,7 +149,9 @@ def test_compare_handles_branch_composite_keys_and_empty_generators(tmp_path):
     assert generators["rows"] == 0
     assert generators["columns"] == []
     assert "active_power_generation.csv" not in payload["failed_tables"]
-    differences = tmp_path / "left" / "comparison" / "active_power_generation_differences.csv"
+    differences = (
+        tmp_path / "left" / "comparison" / "active_power_generation_differences.csv"
+    )
     assert differences.exists()
     assert differences.read_text(encoding="utf-8").strip() == (
         "column,id,t,left,right,difference_signed,difference_abs"
@@ -287,7 +291,9 @@ def test_compare_exact_batch_processes_sorted_immediate_subdirectories(tmp_path)
     _write_compare_tables(second / "exact", power_delta=2.0)
     (parent / "not-a-folder.csv").write_text("ignored", encoding="utf-8")
 
-    result = CliRunner().invoke(distopf, ["compare-exact", str(parent), "--batch", "--json"])
+    result = CliRunner().invoke(
+        distopf, ["compare-exact", str(parent), "--batch", "--json"]
+    )
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -295,13 +301,16 @@ def test_compare_exact_batch_processes_sorted_immediate_subdirectories(tmp_path)
     assert payload["workers"] == 1
     assert payload["folders"] == [str(second), str(first)]
     assert [item["exact_source_folder"] for item in payload["comparisons"]] == [
-        str(second), str(first)
+        str(second),
+        str(first),
     ]
     assert (second / "comparison" / "comparison.json").exists()
     assert (first / "comparison" / "comparison.json").exists()
 
 
-def test_compare_exact_batch_reports_finished_folders_in_human_output(tmp_path, monkeypatch):
+def test_compare_exact_batch_reports_finished_folders_in_human_output(
+    tmp_path, monkeypatch
+):
     parent = tmp_path / "results"
     parent.mkdir()
     failed = _write_compare_tables(parent / "a-failed", power_delta=0.0)
@@ -335,7 +344,9 @@ def test_compare_exact_batch_progress_does_not_corrupt_json_output(tmp_path):
     _write_compare_tables(first / "exact", power_delta=1.0)
     _write_compare_tables(second / "exact", power_delta=2.0)
 
-    result = CliRunner().invoke(distopf, ["compare-exact", str(parent), "--batch", "--json"])
+    result = CliRunner().invoke(
+        distopf, ["compare-exact", str(parent), "--batch", "--json"]
+    )
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -363,7 +374,9 @@ def test_compare_exact_batch_continues_after_source_failure(tmp_path, monkeypatc
         return original(left_folder, *args, **kwargs)
 
     monkeypatch.setattr(cli, "_write_comparison", fail_one)
-    result = CliRunner().invoke(distopf, ["compare-exact", str(parent), "--batch", "--json"])
+    result = CliRunner().invoke(
+        distopf, ["compare-exact", str(parent), "--batch", "--json"]
+    )
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -371,7 +384,8 @@ def test_compare_exact_batch_continues_after_source_failure(tmp_path, monkeypatc
     assert payload["failed"] == 1
     assert payload["succeeded"] == 1
     assert [item["left_folder"] for item in payload["comparisons"]] == [
-        str(failed), str(succeeded)
+        str(failed),
+        str(succeeded),
     ]
     assert payload["comparisons"][0] == {
         "ok": False,
@@ -392,7 +406,9 @@ def test_compare_exact_non_batch_failure_remains_fail_fast(tmp_path, monkeypatch
     monkeypatch.setattr(
         cli,
         "_write_comparison",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("comparison failed")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("comparison failed")
+        ),
     )
 
     result = CliRunner().invoke(distopf, ["compare-exact", str(left), "--json"])
@@ -405,7 +421,9 @@ def test_compare_exact_non_batch_failure_remains_fail_fast(tmp_path, monkeypatch
     }
 
 
-def test_compare_exact_batch_failure_record_is_preserved_with_workers(tmp_path, monkeypatch):
+def test_compare_exact_batch_failure_record_is_preserved_with_workers(
+    tmp_path, monkeypatch
+):
     parent = tmp_path / "results"
     parent.mkdir()
     failed = _write_compare_tables(parent / "a-failed", power_delta=0.0)
@@ -464,7 +482,16 @@ def test_compare_exact_batch_supports_depth_two_and_relative_output_paths(tmp_pa
 
     result = CliRunner().invoke(
         distopf,
-        ["compare-exact", str(parent), "--batch", "--depth", "2", "--output-dir", str(output), "--json"],
+        [
+            "compare-exact",
+            str(parent),
+            "--batch",
+            "--depth",
+            "2",
+            "--output-dir",
+            str(output),
+            "--json",
+        ],
     )
 
     assert result.exit_code == 0
@@ -481,13 +508,16 @@ def test_compare_exact_batch_supports_depth_two_and_relative_output_paths(tmp_pa
 def test_compare_exact_batch_rejects_invalid_depth_and_workers(tmp_path):
     for option, value in (("--depth", "0"), ("--workers", "0")):
         result = CliRunner().invoke(
-            distopf, ["compare-exact", str(tmp_path), "--batch", option, value, "--json"]
+            distopf,
+            ["compare-exact", str(tmp_path), "--batch", option, value, "--json"],
         )
         assert result.exit_code == 2
         assert option in result.output
 
 
-def test_compare_exact_batch_uses_process_pool_and_preserves_order(tmp_path, monkeypatch):
+def test_compare_exact_batch_uses_process_pool_and_preserves_order(
+    tmp_path, monkeypatch
+):
     parent = tmp_path / "results"
     parent.mkdir()
     first = _write_compare_tables(parent / "b-case", power_delta=0.0)
@@ -522,7 +552,10 @@ def test_compare_exact_batch_uses_process_pool_and_preserves_order(tmp_path, mon
     payload = json.loads(result.stdout)
     assert executor_calls["max_workers"] == 2
     assert executor_calls["function"] is cli._compare_exact_source
-    assert pickle.loads(pickle.dumps(cli._compare_exact_source)) is cli._compare_exact_source
+    assert (
+        pickle.loads(pickle.dumps(cli._compare_exact_source))
+        is cli._compare_exact_source
+    )
     assert payload["workers"] == 2
     assert payload["folders"] == [str(second), str(first)]
 
@@ -540,7 +573,9 @@ def test_compare_exact_ignores_non_directories_in_batch_mode(tmp_path):
     parent = tmp_path / "results"
     parent.mkdir()
     (parent / "readme.txt").write_text("ignored", encoding="utf-8")
-    result = CliRunner().invoke(distopf, ["compare-exact", str(parent), "--batch", "--json"])
+    result = CliRunner().invoke(
+        distopf, ["compare-exact", str(parent), "--batch", "--json"]
+    )
     assert result.exit_code == 1
     assert "No result subdirectories" in result.output
 
@@ -625,7 +660,9 @@ def test_validate_rejects_non_replayable_config(tmp_path):
 
 def test_run_toml_dispatches_case_method(monkeypatch, tmp_path):
     path = tmp_path / "scenario.toml"
-    path.write_text("[case]\npath = 'case'\n\n[analysis]\ntype = 'pf'\n", encoding="utf-8")
+    path.write_text(
+        "[case]\npath = 'case'\n\n[analysis]\ntype = 'pf'\n", encoding="utf-8"
+    )
 
     class FakeCase:
         def run_pf(self):
@@ -648,7 +685,9 @@ def test_run_toml_dispatches_case_method(monkeypatch, tmp_path):
 
 def test_toml_verbose_does_not_pass_unsupported_pf_flag(monkeypatch, tmp_path):
     path = tmp_path / "scenario.toml"
-    path.write_text("[case]\npath = 'case'\n\n[analysis]\ntype = 'pf'\n", encoding="utf-8")
+    path.write_text(
+        "[case]\npath = 'case'\n\n[analysis]\ntype = 'pf'\n", encoding="utf-8"
+    )
     captured = {}
 
     class FakeCase:
@@ -673,7 +712,9 @@ def test_toml_verbose_does_not_pass_unsupported_pf_flag(monkeypatch, tmp_path):
 
 def test_toml_verbose_passes_method_verbose_flag(monkeypatch, tmp_path):
     path = tmp_path / "scenario.toml"
-    path.write_text("[case]\npath = 'case'\n\n[analysis]\ntype = 'fbs'\n", encoding="utf-8")
+    path.write_text(
+        "[case]\npath = 'case'\n\n[analysis]\ntype = 'fbs'\n", encoding="utf-8"
+    )
     captured = {}
 
     class FakeCase:
@@ -753,7 +794,8 @@ def test_human_run_summary_hides_result_frame_details(monkeypatch, tmp_path):
 
 def test_run_reports_runtime_errors_without_traceback(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "distopf.api.replay", lambda _: (_ for _ in ()).throw(RuntimeError("solver failed"))
+        "distopf.api.replay",
+        lambda _: (_ for _ in ()).throw(RuntimeError("solver failed")),
     )
     config_path = _config(tmp_path)
     result = CliRunner().invoke(distopf, ["run", str(config_path), "--json"])
@@ -765,7 +807,10 @@ def test_run_reports_runtime_errors_without_traceback(monkeypatch, tmp_path):
 
 def test_invalid_scenario_analysis_type_is_validation_error(tmp_path):
     path = tmp_path / "scenario.toml"
-    path.write_text("[case]\npath = 'case'\n\n[analysis]\ntype = 'not-supported'\n", encoding="utf-8")
+    path.write_text(
+        "[case]\npath = 'case'\n\n[analysis]\ntype = 'not-supported'\n",
+        encoding="utf-8",
+    )
 
     for command in ("run", "inspect", "validate"):
         result = CliRunner().invoke(distopf, [command, str(path), "--json"])

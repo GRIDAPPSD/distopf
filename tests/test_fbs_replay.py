@@ -19,9 +19,7 @@ class _Case:
 
 def test_native_battery_is_split_over_declared_phases_and_affects_current():
     fbs = FBS.__new__(FBS)
-    fbs.bat_data = pd.DataFrame(
-        [{"id": 2, "phases": "b", "p": 0.3, "q": -0.1}]
-    )
+    fbs.bat_data = pd.DataFrame([{"id": 2, "phases": "b", "p": 0.3, "q": -0.1}])
     fbs.phase_connections = {2: [1]}
     batteries = fbs._build_node_batteries()
     np.testing.assert_allclose(batteries[2][1], 0.3 - 0.1j)
@@ -37,9 +35,7 @@ def test_native_battery_is_split_over_declared_phases_and_affects_current():
 
 
 def test_schedule_replay_uses_phase_specific_columns():
-    bus = pd.DataFrame(
-        [{"id": 1, "load_shape": "default", "pl_a": 2.0, "ql_a": 3.0}]
-    )
+    bus = pd.DataFrame([{"id": 1, "load_shape": "default", "pl_a": 2.0, "ql_a": 3.0}])
     schedules = pd.DataFrame(
         [{"time": 0, "default.a.p": 0.25, "default.a.q": 0.5}]
     ).set_index("time")

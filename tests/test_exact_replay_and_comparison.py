@@ -78,12 +78,8 @@ def test_compare_voltage_tables_rejects_missing_period_or_key():
 
 
 def test_compare_voltage_results_uses_result_objects():
-    approximate = PowerFlowResult(
-        voltages=_voltages([{"id": 1, "a": 0.98, "c": 1.0}])
-    )
-    exact = PowerFlowResult(
-        voltages=_voltages([{"id": 1, "a": 1.0, "c": 0.99}])
-    )
+    approximate = PowerFlowResult(voltages=_voltages([{"id": 1, "a": 0.98, "c": 1.0}]))
+    exact = PowerFlowResult(voltages=_voltages([{"id": 1, "a": 1.0, "c": 0.99}]))
 
     comparison = compare_voltage_results(approximate, exact)
 
@@ -200,7 +196,9 @@ def test_replay_exact_power_flow_supports_custom_output_and_no_save(
     custom = tmp_path / "custom-output"
     source.mkdir()
     replay_result = _SavedReplayResult()
-    monkeypatch.setattr(fbs, "run_fbs_from_saved_results", lambda *args, **kwargs: replay_result)
+    monkeypatch.setattr(
+        fbs, "run_fbs_from_saved_results", lambda *args, **kwargs: replay_result
+    )
 
     fbs.replay_exact_power_flow(source, output_dir=custom, save=False)
 
@@ -240,7 +238,9 @@ def test_replay_exact_power_flow_overwrites_existing_output(tmp_path, monkeypatc
     exact.mkdir(parents=True)
     (exact / "old.txt").write_text("old")
     replay_result = _SavedReplayResult()
-    monkeypatch.setattr(fbs, "run_fbs_from_saved_results", lambda *args, **kwargs: replay_result)
+    monkeypatch.setattr(
+        fbs, "run_fbs_from_saved_results", lambda *args, **kwargs: replay_result
+    )
 
     fbs.replay_exact_power_flow(source, overwrite=True)
 
@@ -301,7 +301,9 @@ def test_replay_exact_power_flow_from_opf_result_preserves_setpoint_replay_metad
 
 def test_public_imports_expose_new_apis():
     from distopf.fbs import replay_exact_power_flow
-    from distopf.utils.results_comparison import compare_voltage_tables as module_compare
+    from distopf.utils.results_comparison import (
+        compare_voltage_tables as module_compare,
+    )
 
     assert opf.replay_exact_power_flow is replay_exact_power_flow
     assert opf.compare_voltage_tables is module_compare

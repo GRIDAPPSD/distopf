@@ -28,6 +28,7 @@ def compare_voltage_results(
         nominal_voltage=nominal_voltage,
     )
 
+
 # For backward compatibility, SolverResult is now an alias for PowerFlowResult
 SolverResult = PowerFlowResult
 
@@ -83,22 +84,33 @@ def compare_voltage_tables(
     key_columns = ["id"]
     if "t" in approximate.columns or "t" in exact.columns:
         if "t" not in approximate.columns or "t" not in exact.columns:
-            raise ValueError("Both voltage tables must contain 't' for multi-period comparison")
+            raise ValueError(
+                "Both voltage tables must contain 't' for multi-period comparison"
+            )
         key_columns.append("t")
     for name, frame in (("approximate", approximate), ("exact", exact)):
         missing = [key for key in key_columns if key not in frame.columns]
         if missing:
             raise ValueError(f"{name} voltage table is missing key columns: {missing}")
         if frame.duplicated(key_columns).any():
-            raise ValueError(f"{name} voltage table contains duplicate keys: {key_columns}")
+            raise ValueError(
+                f"{name} voltage table contains duplicate keys: {key_columns}"
+            )
 
-    phases = [phase for phase in ("a", "b", "c", "s1", "s2")
-              if phase in approximate.columns and phase in exact.columns]
+    phases = [
+        phase
+        for phase in ("a", "b", "c", "s1", "s2")
+        if phase in approximate.columns and phase in exact.columns
+    ]
     if not phases:
         raise ValueError("No common phase columns found in voltage tables")
 
-    left = approximate[key_columns + phases].rename(columns={p: f"{p}_approximate" for p in phases})
-    right = exact[key_columns + phases].rename(columns={p: f"{p}_exact" for p in phases})
+    left = approximate[key_columns + phases].rename(
+        columns={p: f"{p}_approximate" for p in phases}
+    )
+    right = exact[key_columns + phases].rename(
+        columns={p: f"{p}_exact" for p in phases}
+    )
     merged = left.merge(right, on=key_columns, how="inner", validate="one_to_one")
     if len(merged) != len(left) or len(merged) != len(right):
         raise ValueError("Voltage tables do not contain the same bus/period keys")
@@ -107,7 +119,9 @@ def compare_voltage_tables(
     for phase in phases:
         frame = merged[key_columns + [f"{phase}_approximate", f"{phase}_exact"]].copy()
         frame["phase"] = phase
-        frame = frame.rename(columns={f"{phase}_approximate": "approximate", f"{phase}_exact": "exact"})
+        frame = frame.rename(
+            columns={f"{phase}_approximate": "approximate", f"{phase}_exact": "exact"}
+        )
         frame["error_pu"] = (frame["exact"] - frame["approximate"]).abs()
         frame["error_pct_nominal"] = 100.0 * frame["error_pu"] / abs(nominal_voltage)
         error_frames.append(frame)

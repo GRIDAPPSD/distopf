@@ -1494,32 +1494,70 @@ def fbs_solve(
 
 
 def run_fbs_with_opf_setpoints(
-    case: Case, opf_result=None, *, p_gens=None, q_gens=None,
-    max_iterations: int = 100, tolerance: float = 1e-6, verbose: bool = False,
+    case: Case,
+    opf_result=None,
+    *,
+    p_gens=None,
+    q_gens=None,
+    max_iterations: int = 100,
+    tolerance: float = 1e-6,
+    verbose: bool = False,
 ) -> "PowerFlowResult":
     """Replay OPF load, generator, and native battery setpoints through FBS."""
     if opf_result is not None:
-        p_gens = p_gens if p_gens is not None else getattr(opf_result, "active_power_generation", None)
-        q_gens = q_gens if q_gens is not None else getattr(opf_result, "reactive_power_generation", None)
-    loads = (getattr(opf_result, "active_power_loads", None), getattr(opf_result, "reactive_power_loads", None)) if opf_result is not None else (None, None)
-    bats = (getattr(opf_result, "battery_active_power", None), getattr(opf_result, "battery_reactive_power", None)) if opf_result is not None else (None, None)
+        p_gens = (
+            p_gens
+            if p_gens is not None
+            else getattr(opf_result, "active_power_generation", None)
+        )
+        q_gens = (
+            q_gens
+            if q_gens is not None
+            else getattr(opf_result, "reactive_power_generation", None)
+        )
+    loads = (
+        (
+            getattr(opf_result, "active_power_loads", None),
+            getattr(opf_result, "reactive_power_loads", None),
+        )
+        if opf_result is not None
+        else (None, None)
+    )
+    bats = (
+        (
+            getattr(opf_result, "battery_active_power", None),
+            getattr(opf_result, "battery_reactive_power", None),
+        )
+        if opf_result is not None
+        else (None, None)
+    )
     frames = [*loads, p_gens, q_gens, *bats]
     periods = _replay_periods(case, frames)
     results = []
     for t in periods:
         current = case.copy()
         if any(f is not None and len(f) for f in loads):
-            _apply_load_setpoints_to_case(current, _at_period(loads[0], t), _at_period(loads[1], t))
+            _apply_load_setpoints_to_case(
+                current, _at_period(loads[0], t), _at_period(loads[1], t)
+            )
             current.ignore_schedule = True
         elif current.schedules is not None and len(current.schedules):
             _apply_schedule_to_case(current, t)
             current.ignore_schedule = True
-        _apply_gen_setpoints_to_case(current, _at_period(p_gens, t), _at_period(q_gens, t)) if p_gens is not None or q_gens is not None else None
-        _apply_battery_setpoints_to_case(current, _at_period(bats[0], t), _at_period(bats[1], t))
+        _apply_gen_setpoints_to_case(
+            current, _at_period(p_gens, t), _at_period(q_gens, t)
+        ) if p_gens is not None or q_gens is not None else None
+        _apply_battery_setpoints_to_case(
+            current, _at_period(bats[0], t), _at_period(bats[1], t)
+        )
         current.start_step, current.n_steps = 0, 1
-        result = current.run_fbs(max_iterations=max_iterations, tolerance=tolerance, verbose=verbose)
+        result = current.run_fbs(
+            max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+        )
         _set_result_period(result, t)
-        for name, frame in zip(("battery_active_power", "battery_reactive_power"), bats):
+        for name, frame in zip(
+            ("battery_active_power", "battery_reactive_power"), bats
+        ):
             selected = _at_period(frame, t)
             if selected is not None and len(selected):
                 setattr(result, name, selected)
@@ -1572,13 +1610,16 @@ def run_fbs_from_saved_results(
     missing = [name for name in required if not (results_path / name).is_file()]
     if missing:
         raise FileNotFoundError(
-            "Saved results are missing required setpoint file(s): "
-            + ", ".join(missing)
+            "Saved results are missing required setpoint file(s): " + ", ".join(missing)
         )
     load_files = ("active_power_loads", "reactive_power_loads")
-    present_load_files = [name for name in load_files if (results_path / f"{name}.csv").is_file()]
+    present_load_files = [
+        name for name in load_files if (results_path / f"{name}.csv").is_file()
+    ]
     if present_load_files and len(present_load_files) != len(load_files):
-        missing_load = [f"{name}.csv" for name in load_files if name not in present_load_files]
+        missing_load = [
+            f"{name}.csv" for name in load_files if name not in present_load_files
+        ]
         raise FileNotFoundError(
             "Saved load setpoints are incomplete; missing: " + ", ".join(missing_load)
         )
@@ -1624,10 +1665,7 @@ def run_fbs_from_saved_results(
     }
     if present_load_files:
         frames.update(
-            {
-                name: pd.read_csv(results_path / f"{name}.csv")
-                for name in load_files
-            }
+            {name: pd.read_csv(results_path / f"{name}.csv") for name in load_files}
         )
     else:
         frames.update({name: None for name in load_files})
@@ -1635,11 +1673,17 @@ def run_fbs_from_saved_results(
         if frame is not None and frame.empty:
             frames[name] = None
         elif frame is not None and "id" not in frame.columns:
-            raise ValueError(f"Saved setpoint file {name}.csv must contain an 'id' column")
+            raise ValueError(
+                f"Saved setpoint file {name}.csv must contain an 'id' column"
+            )
 
     def _validate_ids(name, frame, target, target_label):
         if frame is None or frame.empty or target is None or len(target) == 0:
-            if frame is not None and not frame.empty and (target is None or len(target) == 0):
+            if (
+                frame is not None
+                and not frame.empty
+                and (target is None or len(target) == 0)
+            ):
                 raise ValueError(
                     f"Saved {name} setpoints contain IDs, but the selected case has no {target_label}"
                 )
@@ -1652,10 +1696,27 @@ def run_fbs_from_saved_results(
                 f"unknown IDs: {sorted(saved_ids - case_ids)}"
             )
 
-    _validate_ids("active_power_loads", frames.get("active_power_loads"), case.bus_data, "buses")
-    _validate_ids("reactive_power_loads", frames.get("reactive_power_loads"), case.bus_data, "buses")
-    _validate_ids("active_power_generation", frames["active_power_generation"], case.gen_data, "generators")
-    _validate_ids("reactive_power_generation", frames["reactive_power_generation"], case.gen_data, "generators")
+    _validate_ids(
+        "active_power_loads", frames.get("active_power_loads"), case.bus_data, "buses"
+    )
+    _validate_ids(
+        "reactive_power_loads",
+        frames.get("reactive_power_loads"),
+        case.bus_data,
+        "buses",
+    )
+    _validate_ids(
+        "active_power_generation",
+        frames["active_power_generation"],
+        case.gen_data,
+        "generators",
+    )
+    _validate_ids(
+        "reactive_power_generation",
+        frames["reactive_power_generation"],
+        case.gen_data,
+        "generators",
+    )
 
     # Battery setpoints are optional: OPF results without batteries do not
     # write meaningful battery files, and cases without batteries should not
@@ -1667,7 +1728,9 @@ def run_fbs_from_saved_results(
             if path.is_file():
                 frame = pd.read_csv(path)
                 if "id" not in frame.columns:
-                    raise ValueError(f"Saved setpoint file {name}.csv must contain an 'id' column")
+                    raise ValueError(
+                        f"Saved setpoint file {name}.csv must contain an 'id' column"
+                    )
                 _validate_ids(name, frame, case.bat_data, "batteries")
                 battery_frames[name] = frame
 
@@ -1773,16 +1836,26 @@ def _apply_frame_setpoints(target, frame, prefixes):
         }
         if not phase_columns:
             continue
-        update = frame[["id"] + list(phase_columns)].rename(
-            columns={phase: column for phase, column in phase_columns.items()}
-        ).set_index("id")
+        update = (
+            frame[["id"] + list(phase_columns)]
+            .rename(columns={phase: column for phase, column in phase_columns.items()})
+            .set_index("id")
+        )
         indexed.update(update)
     return indexed.reset_index()
 
 
 def _apply_load_setpoints_to_case(case, p_loads, q_loads):
-    case.bus_data = _apply_frame_setpoints(case.bus_data, p_loads, ["pl"]) if p_loads is not None else case.bus_data
-    case.bus_data = _apply_frame_setpoints(case.bus_data, q_loads, ["ql"]) if q_loads is not None else case.bus_data
+    case.bus_data = (
+        _apply_frame_setpoints(case.bus_data, p_loads, ["pl"])
+        if p_loads is not None
+        else case.bus_data
+    )
+    case.bus_data = (
+        _apply_frame_setpoints(case.bus_data, q_loads, ["ql"])
+        if q_loads is not None
+        else case.bus_data
+    )
 
 
 def _apply_battery_setpoints_to_case(case, p_bats, q_bats):
@@ -1799,7 +1872,11 @@ def _apply_battery_setpoints_to_case(case, p_bats, q_bats):
             if isinstance(source, pd.DataFrame):
                 source = source.iloc[0]
             phases = _parse_phases(str(row.get("phases", "abc")).lower())
-            values = [source[p] for p in phases if p in source.index] or [source[f"{column}_{p}"] for p in phases if f"{column}_{p}" in source.index]
+            values = [source[p] for p in phases if p in source.index] or [
+                source[f"{column}_{p}"]
+                for p in phases
+                if f"{column}_{p}" in source.index
+            ]
             if values:
                 case.bat_data.at[i, column] = float(np.nansum(values))
 
@@ -1832,7 +1909,20 @@ def _apply_schedule_to_case(case, t):
 
 
 def _set_result_period(result, t):
-    for name in ("voltages", "voltage_angles", "active_power_flows", "reactive_power_flows", "active_power_generation", "reactive_power_generation", "active_power_loads", "reactive_power_loads", "battery_active_power", "battery_reactive_power", "currents", "current_angles"):
+    for name in (
+        "voltages",
+        "voltage_angles",
+        "active_power_flows",
+        "reactive_power_flows",
+        "active_power_generation",
+        "reactive_power_generation",
+        "active_power_loads",
+        "reactive_power_loads",
+        "battery_active_power",
+        "battery_reactive_power",
+        "currents",
+        "current_angles",
+    ):
         frame = getattr(result, name, None)
         if frame is not None:
             frame = frame.copy()
@@ -1842,9 +1932,39 @@ def _set_result_period(result, t):
 
 def _aggregate_fbs_results(results, case):
     from distopf.results import PowerFlowResult
-    names = ("voltages", "voltage_angles", "active_power_flows", "reactive_power_flows", "active_power_generation", "reactive_power_generation", "active_power_loads", "reactive_power_loads", "battery_active_power", "battery_reactive_power", "currents", "current_angles")
-    values = {name: pd.concat([getattr(r, name) for r in results if getattr(r, name, None) is not None], ignore_index=True) if any(getattr(r, name, None) is not None for r in results) else None for name in names}
-    return PowerFlowResult(**values, converged=all(r.converged for r in results), iterations=sum(r.iterations or 0 for r in results), solve_time=sum(r.solve_time or 0 for r in results), solver="fbs", result_type="fbs", case=case.copy())
+
+    names = (
+        "voltages",
+        "voltage_angles",
+        "active_power_flows",
+        "reactive_power_flows",
+        "active_power_generation",
+        "reactive_power_generation",
+        "active_power_loads",
+        "reactive_power_loads",
+        "battery_active_power",
+        "battery_reactive_power",
+        "currents",
+        "current_angles",
+    )
+    values = {
+        name: pd.concat(
+            [getattr(r, name) for r in results if getattr(r, name, None) is not None],
+            ignore_index=True,
+        )
+        if any(getattr(r, name, None) is not None for r in results)
+        else None
+        for name in names
+    }
+    return PowerFlowResult(
+        **values,
+        converged=all(r.converged for r in results),
+        iterations=sum(r.iterations or 0 for r in results),
+        solve_time=sum(r.solve_time or 0 for r in results),
+        solver="fbs",
+        result_type="fbs",
+        case=case.copy(),
+    )
 
 
 def replay_exact_power_flow_from_opf_result(

@@ -151,7 +151,6 @@ def add_voltage_drop_constraints(m: LindistModelProtocol) -> None:
     )
 
 
-
 def add_constraints(
     model: pyo.ConcreteModel,
     circular_constraints: bool = False,

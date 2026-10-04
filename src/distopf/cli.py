@@ -81,7 +81,9 @@ def _validate_scenario_shape(config: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     version = config.get("version", SCHEMA_VERSION)
     if version != SCHEMA_VERSION:
-        errors.append(f"Unsupported scenario version: {version!r}; expected {SCHEMA_VERSION}")
+        errors.append(
+            f"Unsupported scenario version: {version!r}; expected {SCHEMA_VERSION}"
+        )
     case = config.get("case")
     if not isinstance(case, dict):
         errors.append("Missing or invalid [case] table")
@@ -96,7 +98,9 @@ def _validate_scenario_shape(config: dict[str, Any]) -> list[str]:
             errors.append("'analysis.type' must be a non-empty string")
         elif analysis_type.strip().lower() not in SCENARIO_METHOD_ALIASES:
             supported = ", ".join(sorted(SCENARIO_METHOD_ALIASES))
-            errors.append(f"Unsupported 'analysis.type': {analysis_type!r}; supported values: {supported}")
+            errors.append(
+                f"Unsupported 'analysis.type': {analysis_type!r}; supported values: {supported}"
+            )
         elif analysis_type.strip().lower() in {"enapp", "admm"}:
             area_info = analysis.get("area_info")
             if not isinstance(area_info, dict) or not area_info:
@@ -109,12 +113,19 @@ def _validate_scenario_shape(config: dict[str, Any]) -> list[str]:
                     for field in ("up_areas", "down_areas", "up_buses"):
                         if field not in area or not isinstance(area[field], list):
                             errors.append(f"area_info.{name}.{field} must be a list")
-                    if isinstance(area.get("up_buses"), list) and len(area["up_buses"]) != 1:
-                        errors.append(f"area_info.{name}.up_buses must contain exactly one bus")
+                    if (
+                        isinstance(area.get("up_buses"), list)
+                        and len(area["up_buses"]) != 1
+                    ):
+                        errors.append(
+                            f"area_info.{name}.up_buses must contain exactly one bus"
+                        )
     return errors
 
 
-def _validate_config_shape(config: dict[str, Any], config_path: Path | None = None) -> list[str]:
+def _validate_config_shape(
+    config: dict[str, Any], config_path: Path | None = None
+) -> list[str]:
     """Return structural errors for either a replay artifact or scenario."""
     if config_path is not None and _is_scenario(config_path, config):
         return _validate_scenario_shape(config)
@@ -157,11 +168,34 @@ def _normalize_scenario(config_path: Path, config: dict[str, Any]) -> dict[str, 
     if not path.is_absolute():
         path = (config_path.parent / path).resolve()
     source = case_info.get("source")
-    case_kwargs = {key: case_info[key] for key in ("start_step", "n_steps", "delta_t", "ignore_schedule", "ignore_gen", "ignore_bat", "ignore_cap", "ignore_reg") if key in case_info}
+    case_kwargs = {
+        key: case_info[key]
+        for key in (
+            "start_step",
+            "n_steps",
+            "delta_t",
+            "ignore_schedule",
+            "ignore_gen",
+            "ignore_bat",
+            "ignore_cap",
+            "ignore_reg",
+        )
+        if key in case_info
+    }
     arguments = {key: value for key, value in analysis.items() if key != "area_info"}
     if method in {"run_enapp", "run_admm"}:
         arguments["area_info"] = analysis.get("area_info", {})
-    return {"case_path": path, "source": source, "case_kwargs": case_kwargs, "modifications": case_info.get("modifications", {}), "method": method, "arguments": arguments, "output_dir": config.get("output", {}).get("directory") if isinstance(config.get("output"), dict) else None}
+    return {
+        "case_path": path,
+        "source": source,
+        "case_kwargs": case_kwargs,
+        "modifications": case_info.get("modifications", {}),
+        "method": method,
+        "arguments": arguments,
+        "output_dir": config.get("output", {}).get("directory")
+        if isinstance(config.get("output"), dict)
+        else None,
+    }
 
 
 def _enable_method_verbose(method: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -260,7 +294,9 @@ def _comparison_csv_tables(directory: Path) -> dict[str, Path]:
         raise CliValidationError(
             f"Result folder does not exist or is not a directory: {directory}"
         )
-    return {path.name: path for path in sorted(directory.glob("*.csv")) if path.is_file()}
+    return {
+        path.name: path for path in sorted(directory.glob("*.csv")) if path.is_file()
+    }
 
 
 def _comparison_keys(left: Any, right: Any) -> list[str]:
@@ -285,7 +321,10 @@ def _comparison_keys(left: Any, right: Any) -> list[str]:
             return keys
         if "phase" in shared:
             phase_keys = keys + ["phase"]
-            if not left.duplicated(phase_keys).any() and not right.duplicated(phase_keys).any():
+            if (
+                not left.duplicated(phase_keys).any()
+                and not right.duplicated(phase_keys).any()
+            ):
                 return phase_keys
     return []
 
@@ -311,7 +350,9 @@ def _generic_table_comparison(
             )
     else:
         if len(left) != len(right):
-            raise ValueError(f"row counts differ (left={len(left)}, right={len(right)})")
+            raise ValueError(
+                f"row counts differ (left={len(left)}, right={len(right)})"
+            )
         # No stable identifiers are available.  Preserve the serialized row
         # order rather than rejecting a valid positional comparison.
         merged = pd.concat(
@@ -347,7 +388,14 @@ def _generic_table_comparison(
     # schemas.  A non-empty table still requires actual common numeric data.
     if not numeric and left.empty and right.empty:
         differences = pd.DataFrame(
-            columns=["column", *keys, "left", "right", "difference_signed", "difference_abs"]
+            columns=[
+                "column",
+                *keys,
+                "left",
+                "right",
+                "difference_signed",
+                "difference_abs",
+            ]
         )
         return {
             "table": name,
@@ -369,8 +417,12 @@ def _generic_table_comparison(
         frame = pd.DataFrame({"column": [column] * len(merged)})
         for key in keys:
             frame[key] = merged[key].to_numpy()
-        frame["left"] = pd.to_numeric(merged[f"{column}_left"], errors="coerce").to_numpy()
-        frame["right"] = pd.to_numeric(merged[f"{column}_right"], errors="coerce").to_numpy()
+        frame["left"] = pd.to_numeric(
+            merged[f"{column}_left"], errors="coerce"
+        ).to_numpy()
+        frame["right"] = pd.to_numeric(
+            merged[f"{column}_right"], errors="coerce"
+        ).to_numpy()
         frame["difference_signed"] = frame["right"] - frame["left"]
         frame["difference_abs"] = frame["difference_signed"].abs()
         difference_frames.append(frame)
@@ -407,7 +459,9 @@ def _comparison_payload(
             left = pd.read_csv(left_tables[filename])
             right = pd.read_csv(right_tables[filename])
             if filename.lower() == "voltages.csv":
-                result = compare_voltage_tables(left, right, nominal_voltage=nominal_voltage)
+                result = compare_voltage_tables(
+                    left, right, nominal_voltage=nominal_voltage
+                )
                 frame = result.pop("errors")
                 frame = frame.rename(
                     columns={
@@ -475,7 +529,9 @@ def _write_comparison(
     exact_replay_run: bool = False,
 ) -> dict[str, Any]:
     """Compare two folders and persist the comparison artifacts."""
-    payload, error_frames = _comparison_payload(left_folder, right_folder, nominal_voltage)
+    payload, error_frames = _comparison_payload(
+        left_folder, right_folder, nominal_voltage
+    )
     payload["exact"] = exact_source_folder is not None
     payload["exact_replay_run"] = exact_replay_run
     if exact_source_folder is not None:
@@ -491,7 +547,14 @@ def _write_comparison(
         payload["tables"][filename]["difference_file"] = path
     payload["difference_files"] = difference_files
     with (output_dir / "comparison.json").open("w", encoding="utf-8") as stream:
-        json.dump(payload, stream, indent=2, sort_keys=True, allow_nan=False, default=_json_default)
+        json.dump(
+            payload,
+            stream,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+            default=_json_default,
+        )
     return {**payload, "output_dir": str(output_dir)}
 
 
@@ -505,13 +568,19 @@ def _emit_comparison(response: dict[str, Any], as_json: bool) -> None:
         if stats["kind"] == "error":
             click.echo(f"{filename}: ERROR: {stats['error']}")
         elif stats["kind"] == "voltage":
-            click.echo(f"{filename}: max={stats['max_abs_pu']:.6g} p.u., mean={stats['mean_abs_pu']:.6g} p.u.")
+            click.echo(
+                f"{filename}: max={stats['max_abs_pu']:.6g} p.u., mean={stats['mean_abs_pu']:.6g} p.u."
+            )
         else:
-            click.echo(f"{filename}: max={stats['max_abs']:.6g}, mean={stats['mean_abs']:.6g}")
+            click.echo(
+                f"{filename}: max={stats['max_abs']:.6g}, mean={stats['mean_abs']:.6g}"
+            )
     click.echo(f"Saved comparison statistics to {response['output_dir']}")
 
 
-def _compare_exact_source(task: tuple[Path, Path | None, bool, Path | None, Path, float]) -> dict[str, Any]:
+def _compare_exact_source(
+    task: tuple[Path, Path | None, bool, Path | None, Path, float],
+) -> dict[str, Any]:
     """Compare one exact-replay source; kept module-level for process pickling.
 
     Batch tasks convert an individual exception into a stable result record so
@@ -555,28 +624,63 @@ def _compare_exact_source(task: tuple[Path, Path | None, bool, Path | None, Path
 @distopf.command(name="compare")
 @click.argument("left_folder", type=click.Path(path_type=Path, file_okay=False))
 @click.argument("right_folder", type=click.Path(path_type=Path, file_okay=False))
-@click.option("--output-dir", type=click.Path(path_type=Path, file_okay=False), help="Save comparison artifacts (default: LEFT_FOLDER/comparison).")
-@click.option("--nominal-voltage", type=float, default=1.0, show_default=True, help="Nominal voltage used for voltage percentage metrics.")
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path, file_okay=False),
+    help="Save comparison artifacts (default: LEFT_FOLDER/comparison).",
+)
+@click.option(
+    "--nominal-voltage",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Nominal voltage used for voltage percentage metrics.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
-def compare(left_folder: Path, right_folder: Path, output_dir: Path | None, nominal_voltage: float, as_json: bool) -> None:
+def compare(
+    left_folder: Path,
+    right_folder: Path,
+    output_dir: Path | None,
+    nominal_voltage: float,
+    as_json: bool,
+) -> None:
     """Compare common CSV tables in LEFT_FOLDER and RIGHT_FOLDER."""
     try:
         if nominal_voltage <= 0:
             raise CliValidationError("--nominal-voltage must be greater than zero")
-        response = _write_comparison(left_folder, right_folder, output_dir or left_folder / "comparison", nominal_voltage)
+        response = _write_comparison(
+            left_folder,
+            right_folder,
+            output_dir or left_folder / "comparison",
+            nominal_voltage,
+        )
         _emit_comparison(response, as_json)
     except click.exceptions.Exit:
         raise
     except CliValidationError as exc:
         _handle_error(exc, as_json=as_json, exit_code=EXIT_VALIDATION_ERROR)
-    except (CliError, ValueError, OSError, KeyError, TypeError, RuntimeError, ImportError) as exc:
+    except (
+        CliError,
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        RuntimeError,
+        ImportError,
+    ) as exc:
         _handle_error(exc, as_json=as_json, exit_code=EXIT_RUNTIME_ERROR)
 
 
 @distopf.command(name="compare-exact")
 @click.argument("folder", type=click.Path(path_type=Path, file_okay=False))
-@click.argument("right_folder", required=False, type=click.Path(path_type=Path, file_okay=False))
-@click.option("--batch", is_flag=True, help="Compare result folders below FOLDER at the selected depth.")
+@click.argument(
+    "right_folder", required=False, type=click.Path(path_type=Path, file_okay=False)
+)
+@click.option(
+    "--batch",
+    is_flag=True,
+    help="Compare result folders below FOLDER at the selected depth.",
+)
 @click.option(
     "--depth",
     type=click.IntRange(min=1),
@@ -591,10 +695,29 @@ def compare(left_folder: Path, right_folder: Path, output_dir: Path | None, nomi
     show_default=True,
     help="Number of parallel workers used for batch comparisons.",
 )
-@click.option("--output-dir", type=click.Path(path_type=Path, file_okay=False), help="Save comparison artifacts (default: each source folder's comparison directory; batch output preserves source-relative paths).")
-@click.option("--nominal-voltage", type=float, default=1.0, show_default=True, help="Nominal voltage used for voltage percentage metrics.")
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path, file_okay=False),
+    help="Save comparison artifacts (default: each source folder's comparison directory; batch output preserves source-relative paths).",
+)
+@click.option(
+    "--nominal-voltage",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Nominal voltage used for voltage percentage metrics.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
-def compare_exact(folder: Path, right_folder: Path | None, batch: bool, depth: int, workers: int, output_dir: Path | None, nominal_voltage: float, as_json: bool) -> None:
+def compare_exact(
+    folder: Path,
+    right_folder: Path | None,
+    batch: bool,
+    depth: int,
+    workers: int,
+    output_dir: Path | None,
+    nominal_voltage: float,
+    as_json: bool,
+) -> None:
     """Compare LEFT_FOLDER with its exact FBS replay.
 
     With two arguments, RIGHT_FOLDER is the OPF/results source and its
@@ -622,7 +745,9 @@ def compare_exact(folder: Path, right_folder: Path | None, batch: bool, depth: i
         else:
             sources = [folder]
         if batch and not sources:
-            raise CliValidationError(f"No result subdirectories found at depth {depth} under: {folder}")
+            raise CliValidationError(
+                f"No result subdirectories found at depth {depth} under: {folder}"
+            )
 
         tasks = [
             (source, right_folder, batch, output_dir, folder, nominal_voltage)
@@ -668,16 +793,28 @@ def compare_exact(folder: Path, right_folder: Path | None, batch: bool, depth: i
             }
             _emit(response, as_json)
             if not as_json:
-                click.echo(f"Compared {len(responses)} folders at depth {depth} under {folder}")
+                click.echo(
+                    f"Compared {len(responses)} folders at depth {depth} under {folder}"
+                )
                 if failed:
-                    click.echo(f"{len(failed)} folder(s) failed; see the per-folder records above")
+                    click.echo(
+                        f"{len(failed)} folder(s) failed; see the per-folder records above"
+                    )
         else:
             _emit_comparison(responses[0], as_json)
     except click.exceptions.Exit:
         raise
     except CliValidationError as exc:
         _handle_error(exc, as_json=as_json, exit_code=EXIT_VALIDATION_ERROR)
-    except (CliError, ValueError, OSError, KeyError, TypeError, RuntimeError, ImportError) as exc:
+    except (
+        CliError,
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        RuntimeError,
+        ImportError,
+    ) as exc:
         _handle_error(exc, as_json=as_json, exit_code=EXIT_RUNTIME_ERROR)
 
 
@@ -742,13 +879,16 @@ def run(config: Path, output_dir: Path | None, verbose: bool, as_json: bool) -> 
                 replay_config = dict(loaded)
                 replay_config["call"] = dict(replay_config["call"])
                 replay_config["call"]["arguments"] = _enable_method_verbose(
-                    replay_config["call"]["method"], replay_config["call"].get("arguments", {})
+                    replay_config["call"]["method"],
+                    replay_config["call"].get("arguments", {}),
                 )
                 # The public replay API consumes a file, so use a temporary JSON
                 # file only when verbosity must be injected into a replay artifact.
                 import tempfile
 
-                with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as stream:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", delete=False
+                ) as stream:
                     json.dump(replay_config, stream)
                     replay_path = Path(stream.name)
                 try:
@@ -778,7 +918,15 @@ def run(config: Path, output_dir: Path | None, verbose: bool, as_json: bool) -> 
         raise
     except CliValidationError as exc:
         _handle_error(exc, as_json=as_json, exit_code=EXIT_VALIDATION_ERROR)
-    except (CliError, ValueError, OSError, KeyError, TypeError, RuntimeError, ImportError) as exc:
+    except (
+        CliError,
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        RuntimeError,
+        ImportError,
+    ) as exc:
         _handle_error(exc, as_json=as_json, exit_code=EXIT_RUNTIME_ERROR)
 
 
@@ -830,7 +978,15 @@ def replay_exact_power_flow(
             click.echo(f"Saved results to {output_path}")
     except click.exceptions.Exit:
         raise
-    except (CliError, ValueError, OSError, KeyError, TypeError, RuntimeError, ImportError) as exc:
+    except (
+        CliError,
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        RuntimeError,
+        ImportError,
+    ) as exc:
         _handle_error(exc, as_json=as_json, exit_code=EXIT_RUNTIME_ERROR)
 
 
@@ -887,7 +1043,10 @@ def inspect(config: Path, as_json: bool) -> None:
             run_info = (
                 {"method": payload["analysis"]["method"]}
                 if _is_scenario(config, data)
-                else {"method": payload["call"]["method"], "replayable": payload["call"].get("replayable", True)}
+                else {
+                    "method": payload["call"]["method"],
+                    "replayable": payload["call"].get("replayable", True),
+                }
             )
             _print_mapping("Run", run_info)
             _print_mapping("Case", payload["case"])
@@ -895,7 +1054,14 @@ def inspect(config: Path, as_json: bool) -> None:
                 _print_mapping("Provenance", data["provenance"])
             if data.get("distributed"):
                 _print_mapping("Distributed solver", data["distributed"])
-    except (CliValidationError, CliError, OSError, KeyError, TypeError, ValueError) as exc:
+    except (
+        CliValidationError,
+        CliError,
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
         _handle_error(exc, as_json=as_json, exit_code=EXIT_VALIDATION_ERROR)
 
 
@@ -933,7 +1099,9 @@ def validate(config: Path, as_json: bool) -> None:
                         model_type=source,
                         **case_kwargs,
                     )
-                    valid, case_errors, case_warnings = CaseValidator(case).validate_all()
+                    valid, case_errors, case_warnings = CaseValidator(
+                        case
+                    ).validate_all()
                     if not valid:
                         errors.extend(case_errors)
                     warnings.extend(case_warnings)
@@ -960,7 +1128,14 @@ def validate(config: Path, as_json: bool) -> None:
             raise click.exceptions.Exit(EXIT_VALIDATION_ERROR)
     except click.exceptions.Exit:
         raise
-    except (CliValidationError, CliError, OSError, KeyError, TypeError, ValueError) as exc:
+    except (
+        CliValidationError,
+        CliError,
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
         _handle_error(exc, as_json=as_json, exit_code=EXIT_VALIDATION_ERROR)
 
 
