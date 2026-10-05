@@ -83,7 +83,10 @@ def test_compare_exact_help_documents_batch_depth_and_workers():
     assert "--batch" in result.output
     assert "--depth" in result.output
     assert "--workers" in result.output
-    assert "immediate children" in result.output
+    assert "--overwrite-exact" in result.output
+    assert "--overwrite-comparison" in result.output
+    assert "immediate" in result.output
+    assert "children" in result.output
     assert "exact" in result.output
 
 
@@ -182,6 +185,91 @@ def test_compare_exact_uses_existing_exact_folder(tmp_path):
     assert payload["right_folder"] == str(exact)
     assert payload["exact_folder"] == str(exact)
     assert payload["tables"]["active_power_loads.csv"]["max_abs"] == pytest.approx(1.0)
+
+
+def test_compare_exact_reuses_existing_comparison_unless_overwritten(tmp_path):
+    left = _write_compare_tables(tmp_path / "left", power_delta=0.0)
+    source = _write_compare_tables(tmp_path / "opf-results", power_delta=0.0)
+    exact = _write_compare_tables(source / "exact", power_delta=1.0)
+
+    first = CliRunner().invoke(
+        distopf, ["compare-exact", str(left), str(source), "--json"]
+    )
+    assert first.exit_code == 0
+    comparison_file = left / "comparison" / "comparison.json"
+    original_content = comparison_file.read_text(encoding="utf-8")
+
+    (exact / "active_power_loads.csv").write_text(
+        "id,p\n1,1.0\n2,6.0\n", encoding="utf-8"
+    )
+    reused = CliRunner().invoke(
+        distopf, ["compare-exact", str(left), str(source), "--json"]
+    )
+
+    assert reused.exit_code == 0
+    reused_payload = json.loads(reused.output)
+    assert reused_payload["comparison_reused"] is True
+    assert reused_payload["tables"]["active_power_loads.csv"]["max_abs"] == pytest.approx(
+        1.0
+    )
+    assert comparison_file.read_text(encoding="utf-8") == original_content
+
+    overwritten = CliRunner().invoke(
+        distopf,
+        [
+            "compare-exact",
+            str(left),
+            str(source),
+            "--overwrite-comparison",
+            "--json",
+        ],
+    )
+
+    assert overwritten.exit_code == 0
+    overwritten_payload = json.loads(overwritten.output)
+    assert overwritten_payload["exact_replay_run"] is False
+    assert overwritten_payload["tables"]["active_power_loads.csv"]["max_abs"] == pytest.approx(
+        3.0
+    )
+    assert "comparison_reused" not in overwritten_payload
+
+
+def test_compare_exact_overwrites_existing_fbs_replay(monkeypatch, tmp_path):
+    left = _write_compare_tables(tmp_path / "left", power_delta=0.0)
+    source = _write_compare_tables(tmp_path / "opf-results", power_delta=0.0)
+    _write_compare_tables(source / "exact", power_delta=1.0)
+    initial = CliRunner().invoke(
+        distopf, ["compare-exact", str(left), str(source), "--json"]
+    )
+    assert initial.exit_code == 0
+    captured = {}
+
+    def fake_replay(input_path, **kwargs):
+        captured["input_path"] = input_path
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("distopf.fbs.replay_exact_power_flow", fake_replay)
+    result = CliRunner().invoke(
+        distopf,
+        [
+            "compare-exact",
+            str(left),
+            str(source),
+            "--overwrite",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "input_path": source,
+        "output_dir": source / "exact",
+        "overwrite": True,
+    }
+    payload = json.loads(result.output)
+    assert payload["exact_replay_run"] is True
+    assert payload["comparison_reused"] is True
 
 
 def test_compare_exact_replays_when_exact_folder_is_missing(monkeypatch, tmp_path):

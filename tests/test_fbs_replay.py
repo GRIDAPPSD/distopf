@@ -1,8 +1,11 @@
 import numpy as np
 import pandas as pd
+import pytest
 
+import distopf as opf
 from distopf.fbs import (
     FBS,
+    _apply_boundary_load_setpoints,
     _apply_gen_setpoints_to_case,
     _apply_schedule_to_case,
     _replay_periods,
@@ -57,3 +60,101 @@ def test_gen_setpoints_are_noop_without_generators():
 
     case.gen_data = pd.DataFrame()
     _apply_gen_setpoints_to_case(case, None, pd.DataFrame({"id": [1], "a": [0.1]}))
+
+
+def test_schedule_replay_scales_s1s2_loads_gen_p_and_swing_voltage():
+    bus = pd.DataFrame(
+        [
+            {"id": 1, "bus_type": "SWING", "load_shape": "", "v_a": 1.0, "v_b": 1.0, "v_c": 1.0},
+            {"id": 2, "bus_type": "PQ", "load_shape": "M", "v_a": 1.0, "v_b": 1.0, "v_c": 1.0,
+             "pl_s1": 1.0, "pl_s2": 2.0, "pl_s1s2": 4.0, "ql_s1s2": 2.0},
+        ]
+    )
+    schedules = pd.DataFrame(
+        [{"time": 0, "M": 0.5, "PV": 0.25, "v_a": 1.02, "v_b": np.nan, "v_c": 0.99}]
+    ).set_index("time", drop=False)
+    case = _Case(bus, schedules)
+    case.gen_data = pd.DataFrame([{"id": 2, "p_a": 8.0, "q_a": 3.0, "gen_shape": "PV"}])
+    _apply_schedule_to_case(case, 0)
+    assert case.bus_data.at[1, "pl_s1s2"] == 2.0
+    assert case.bus_data.at[1, "ql_s1s2"] == 1.0
+    assert case.bus_data.at[1, "pl_s1"] == 0.5
+    assert case.bus_data[["v_a", "v_b", "v_c"]].iloc[0].tolist() == [1.02, 1.0, 0.99]
+    assert case.bus_data.at[1, "v_a"] == 1.0
+    assert case.gen_data.at[0, "p_a"] == 2.0
+    assert case.gen_data.at[0, "q_a"] == 3.0
+
+
+def test_gen_setpoints_must_cover_every_generator():
+    case = _Case(pd.DataFrame(), pd.DataFrame())
+    case.gen_data = pd.DataFrame({"id": [1, 2], "p_a": [0.0, 0.0], "q_a": [0.0, 0.0]})
+    p_gens = pd.DataFrame({"id": [1], "a": [0.1]})
+    with pytest.raises(ValueError, match=r"missing generator id\(s\): \[2\]"):
+        _apply_gen_setpoints_to_case(case, p_gens, None)
+
+
+def test_boundary_load_setpoints_only_touch_out_buses():
+    bus = pd.DataFrame(
+        [
+            {"id": 1, "bus_type": "PQ", "pl_a": 1.0, "ql_a": 1.0, "cvr_p": 1.0, "cvr_q": 1.0},
+            {"id": 2, "bus_type": "OUT", "pl_a": 1.0, "ql_a": 1.0, "cvr_p": 1.0, "cvr_q": 1.0},
+        ]
+    )
+    case = _Case(bus, pd.DataFrame())
+    p_loads = pd.DataFrame({"id": [1, 2], "a": [9.0, 7.0]})
+    q_loads = pd.DataFrame({"id": [1, 2], "a": [9.0, 5.0]})
+    _apply_boundary_load_setpoints(case, p_loads, q_loads)
+    assert case.bus_data["pl_a"].tolist() == [1.0, 7.0]
+    assert case.bus_data["ql_a"].tolist() == [1.0, 5.0]
+    assert case.bus_data["cvr_p"].tolist() == [1.0, 0.0]
+
+
+def test_replay_ignores_saved_loads_on_triplex_buses():
+    case = opf.create_case(opf.CASES_DIR / "csv" / "triplex_pv")
+    bus, gen = case.bus_data, case.gen_data
+    folded = pd.DataFrame(
+        {
+            "id": bus["id"],
+            "t": 0,
+            "s1": bus["pl_s1"] + bus["pl_s1s2"] / 2,
+            "s2": bus["pl_s2"] + bus["pl_s1s2"] / 2,
+        }
+    )
+    gens = pd.DataFrame({"id": gen["id"], "t": 0, "s1": gen["p_s1"], "s2": gen["p_s2"]})
+    result = opf.PowerFlowResult(
+        active_power_loads=folded,
+        reactive_power_loads=folded.assign(s1=0.0, s2=0.0),
+        active_power_generation=gens,
+        reactive_power_generation=gens.assign(s1=0.0, s2=0.0),
+    )
+    replay = opf.run_fbs_with_opf_setpoints(case, result)
+    reference = case.run_fbs()
+    cols = ["a", "b", "c", "s1", "s2"]
+    np.testing.assert_allclose(
+        replay.active_power_flows[cols].to_numpy(float),
+        reference.active_power_flows[cols].to_numpy(float),
+        equal_nan=True,
+    )
+
+
+def test_fbs_load_results_split_s1s2_between_reported_legs():
+    case = opf.create_case(opf.CASES_DIR / "csv" / "triplex_pv")
+    raw_loads = case.bus_data.set_index("id")
+
+    result = case.run_fbs()
+
+    for result_frame, prefix in (
+        (result.active_power_loads, "pl"),
+        (result.reactive_power_loads, "ql"),
+    ):
+        reported = result_frame.set_index("id")
+        for phase in ("s1", "s2"):
+            expected = raw_loads[f"{prefix}_{phase}"] + raw_loads[
+                f"{prefix}_s1s2"
+            ] / 2
+            np.testing.assert_allclose(
+                reported[phase].reindex(expected.index), expected, equal_nan=True
+            )
+        assert "s1s2" not in result_frame.columns
+
+    pd.testing.assert_frame_equal(case.bus_data.set_index("id"), raw_loads)

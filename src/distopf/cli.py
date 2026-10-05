@@ -579,7 +579,7 @@ def _emit_comparison(response: dict[str, Any], as_json: bool) -> None:
 
 
 def _compare_exact_source(
-    task: tuple[Path, Path | None, bool, Path | None, Path, float],
+    task: tuple[Path, Path | None, bool, Path | None, Path, float, bool, bool],
 ) -> dict[str, Any]:
     """Compare one exact-replay source; kept module-level for process pickling.
 
@@ -587,20 +587,48 @@ def _compare_exact_source(
     that ``ProcessPoolExecutor.map`` can continue yielding later results.
     Non-batch tasks intentionally re-raise and retain fail-fast behavior.
     """
-    source, right_folder, batch, output_dir, folder, nominal_voltage = task
+    (
+        source,
+        right_folder,
+        batch,
+        output_dir,
+        folder,
+        nominal_voltage,
+        overwrite_exact,
+        overwrite_comparison,
+    ) = task
     try:
         exact_source = right_folder or source
         exact_folder = exact_source / "exact"
         replay_run = False
-        if not exact_folder.exists():
+        if overwrite_exact or not exact_folder.exists():
             from distopf.fbs import replay_exact_power_flow as replay_api
 
-            replay_api(exact_source, output_dir=exact_folder, overwrite=False)
+            replay_api(
+                exact_source,
+                output_dir=exact_folder,
+                overwrite=overwrite_exact,
+            )
             replay_run = True
         if batch and output_dir:
             destination = output_dir / source.relative_to(folder)
         else:
             destination = output_dir or source / "comparison"
+        comparison_path = destination / "comparison.json"
+        if comparison_path.is_file() and not overwrite_comparison:
+            with comparison_path.open(encoding="utf-8") as stream:
+                response = json.load(stream)
+            response.update(
+                {
+                    "exact": True,
+                    "exact_replay_run": replay_run,
+                    "exact_source_folder": str(exact_source),
+                    "exact_folder": str(exact_folder),
+                    "comparison_reused": True,
+                    "output_dir": str(destination),
+                }
+            )
+            return response
         return _write_comparison(
             source,
             exact_folder,
@@ -696,6 +724,18 @@ def compare(
     help="Number of parallel workers used for batch comparisons.",
 )
 @click.option(
+    "--overwrite-exact",
+    "--overwrite",
+    "overwrite_exact",
+    is_flag=True,
+    help="Rerun the exact FBS replay and replace its existing output.",
+)
+@click.option(
+    "--overwrite-comparison",
+    is_flag=True,
+    help="Recompute and replace existing comparison artifacts.",
+)
+@click.option(
     "--output-dir",
     type=click.Path(path_type=Path, file_okay=False),
     help="Save comparison artifacts (default: each source folder's comparison directory; batch output preserves source-relative paths).",
@@ -714,6 +754,8 @@ def compare_exact(
     batch: bool,
     depth: int,
     workers: int,
+    overwrite_exact: bool,
+    overwrite_comparison: bool,
     output_dir: Path | None,
     nominal_voltage: float,
     as_json: bool,
@@ -750,7 +792,16 @@ def compare_exact(
             )
 
         tasks = [
-            (source, right_folder, batch, output_dir, folder, nominal_voltage)
+            (
+                source,
+                right_folder,
+                batch,
+                output_dir,
+                folder,
+                nominal_voltage,
+                overwrite_exact,
+                overwrite_comparison,
+            )
             for source in sources
         ]
         if batch and workers > 1:
