@@ -374,10 +374,17 @@ class FBS:
             cvr_q = self.bus_data.loc[self.bus_data.id == node, "cvr_q"].tolist()[0]
             s_load_nom = self.node_loads[node][3:]
             v_load = np.array([v_node[3], v_node[4], v_node[3] + v_node[4]])
+            v2_for_cvr = np.array(
+                [
+                    abs(v_load[0]) ** 2,
+                    abs(v_load[1]) ** 2,
+                    (abs(v_load[0]) ** 2 + abs(v_load[1]) ** 2) / 2,
+                ]
+            )
             p_nom = s_load_nom.real
             q_nom = s_load_nom.imag
-            p_load = p_nom + cvr_p * p_nom / 2 * (abs(v_load) ** 2 - 1)
-            q_load = q_nom + cvr_q * q_nom / 2 * (abs(v_load) ** 2 - 1)
+            p_load = p_nom + cvr_p * p_nom / 2 * (v2_for_cvr - 1)
+            q_load = q_nom + cvr_q * q_nom / 2 * (v2_for_cvr - 1)
             s_load = p_load + 1j * q_load
             if all(abs(v_load) > 1e-10):
                 I_load = np.conj(s_load / v_load)

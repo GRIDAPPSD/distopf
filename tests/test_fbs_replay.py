@@ -37,6 +37,48 @@ def test_native_battery_is_split_over_declared_phases_and_affects_current():
     np.testing.assert_allclose(current[1], 0.3 + 0.1j)
 
 
+def test_fbs_applies_cvr_to_regular_phase_loads():
+    fbs = FBS.__new__(FBS)
+    fbs.node_loads = {2: np.array([1.0 + 0.4j, 0, 0, 0, 0, 0], dtype=complex)}
+    fbs.node_generations = {}
+    fbs.node_capacitors = {}
+    fbs.node_batteries = {}
+    fbs.phase_connections = {2: [0]}
+    fbs.bus_data = pd.DataFrame([{"id": 2, "cvr_p": 0.8, "cvr_q": 0.5}])
+    voltage = np.array([0.9, 1, 1, 0, 0], dtype=complex)
+
+    current = fbs._calculate_node_injection_current(2, voltage)
+    expected_load = 0.924 + 0.381j
+    np.testing.assert_allclose(current[0], -np.conj(expected_load / voltage[0]))
+
+
+def test_fbs_applies_cvr_to_secondary_legs_and_pair_loads():
+    fbs = FBS.__new__(FBS)
+    fbs.node_loads = {
+        2: np.array([0, 0, 0, 0.2 + 0.1j, 0.3 + 0.15j, 1.0 + 0.4j])
+    }
+    fbs.node_generations = {}
+    fbs.bus_data = pd.DataFrame([{"id": 2, "cvr_p": 0.8, "cvr_q": 0.5}])
+    voltage = np.array([0, 0, 0, 0.8, 1.0], dtype=complex)
+
+    current = fbs._calculate_triplex_node_injection_current(2, voltage)[3:]
+    leg_v2_mean = (abs(voltage[3]) ** 2 + abs(voltage[4]) ** 2) / 2
+    load_power = np.array(
+        [
+            0.2 * (1 + 0.8 / 2 * (abs(voltage[3]) ** 2 - 1))
+            + 1j * 0.1 * (1 + 0.5 / 2 * (abs(voltage[3]) ** 2 - 1)),
+            0.3 * (1 + 0.8 / 2 * (abs(voltage[4]) ** 2 - 1))
+            + 1j * 0.15 * (1 + 0.5 / 2 * (abs(voltage[4]) ** 2 - 1)),
+            1.0 * (1 + 0.8 / 2 * (leg_v2_mean - 1))
+            + 1j * 0.4 * (1 + 0.5 / 2 * (leg_v2_mean - 1)),
+        ]
+    )
+    load_voltage = np.array([voltage[3], voltage[4], voltage[3] + voltage[4]])
+    load_current = np.conj(load_power / load_voltage)
+    expected = -np.array([[1, 0, 1], [0, -1, -1]]) @ load_current
+    np.testing.assert_allclose(current, expected)
+
+
 def test_schedule_replay_uses_phase_specific_columns():
     bus = pd.DataFrame([{"id": 1, "load_shape": "default", "pl_a": 2.0, "ql_a": 3.0}])
     schedules = pd.DataFrame(

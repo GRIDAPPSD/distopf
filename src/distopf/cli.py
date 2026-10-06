@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import ProcessPoolExecutor
+import os
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from datetime import datetime, timedelta
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import rich_click as click
@@ -334,6 +337,9 @@ def _generic_table_comparison(
 ) -> tuple[dict[str, Any], Any]:
     import pandas as pd
 
+    is_power_table = Path(name).stem.lower().startswith(
+        ("active_power_", "reactive_power_")
+    )
     keys = _comparison_keys(left, right)
     if keys:
         merged = left.merge(
@@ -397,7 +403,7 @@ def _generic_table_comparison(
                 "difference_abs",
             ]
         )
-        return {
+        stats = {
             "table": name,
             "kind": "table",
             "keys": keys,
@@ -408,7 +414,10 @@ def _generic_table_comparison(
             "std_abs": 0.0,
             "p95_abs": 0.0,
             "p99_abs": 0.0,
-        }, differences
+        }
+        if is_power_table:
+            stats["max_abs_pct"] = None
+        return stats, differences
     if not numeric:
         raise ValueError("no common numeric columns")
 
@@ -427,7 +436,7 @@ def _generic_table_comparison(
         frame["difference_abs"] = frame["difference_signed"].abs()
         difference_frames.append(frame)
     differences = pd.concat(difference_frames, ignore_index=True)
-    return {
+    stats = {
         "table": name,
         "kind": "table",
         "keys": keys,
@@ -438,7 +447,95 @@ def _generic_table_comparison(
         "std_abs": float(differences["difference_abs"].std()),
         "p95_abs": float(differences["difference_abs"].quantile(0.95)),
         "p99_abs": float(differences["difference_abs"].quantile(0.99)),
-    }, differences
+    }
+    if is_power_table:
+        worst = differences.loc[differences["difference_abs"].idxmax()]
+        reference = abs(worst["right"])
+        stats["max_abs_pct"] = (
+            float(100 * worst["difference_abs"] / reference)
+            if reference != 0
+            else None
+        )
+    return stats, differences
+
+
+def _substation_power_error(left: Any, right: Any) -> dict[str, Any]:
+    """Compare total phase power flowing out of bus 1, by period."""
+    import pandas as pd
+
+    for label, frame in (("left", left), ("right", right)):
+        if "fb" not in frame.columns:
+            raise ValueError(f"{label} flow table is missing 'fb'")
+    if ("t" in left.columns) != ("t" in right.columns):
+        raise ValueError("Both flow tables must contain 't' for multi-period comparison")
+
+    metadata_columns = {
+        "id",
+        "name",
+        "t",
+        "fb",
+        "tb",
+        "from_name",
+        "to_name",
+        "phase",
+    }
+    shared_columns = (set(left.columns) & set(right.columns)) - metadata_columns
+    numeric_columns = []
+    for column in shared_columns:
+        left_values = pd.to_numeric(left[column], errors="coerce")
+        right_values = pd.to_numeric(right[column], errors="coerce")
+        if left_values.notna().any() and right_values.notna().any():
+            numeric_columns.append(column)
+    if not numeric_columns:
+        raise ValueError("no common numeric phase columns")
+
+    def totals(frame: Any, label: str) -> Any:
+        from_bus = pd.to_numeric(frame["fb"], errors="coerce").eq(1)
+        outgoing = frame.loc[from_bus]
+        if outgoing.empty:
+            raise ValueError(f"{label} flow table has no branches leaving bus 1")
+        phase_values = outgoing[numeric_columns].apply(pd.to_numeric, errors="coerce")
+        row_totals = phase_values.sum(axis=1, min_count=1)
+        if row_totals.isna().any():
+            raise ValueError(f"{label} bus 1 flows contain no numeric phase values")
+        if "t" in frame.columns:
+            result = pd.DataFrame(
+                {"t": outgoing["t"].to_numpy(), "total": row_totals.to_numpy()}
+            )
+            return result.groupby("t", as_index=False, dropna=False)["total"].sum()
+        return pd.DataFrame({"total": [row_totals.sum()]})
+
+    left_totals = totals(left, "left").rename(columns={"total": "left"})
+    right_totals = totals(right, "right").rename(columns={"total": "right"})
+    period_keys = ["t"] if "t" in left.columns else []
+    merged = left_totals.merge(
+        right_totals,
+        on=period_keys,
+        how="outer",
+        indicator=True,
+        validate="one_to_one",
+    )
+    if not merged["_merge"].eq("both").all():
+        raise ValueError("bus 1 flow periods differ between result folders")
+
+    merged["difference_signed"] = merged["right"] - merged["left"]
+    merged["difference_abs"] = merged["difference_signed"].abs()
+    worst = merged.loc[merged["difference_abs"].idxmax()]
+    reference = abs(worst["right"])
+    result = {
+        "left": float(worst["left"]),
+        "right": float(worst["right"]),
+        "difference_signed": float(worst["difference_signed"]),
+        "absolute_error": float(worst["difference_abs"]),
+        "relative_error_pct": (
+            float(100 * worst["difference_abs"] / reference)
+            if reference != 0
+            else None
+        ),
+    }
+    if period_keys:
+        result["period"] = worst["t"]
+    return result
 
 
 def _comparison_payload(
@@ -454,10 +551,16 @@ def _comparison_payload(
         raise CliValidationError("The result folders have no common CSV tables")
     table_stats: dict[str, Any] = {}
     errors: dict[str, Any] = {}
+    flow_tables: dict[str, tuple[Any, Any]] = {}
     for filename in common:
         try:
             left = pd.read_csv(left_tables[filename])
             right = pd.read_csv(right_tables[filename])
+            if filename.lower() in {
+                "active_power_flows.csv",
+                "reactive_power_flows.csv",
+            }:
+                flow_tables[filename.lower()] = (left, right)
             if filename.lower() == "voltages.csv":
                 result = compare_voltage_tables(
                     left, right, nominal_voltage=nominal_voltage
@@ -499,6 +602,18 @@ def _comparison_payload(
                 "kind": "error",
                 "error": str(exc),
             }
+    substation = {}
+    for power_type, filename in (
+        ("active_power", "active_power_flows.csv"),
+        ("reactive_power", "reactive_power_flows.csv"),
+    ):
+        if filename in flow_tables:
+            try:
+                substation[power_type] = _substation_power_error(
+                    *flow_tables[filename]
+                )
+            except (ValueError, KeyError, TypeError) as exc:
+                substation[power_type] = {"error": str(exc)}
     return {
         "ok": True,
         "format": "distopf.result_comparison.v1",
@@ -507,6 +622,7 @@ def _comparison_payload(
         "nominal_voltage": nominal_voltage,
         "common_tables": common,
         "tables": table_stats,
+        "substation": substation,
         "failed_tables": sorted(
             name for name, value in table_stats.items() if value.get("kind") == "error"
         ),
@@ -572,14 +688,34 @@ def _emit_comparison(response: dict[str, Any], as_json: bool) -> None:
                 f"{filename}: max={stats['max_abs_pu']:.6g} p.u., mean={stats['mean_abs_pu']:.6g} p.u."
             )
         else:
-            click.echo(
-                f"{filename}: max={stats['max_abs']:.6g}, mean={stats['mean_abs']:.6g}"
-            )
+            line = f"{filename}: max={stats['max_abs']:.6g}, mean={stats['mean_abs']:.6g}"
+            if "max_abs_pct" in stats:
+                percent = (
+                    "undefined"
+                    if stats["max_abs_pct"] is None
+                    else f"{stats['max_abs_pct']:.6g}%"
+                )
+                line += f", max_pct={percent}"
+            click.echo(line)
+    for power_type, stats in response.get("substation", {}).items():
+        if "error" in stats:
+            click.echo(f"Substation {power_type}: ERROR: {stats['error']}")
+            continue
+        percent = (
+            "undefined"
+            if stats["relative_error_pct"] is None
+            else f"{stats['relative_error_pct']:.6g}%"
+        )
+        period = f", t={stats['period']}" if "period" in stats else ""
+        click.echo(
+            f"Substation {power_type}: abs={stats['absolute_error']:.6g}, "
+            f"relative={percent}{period}"
+        )
     click.echo(f"Saved comparison statistics to {response['output_dir']}")
 
 
 def _compare_exact_source(
-    task: tuple[Path, Path | None, bool, Path | None, Path, float, bool, bool],
+    task: tuple[Path, Path | None, bool, Path | None, Path, float, bool, bool, bool],
 ) -> dict[str, Any]:
     """Compare one exact-replay source; kept module-level for process pickling.
 
@@ -596,7 +732,10 @@ def _compare_exact_source(
         nominal_voltage,
         overwrite_exact,
         overwrite_comparison,
+        as_json,
     ) = task
+    if batch:
+        _timestamped_echo(f"Starting case: {source}", err=as_json)
     try:
         exact_source = right_folder or source
         exact_folder = exact_source / "exact"
@@ -618,17 +757,18 @@ def _compare_exact_source(
         if comparison_path.is_file() and not overwrite_comparison:
             with comparison_path.open(encoding="utf-8") as stream:
                 response = json.load(stream)
-            response.update(
-                {
-                    "exact": True,
-                    "exact_replay_run": replay_run,
-                    "exact_source_folder": str(exact_source),
-                    "exact_folder": str(exact_folder),
-                    "comparison_reused": True,
-                    "output_dir": str(destination),
-                }
-            )
-            return response
+            if "substation" in response:
+                response.update(
+                    {
+                        "exact": True,
+                        "exact_replay_run": replay_run,
+                        "exact_source_folder": str(exact_source),
+                        "exact_folder": str(exact_folder),
+                        "comparison_reused": True,
+                        "output_dir": str(destination),
+                    }
+                )
+                return response
         return _write_comparison(
             source,
             exact_folder,
@@ -647,6 +787,52 @@ def _compare_exact_source(
             "error": type(exc).__name__,
             "message": str(exc),
         }
+
+
+def _directories_at_depth(folder: Path, depth: int) -> list[Path]:
+    """List directories at an exact depth without traversing below them."""
+    directories = [folder]
+    for level in range(depth):
+        children = []
+        for directory in directories:
+            try:
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.is_dir(follow_symlinks=level == depth - 1):
+                                children.append(Path(entry.path))
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+        directories = children
+    return sorted(
+        directories, key=lambda path: path.relative_to(folder).as_posix()
+    )
+
+
+def _report_batch_progress(
+    index: int,
+    total: int,
+    item: dict[str, Any],
+    started_at: float,
+    as_json: bool,
+) -> None:
+    elapsed = perf_counter() - started_at
+    remaining = elapsed / index * (total - index)
+    estimated_finish = datetime.now().astimezone() + timedelta(seconds=remaining)
+    status = "failed" if not item["ok"] else "finished"
+    _timestamped_echo(
+        f"[{index}/{total}] {status}: {item['left_folder']} | "
+        f"elapsed {elapsed:.1f} seconds | "
+        f"estimated finish {estimated_finish.isoformat(timespec='seconds')}",
+        err=as_json,
+    )
+
+
+def _timestamped_echo(message: str, *, err: bool = False) -> None:
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    click.echo(f"[{timestamp}] {message}", err=err)
 
 
 @distopf.command(name="compare")
@@ -724,6 +910,12 @@ def compare(
     help="Number of parallel workers used for batch comparisons.",
 )
 @click.option(
+    "--threads",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Use this many threads for batch comparisons (instead of processes).",
+)
+@click.option(
     "--overwrite-exact",
     "--overwrite",
     "overwrite_exact",
@@ -754,6 +946,7 @@ def compare_exact(
     batch: bool,
     depth: int,
     workers: int,
+    threads: int | None,
     overwrite_exact: bool,
     overwrite_comparison: bool,
     output_dir: Path | None,
@@ -773,16 +966,19 @@ def compare_exact(
     try:
         if nominal_voltage <= 0:
             raise CliValidationError("--nominal-voltage must be greater than zero")
+        if threads is not None and workers > 1:
+            raise click.UsageError("--threads and --workers cannot be used together")
         if batch and right_folder is not None:
             raise click.UsageError("RIGHT_FOLDER cannot be used with --batch")
         if batch:
-            sources = sorted(
-                (
-                    path
-                    for path in folder.rglob("*")
-                    if path.is_dir() and len(path.relative_to(folder).parts) == depth
-                ),
-                key=lambda path: path.relative_to(folder).as_posix(),
+            total_started_at = perf_counter()
+            _timestamped_echo("Scanning folders...", err=as_json)
+            sources = _directories_at_depth(folder, depth)
+            scan_elapsed = perf_counter() - total_started_at
+            _timestamped_echo(
+                f"Scanning finished after {scan_elapsed:.1f} seconds; "
+                f"found {len(sources)} folder(s).",
+                err=as_json,
             )
         else:
             sources = [folder]
@@ -801,19 +997,23 @@ def compare_exact(
                 nominal_voltage,
                 overwrite_exact,
                 overwrite_comparison,
+                as_json,
             )
             for source in sources
         ]
-        if batch and workers > 1:
-            with ProcessPoolExecutor(max_workers=workers) as executor:
+        worker_count = threads if threads is not None else workers
+        processing_started_at = perf_counter()
+        if batch and (threads is not None or workers > 1):
+            executor_class = (
+                ThreadPoolExecutor if threads is not None else ProcessPoolExecutor
+            )
+            with executor_class(max_workers=worker_count) as executor:
                 result_iterator = executor.map(_compare_exact_source, tasks)
                 responses = []
                 for index, item in enumerate(result_iterator, start=1):
                     responses.append(item)
-                    status = "failed" if not item["ok"] else "finished"
-                    click.echo(
-                        f"[{index}/{len(tasks)}] {status}: {item['left_folder']}",
-                        err=as_json,
+                    _report_batch_progress(
+                        index, len(tasks), item, processing_started_at, as_json
                     )
         else:
             responses = []
@@ -821,10 +1021,8 @@ def compare_exact(
                 item = _compare_exact_source(task)
                 responses.append(item)
                 if batch:
-                    status = "failed" if not item["ok"] else "finished"
-                    click.echo(
-                        f"[{index}/{len(tasks)}] {status}: {item['left_folder']}",
-                        err=as_json,
+                    _report_batch_progress(
+                        index, len(tasks), item, processing_started_at, as_json
                     )
         if batch:
             failed = [item for item in responses if not item["ok"]]
@@ -836,7 +1034,14 @@ def compare_exact(
                 "format": "distopf.result_comparison.batch.v1",
                 "folder": str(folder),
                 "depth": depth,
-                "workers": workers,
+                "workers": worker_count,
+                "executor": (
+                    "threads"
+                    if threads is not None
+                    else "processes"
+                    if workers > 1
+                    else "sequential"
+                ),
                 "folders": [item["left_folder"] for item in responses],
                 "comparisons": responses,
                 "failed": len(failed),
@@ -844,13 +1049,18 @@ def compare_exact(
             }
             _emit(response, as_json)
             if not as_json:
-                click.echo(
+                _timestamped_echo(
                     f"Compared {len(responses)} folders at depth {depth} under {folder}"
                 )
                 if failed:
-                    click.echo(
+                    _timestamped_echo(
                         f"{len(failed)} folder(s) failed; see the per-folder records above"
                     )
+            _timestamped_echo(
+                f"Total processing time (including scan): "
+                f"{perf_counter() - total_started_at:.1f} seconds",
+                err=as_json,
+            )
         else:
             _emit_comparison(responses[0], as_json)
     except click.exceptions.Exit:
