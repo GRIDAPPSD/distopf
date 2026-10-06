@@ -374,10 +374,17 @@ class FBS:
             cvr_q = self.bus_data.loc[self.bus_data.id == node, "cvr_q"].tolist()[0]
             s_load_nom = self.node_loads[node][3:]
             v_load = np.array([v_node[3], v_node[4], v_node[3] + v_node[4]])
+            v2_for_cvr = np.array(
+                [
+                    abs(v_load[0]) ** 2,
+                    abs(v_load[1]) ** 2,
+                    (abs(v_load[0]) ** 2 + abs(v_load[1]) ** 2) / 2,
+                ]
+            )
             p_nom = s_load_nom.real
             q_nom = s_load_nom.imag
-            p_load = p_nom + cvr_p * p_nom / 2 * (abs(v_load) ** 2 - 1)
-            q_load = q_nom + cvr_q * q_nom / 2 * (abs(v_load) ** 2 - 1)
+            p_load = p_nom + cvr_p * p_nom / 2 * (v2_for_cvr - 1)
+            q_load = q_nom + cvr_q * q_nom / 2 * (v2_for_cvr - 1)
             s_load = p_load + 1j * q_load
             if all(abs(v_load) > 1e-10):
                 I_load = np.conj(s_load / v_load)
@@ -1056,6 +1063,12 @@ class FBS:
         q_load_df = None
         if self.bus_data is not None and len(self.bus_data) > 0:
             bus_df = self.bus_data.copy()
+            for phase in ("s1", "s2"):
+                for prefix in ("pl", "ql"):
+                    leg_column = f"{prefix}_{phase}"
+                    split_column = f"{prefix}_s1s2"
+                    if leg_column in bus_df.columns and split_column in bus_df.columns:
+                        bus_df[leg_column] += bus_df[split_column].fillna(0) / 2
             # Map pa/pb/pc -> a/b/c and qa/qb/qc -> a/b/c with a time column t=0
             p_cols = {
                 "pl_a": "a",
@@ -1504,7 +1517,15 @@ def run_fbs_with_opf_setpoints(
     tolerance: float = 1e-6,
     verbose: bool = False,
 ) -> "PowerFlowResult":
-    """Replay OPF load, generator, and native battery setpoints through FBS."""
+    """Replay OPF generator, battery and boundary-load setpoints through FBS.
+
+    Ordinary loads, generator ``p`` and the swing voltage come from the case and
+    its schedules (FBS does not read schedules itself, so they are baked in per
+    period).  Saved generator and battery values then overwrite the case values.
+    Saved loads are applied only at ``OUT`` boundary buses, where they are free
+    variables in decomposed OPF.  A supplied generator frame must cover every
+    generator.
+    """
     if opf_result is not None:
         p_gens = (
             p_gens
@@ -1537,14 +1558,12 @@ def run_fbs_with_opf_setpoints(
     results = []
     for t in periods:
         current = case.copy()
-        if any(f is not None and len(f) for f in loads):
-            _apply_load_setpoints_to_case(
-                current, _at_period(loads[0], t), _at_period(loads[1], t)
-            )
-            current.ignore_schedule = True
-        elif current.schedules is not None and len(current.schedules):
+        if current.schedules is not None and len(current.schedules):
             _apply_schedule_to_case(current, t)
-            current.ignore_schedule = True
+            current.ignore_schedule = True  # snapshot loads already include the schedule
+        _apply_boundary_load_setpoints(
+            current, _at_period(loads[0], t), _at_period(loads[1], t)
+        )
         _apply_gen_setpoints_to_case(
             current, _at_period(p_gens, t), _at_period(q_gens, t)
         ) if p_gens is not None or q_gens is not None else None
@@ -1677,6 +1696,13 @@ def run_fbs_from_saved_results(
             raise ValueError(
                 f"Saved setpoint file {name}.csv must contain an 'id' column"
             )
+
+    if case.gen_data is not None and len(case.gen_data):
+        for name in ("active_power_generation", "reactive_power_generation"):
+            if frames[name] is None:
+                raise ValueError(
+                    f"Saved {name}.csv is empty but the selected case has generators"
+                )
 
     def _validate_ids(name, frame, target, target_label):
         if frame is None or frame.empty or target is None or len(target) == 0:
@@ -1846,17 +1872,27 @@ def _apply_frame_setpoints(target, frame, prefixes):
     return indexed.reset_index()
 
 
-def _apply_load_setpoints_to_case(case, p_loads, q_loads):
-    case.bus_data = (
-        _apply_frame_setpoints(case.bus_data, p_loads, ["pl"])
-        if p_loads is not None
-        else case.bus_data
-    )
-    case.bus_data = (
-        _apply_frame_setpoints(case.bus_data, q_loads, ["ql"])
-        if q_loads is not None
-        else case.bus_data
-    )
+def _apply_boundary_load_setpoints(case, p_loads, q_loads):
+    """Apply saved loads at ``OUT`` buses, which are free variables in the OPF."""
+    bus = case.bus_data
+    if bus is None or "bus_type" not in bus.columns:
+        return
+    is_out = bus["bus_type"] == "OUT"
+    if not is_out.any():
+        return
+    out_ids = bus.loc[is_out, "id"]
+    applied = False
+    for frame, prefix in ((p_loads, "pl"), (q_loads, "ql")):
+        if frame is None or len(frame) == 0:
+            continue
+        case.bus_data = _apply_frame_setpoints(
+            case.bus_data, frame[frame["id"].isin(out_ids)], [prefix]
+        )
+        applied = True
+    if applied:
+        # The OPF does not apply CVR to free boundary loads.
+        out_rows = case.bus_data["bus_type"] == "OUT"
+        case.bus_data.loc[out_rows, ["cvr_p", "cvr_q"]] = 0.0
 
 
 def _apply_battery_setpoints_to_case(case, p_bats, q_bats):
@@ -1882,31 +1918,60 @@ def _apply_battery_setpoints_to_case(case, p_bats, q_bats):
                 case.bat_data.at[i, column] = float(np.nansum(values))
 
 
+def _load_multiplier(schedules, t, shape, phase, kind):
+    if phase == "s1s2":
+        # The OPF splits s1s2 over both legs, so the mean keeps total power equal.
+        legs = [_load_multiplier(schedules, t, shape, leg, kind) for leg in ("s1", "s2")]
+        return sum(legs) / 2
+    phase_column = f"{shape}.{phase}.{kind}"
+    if phase_column in schedules.columns:
+        return schedules.at[t, phase_column]
+    if shape in schedules.columns:
+        return schedules.at[t, shape]
+    return 1.0
+
+
 def _apply_schedule_to_case(case, t):
-    """Apply one schedule row, preferring phase-specific p/q multipliers."""
+    """Bake the schedule row for ``t`` into loads, generator p and swing voltage.
+
+    FBS does not read schedules.  Phase-specific p/q columns take precedence
+    over the plain shape column.
+    """
     if case.schedules is None or t not in case.schedules.index:
         return
+    schedules = case.schedules
     bus = case.bus_data.copy()
     for i, row in bus.iterrows():
         shape = str(row.get("load_shape", "default"))
-        for phase in PHASE_IDX_MAP:
-            for prefix, schedule_suffix in (("pl", "p"), ("ql", "q")):
+        for phase in (*PHASE_IDX_MAP, "s1s2"):
+            for prefix, kind in (("pl", "p"), ("ql", "q")):
                 column = f"{prefix}_{phase}"
                 if column not in bus.columns:
                     continue
-                phase_schedule = f"{shape}.{phase}.{schedule_suffix}"
-                schedule = (
-                    phase_schedule
-                    if phase_schedule in case.schedules.columns
-                    else shape
-                )
-                multiplier = (
-                    case.schedules.at[t, schedule]
-                    if schedule in case.schedules.columns
-                    else 1.0
-                )
+                multiplier = _load_multiplier(schedules, t, shape, phase, kind)
                 bus.at[i, column] = row.get(column, 0) * multiplier
+    if "bus_type" in bus.columns:
+        swing = bus["bus_type"].isin(["SWING", "SWING_FREE", "IN"])
+        for phase in "abc":
+            column = f"v_{phase}"
+            if column in schedules.columns and column in bus.columns:
+                value = schedules.at[t, column]
+                if pd.notna(value):
+                    bus.loc[swing, column] = float(value)
     case.bus_data = bus
+
+    gen = getattr(case, "gen_data", None)
+    if gen is not None and len(gen) and "gen_shape" in gen.columns:
+        gen = gen.copy()
+        for i, row in gen.iterrows():
+            shape = row["gen_shape"]
+            if not isinstance(shape, str) or shape not in schedules.columns:
+                continue
+            for phase in PHASE_IDX_MAP:
+                column = f"p_{phase}"
+                if column in gen.columns:
+                    gen.at[i, column] = row[column] * schedules.at[t, shape]
+        case.gen_data = gen
 
 
 def _set_result_period(result, t):
@@ -2001,7 +2066,17 @@ def _apply_gen_setpoints_to_case(
     """Apply OPF p/q setpoints to `case.gen_data` (vectorized updates)."""
     if case.gen_data is None or len(case.gen_data) == 0:
         return
-    if (p_gens is None or len(p_gens) == 0) and (q_gens is None or len(q_gens) == 0):
+    gen_ids = set(case.gen_data["id"])
+    for label, frame in (("active", p_gens), ("reactive", q_gens)):
+        if frame is None:
+            continue
+        saved_ids = set(frame["id"]) if "id" in frame.columns else set()
+        if gen_ids - saved_ids:
+            raise ValueError(
+                f"Saved {label} power generation setpoints are missing generator "
+                f"id(s): {sorted(gen_ids - saved_ids)}"
+            )
+    if p_gens is None and q_gens is None:
         return
     gen_indexed = case.gen_data.set_index("id")
 

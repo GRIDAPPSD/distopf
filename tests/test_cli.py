@@ -2,6 +2,8 @@
 
 import json
 import pickle
+import re
+from pathlib import Path
 
 import pytest
 
@@ -58,6 +60,7 @@ def test_compare_prints_and_writes_default_outputs(tmp_path):
     result = CliRunner().invoke(distopf, ["compare", str(left), str(right)])
     assert result.exit_code == 0
     assert "voltages.csv" in result.output
+    assert "max_pct=0%" in result.output
     output = left / "comparison"
     assert (output / "comparison.json").exists()
     assert (output / "voltages_differences.csv").exists()
@@ -83,7 +86,11 @@ def test_compare_exact_help_documents_batch_depth_and_workers():
     assert "--batch" in result.output
     assert "--depth" in result.output
     assert "--workers" in result.output
-    assert "immediate children" in result.output
+    assert "--threads" in result.output
+    assert "--overwrite-exact" in result.output
+    assert "--overwrite-comparison" in result.output
+    assert "immediate" in result.output
+    assert "children" in result.output
     assert "exact" in result.output
 
 
@@ -112,6 +119,56 @@ def test_compare_reports_mismatched_table_without_aborting(tmp_path):
     assert payload["tables"]["voltages.csv"]["kind"] == "voltage"
 
 
+def test_compare_reports_substation_active_and_reactive_power_errors(tmp_path):
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    left_active = "fb,tb,t,a,b\n1,2,0,2,1\n1,3,0,1,0\n2,4,0,100,0\n"
+    right_active = "fb,tb,t,a,b\n1,2,0,3,1\n1,3,0,1,0\n2,4,0,0,0\n"
+    left_reactive = "fb,tb,t,a,b\n1,2,0,-1,-1\n1,3,0,-1,0\n"
+    right_reactive = "fb,tb,t,a,b\n1,2,0,-1,0\n1,3,0,-1,0\n"
+    (left / "active_power_flows.csv").write_text(left_active, encoding="utf-8")
+    (right / "active_power_flows.csv").write_text(right_active, encoding="utf-8")
+    (left / "reactive_power_flows.csv").write_text(left_reactive, encoding="utf-8")
+    (right / "reactive_power_flows.csv").write_text(right_reactive, encoding="utf-8")
+
+    result = CliRunner().invoke(distopf, ["compare", str(left), str(right), "--json"])
+
+    assert result.exit_code == 0
+    substation = json.loads(result.output)["substation"]
+    assert substation["active_power"]["left"] == pytest.approx(4.0)
+    assert substation["active_power"]["right"] == pytest.approx(5.0)
+    assert substation["active_power"]["absolute_error"] == pytest.approx(1.0)
+    assert substation["active_power"]["relative_error_pct"] == pytest.approx(20.0)
+    assert substation["reactive_power"]["absolute_error"] == pytest.approx(1.0)
+    assert substation["reactive_power"]["relative_error_pct"] == pytest.approx(50.0)
+
+    human_result = CliRunner().invoke(distopf, ["compare", str(left), str(right)])
+    assert "Substation active_power: abs=1, relative=20%" in human_result.output
+    assert "Substation reactive_power: abs=1, relative=50%" in human_result.output
+
+    source = tmp_path / "opf-results"
+    exact = source / "exact"
+    exact.mkdir(parents=True)
+    for filename, contents in (
+        ("active_power_flows.csv", right_active),
+        ("reactive_power_flows.csv", right_reactive),
+    ):
+        (exact / filename).write_text(contents, encoding="utf-8")
+    exact_result = CliRunner().invoke(
+        distopf, ["compare-exact", str(left), str(source), "--json"]
+    )
+    assert exact_result.exit_code == 0
+    exact_substation = json.loads(exact_result.output)["substation"]
+    assert exact_substation["active_power"]["relative_error_pct"] == pytest.approx(
+        20.0
+    )
+    assert exact_substation["reactive_power"]["relative_error_pct"] == pytest.approx(
+        50.0
+    )
+
+
 def test_compare_handles_branch_composite_keys_and_empty_generators(tmp_path):
     left = tmp_path / "left"
     right = tmp_path / "right"
@@ -130,6 +187,14 @@ def test_compare_handles_branch_composite_keys_and_empty_generators(tmp_path):
         + "1,2,sourcebus,650,0,1.0,2.5,3.0\n",
         encoding="utf-8",
     )
+    (left / "reactive_power_flows.csv").write_text(
+        (left / "active_power_flows.csv").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (right / "reactive_power_flows.csv").write_text(
+        (right / "active_power_flows.csv").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     empty_generator = "id,name,t,phase,value\n"
     (left / "active_power_generation.csv").write_text(empty_generator, encoding="utf-8")
     (right / "active_power_generation.csv").write_text(
@@ -144,6 +209,9 @@ def test_compare_handles_branch_composite_keys_and_empty_generators(tmp_path):
     assert branch["keys"] == ["fb", "tb", "t"]
     assert branch["rows"] == 2
     assert branch["max_abs"] == pytest.approx(0.5)
+    assert branch["max_abs_pct"] == pytest.approx(100 * 0.5 / 4.5)
+    reactive = payload["tables"]["reactive_power_flows.csv"]
+    assert reactive["max_abs_pct"] == pytest.approx(100 * 0.5 / 4.5)
     generators = payload["tables"]["active_power_generation.csv"]
     assert generators["kind"] == "table"
     assert generators["rows"] == 0
@@ -182,6 +250,94 @@ def test_compare_exact_uses_existing_exact_folder(tmp_path):
     assert payload["right_folder"] == str(exact)
     assert payload["exact_folder"] == str(exact)
     assert payload["tables"]["active_power_loads.csv"]["max_abs"] == pytest.approx(1.0)
+    assert payload["tables"]["active_power_loads.csv"]["max_abs_pct"] == pytest.approx(
+        25.0
+    )
+
+
+def test_compare_exact_reuses_existing_comparison_unless_overwritten(tmp_path):
+    left = _write_compare_tables(tmp_path / "left", power_delta=0.0)
+    source = _write_compare_tables(tmp_path / "opf-results", power_delta=0.0)
+    exact = _write_compare_tables(source / "exact", power_delta=1.0)
+
+    first = CliRunner().invoke(
+        distopf, ["compare-exact", str(left), str(source), "--json"]
+    )
+    assert first.exit_code == 0
+    comparison_file = left / "comparison" / "comparison.json"
+    original_content = comparison_file.read_text(encoding="utf-8")
+
+    (exact / "active_power_loads.csv").write_text(
+        "id,p\n1,1.0\n2,6.0\n", encoding="utf-8"
+    )
+    reused = CliRunner().invoke(
+        distopf, ["compare-exact", str(left), str(source), "--json"]
+    )
+
+    assert reused.exit_code == 0
+    reused_payload = json.loads(reused.output)
+    assert reused_payload["comparison_reused"] is True
+    assert reused_payload["tables"]["active_power_loads.csv"]["max_abs"] == pytest.approx(
+        1.0
+    )
+    assert comparison_file.read_text(encoding="utf-8") == original_content
+
+    overwritten = CliRunner().invoke(
+        distopf,
+        [
+            "compare-exact",
+            str(left),
+            str(source),
+            "--overwrite-comparison",
+            "--json",
+        ],
+    )
+
+    assert overwritten.exit_code == 0
+    overwritten_payload = json.loads(overwritten.output)
+    assert overwritten_payload["exact_replay_run"] is False
+    assert overwritten_payload["tables"]["active_power_loads.csv"]["max_abs"] == pytest.approx(
+        3.0
+    )
+    assert "comparison_reused" not in overwritten_payload
+
+
+def test_compare_exact_overwrites_existing_fbs_replay(monkeypatch, tmp_path):
+    left = _write_compare_tables(tmp_path / "left", power_delta=0.0)
+    source = _write_compare_tables(tmp_path / "opf-results", power_delta=0.0)
+    _write_compare_tables(source / "exact", power_delta=1.0)
+    initial = CliRunner().invoke(
+        distopf, ["compare-exact", str(left), str(source), "--json"]
+    )
+    assert initial.exit_code == 0
+    captured = {}
+
+    def fake_replay(input_path, **kwargs):
+        captured["input_path"] = input_path
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("distopf.fbs.replay_exact_power_flow", fake_replay)
+    result = CliRunner().invoke(
+        distopf,
+        [
+            "compare-exact",
+            str(left),
+            str(source),
+            "--overwrite",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "input_path": source,
+        "output_dir": source / "exact",
+        "overwrite": True,
+    }
+    payload = json.loads(result.output)
+    assert payload["exact_replay_run"] is True
+    assert payload["comparison_reused"] is True
 
 
 def test_compare_exact_replays_when_exact_folder_is_missing(monkeypatch, tmp_path):
@@ -331,6 +487,28 @@ def test_compare_exact_batch_reports_finished_folders_in_human_output(
     result = CliRunner().invoke(distopf, ["compare-exact", str(parent), "--batch"])
 
     assert result.exit_code == 0
+    assert "Scanning folders..." in result.output
+    assert "Scanning finished after" in result.output
+    assert result.output.count("Starting case:") == 2
+    assert result.output.count("estimated finish ") == 2
+    assert "Total processing time (including scan):" in result.output
+    progress_lines = [
+        line
+        for line in result.output.splitlines()
+        if any(
+            marker in line
+            for marker in (
+                "Scanning folders...",
+                "Scanning finished after",
+                "Starting case:",
+                "estimated finish ",
+                "Total processing time",
+                "Compared 2 folders",
+                "folder(s) failed;",
+            )
+        )
+    ]
+    assert all(re.match(r"^\[\d{4}-\d{2}-\d{2}T[^\]]+\] ", line) for line in progress_lines)
     assert f"[1/2] failed: {failed}" in result.output
     assert f"[2/2] finished: {succeeded}" in result.output
     assert "Compared 2 folders" in result.output
@@ -352,6 +530,28 @@ def test_compare_exact_batch_progress_does_not_corrupt_json_output(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["folders"] == [str(first), str(second)]
     assert "finished:" not in result.stdout
+    assert "Scanning folders..." not in result.stdout
+    assert "Total processing time" not in result.stdout
+    assert "Scanning folders..." in result.stderr
+    assert "Scanning finished after" in result.stderr
+    assert result.stderr.count("Starting case:") == 2
+    assert result.stderr.count("estimated finish ") == 2
+    assert "Total processing time (including scan):" in result.stderr
+    progress_lines = [
+        line
+        for line in result.stderr.splitlines()
+        if any(
+            marker in line
+            for marker in (
+                "Scanning folders...",
+                "Scanning finished after",
+                "Starting case:",
+                "estimated finish ",
+                "Total processing time",
+            )
+        )
+    ]
+    assert all(re.match(r"^\[\d{4}-\d{2}-\d{2}T[^\]]+\] ", line) for line in progress_lines)
     assert f"[1/2] finished: {first}" in result.stderr
     assert f"[2/2] finished: {second}" in result.stderr
 
@@ -469,7 +669,9 @@ def test_compare_exact_batch_failure_record_is_preserved_with_workers(
     assert payload["comparisons"][1]["ok"] is True
 
 
-def test_compare_exact_batch_supports_depth_two_and_relative_output_paths(tmp_path):
+def test_compare_exact_batch_supports_depth_two_and_relative_output_paths(
+    tmp_path, monkeypatch
+):
     parent = tmp_path / "results"
     parent.mkdir()
     (parent / "dirB").mkdir()
@@ -479,6 +681,11 @@ def test_compare_exact_batch_supports_depth_two_and_relative_output_paths(tmp_pa
     _write_compare_tables(first / "exact", power_delta=0.0)
     _write_compare_tables(second / "exact", power_delta=0.0)
     output = tmp_path / "comparisons"
+
+    def reject_recursive_discovery(*_args, **_kwargs):
+        pytest.fail("compare-exact should not recursively scan below the target depth")
+
+    monkeypatch.setattr(Path, "rglob", reject_recursive_discovery)
 
     result = CliRunner().invoke(
         distopf,
@@ -505,8 +712,12 @@ def test_compare_exact_batch_supports_depth_two_and_relative_output_paths(tmp_pa
     assert (output / "dirB" / "results1B" / "comparison.json").exists()
 
 
-def test_compare_exact_batch_rejects_invalid_depth_and_workers(tmp_path):
-    for option, value in (("--depth", "0"), ("--workers", "0")):
+def test_compare_exact_batch_rejects_invalid_depth_workers_and_threads(tmp_path):
+    for option, value in (
+        ("--depth", "0"),
+        ("--workers", "0"),
+        ("--threads", "0"),
+    ):
         result = CliRunner().invoke(
             distopf,
             ["compare-exact", str(tmp_path), "--batch", option, value, "--json"],
@@ -557,7 +768,66 @@ def test_compare_exact_batch_uses_process_pool_and_preserves_order(
         is cli._compare_exact_source
     )
     assert payload["workers"] == 2
+    assert payload["executor"] == "processes"
     assert payload["folders"] == [str(second), str(first)]
+
+
+def test_compare_exact_batch_uses_thread_pool(tmp_path, monkeypatch):
+    parent = tmp_path / "results"
+    parent.mkdir()
+    first = _write_compare_tables(parent / "b-case", power_delta=0.0)
+    second = _write_compare_tables(parent / "a-case", power_delta=0.0)
+    _write_compare_tables(first / "exact", power_delta=1.0)
+    _write_compare_tables(second / "exact", power_delta=2.0)
+
+    from distopf import cli
+
+    executor_calls = {}
+
+    class FakeThreadPoolExecutor:
+        def __init__(self, *, max_workers):
+            executor_calls["max_workers"] = max_workers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def map(self, function, tasks):
+            executor_calls["function"] = function
+            return [function(task) for task in tasks]
+
+    monkeypatch.setattr(cli, "ThreadPoolExecutor", FakeThreadPoolExecutor)
+    result = CliRunner().invoke(
+        distopf,
+        ["compare-exact", str(parent), "--batch", "--threads", "3", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert executor_calls["max_workers"] == 3
+    assert executor_calls["function"] is cli._compare_exact_source
+    assert payload["workers"] == 3
+    assert payload["executor"] == "threads"
+    assert payload["folders"] == [str(second), str(first)]
+
+
+def test_compare_exact_batch_rejects_threads_with_multiple_workers(tmp_path):
+    result = CliRunner().invoke(
+        distopf,
+        [
+            "compare-exact",
+            str(tmp_path),
+            "--batch",
+            "--workers",
+            "2",
+            "--threads",
+            "3",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "--threads and --workers cannot be used together" in result.output
 
 
 def test_compare_exact_rejects_right_folder_in_batch_mode(tmp_path):
