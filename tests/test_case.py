@@ -23,6 +23,19 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 class TestCaseValidation:
     """Test Case._validate_case() method."""
 
+    def test_csv_preserves_numeric_bus_names_with_blank_cells(self, tmp_path):
+        case = create_case(CASES_DIR / "csv" / "ieee13")
+        case.bus_data["name"] = ["00151", ""] + [
+            str(300 + index) for index in range(len(case.bus_data) - 2)
+        ]
+        case.bus_data.to_csv(tmp_path / "bus_data.csv", index=False)
+        case.branch_data.to_csv(tmp_path / "branch_data.csv", index=False)
+
+        loaded = create_case(tmp_path)
+
+        assert loaded.bus_data.iloc[0]["name"] == "00151"
+        assert loaded.bus_data.iloc[2]["name"] == "300"
+
     def test_valid_case_passes(self):
         """A valid case should pass validation without errors."""
         case = create_case(CASES_DIR / "csv" / "ieee13")

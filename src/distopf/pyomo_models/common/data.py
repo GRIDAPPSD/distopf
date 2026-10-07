@@ -32,6 +32,11 @@ def parse_phases(phases_str: str) -> list[str]:
     return re.findall(r"[A-Za-z]\d|.", phases_str)
 
 
+def injectable_bus_phases(model: Any) -> set[tuple[int, str]]:
+    """Return bus/phase pairs whose injections enter a power balance constraint."""
+    return {(tb, phase) for _, tb, phase in model.branch_phase_set}
+
+
 def phase_tuples(data: pd.DataFrame, id_column: str = "id") -> list[tuple[Any, str]]:
     """Build entity/phase tuples from a device table."""
     return [

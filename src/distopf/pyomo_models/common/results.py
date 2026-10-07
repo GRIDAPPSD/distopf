@@ -175,6 +175,8 @@ def get_values(var: pyo.Var) -> pd.DataFrame:
         return df
     if {"fb", "tb", "from_name", "to_name"}.issubset(df.columns):
         index_cols = ["fb", "tb", "from_name", "to_name", "t"]
+    elif "device_name" in df.columns:
+        index_cols = ["device_name", "t"]
     else:
         index_cols = ["id", "name", "t"]
     df = df.pivot(index=index_cols, columns="phase", values="value").reset_index()
@@ -206,6 +208,14 @@ def get_values_1ph(var: pyo.Var) -> pd.DataFrame:
 
 def get_values_tidy(var: pyo.Var) -> pd.DataFrame:
     """Extract variable values in tidy format, handling different dimensionalities."""
+    if var.local_name in ("p_mpssd", "q_mpssd"):
+        return pd.DataFrame(
+            data=[
+                [device, time, phase, value]
+                for (device, phase, time), value in var.extract_values().items()
+            ],
+            columns=["device_name", "t", "phase", "value"],
+        )
     if var.name == "v2":
         return pd.DataFrame(
             data=[

@@ -1,16 +1,231 @@
 """Tests for the composable Pyomo refactor foundation."""
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pyomo.environ as pyo
+import pytest
 
+from distopf import CASES_DIR, create_case
 from distopf.pyomo_models.common.data import (
     create_bus_device_map,
+    injectable_bus_phases,
     normalize_device_table,
     parse_phases,
 )
 from distopf.pyomo_models.common.registry import DeviceRegistry
 from distopf.pyomo_models.common.injection_providers import MappedInjectionProvider
 from distopf.pyomo_models.common.objectives import substation_cost_objective_rule
+from distopf.pyomo_models.common.results import PyoResult, get_values_tidy
+from distopf.pyomo_models.devices.mpssd import MpssdProvider, validate_mpssd_data
+from distopf.pyomo_models.network.bfm import create_network_components
+
+
+@pytest.fixture
+def mpssd_data():
+    return pd.DataFrame(
+        [
+            {
+                "device_name": "port",
+                "bus_name": "151",
+                "phases": "abc",
+                "dc_bus": 1,
+                "control_variable": "PQ",
+                "s_a_max": 1.0,
+                "s_b_max": 1.0,
+                "s_c_max": 1.0,
+            }
+        ]
+    )
+
+
+@pytest.mark.parametrize("incoming_phases", ["ab", ""])
+def test_mpssd_rejects_ports_without_incoming_branches(mpssd_data, incoming_phases):
+    model = SimpleNamespace(
+        phase_map={1: "abc"},
+        branch_phase_set=[(2, 1, phase) for phase in incoming_phases],
+    )
+    with pytest.raises(ValueError, match="have no incoming branch at bus '151'"):
+        validate_mpssd_data(mpssd_data, {"151": 1}, injectable_bus_phases(model), set())
+
+
+@pytest.mark.parametrize("bus_type", ["SWING", "SWING_FREE", "IN"])
+def test_mpssd_rejects_swing_and_boundary_buses(mpssd_data, bus_type):
+    case = create_case(CASES_DIR / "csv" / "ieee13")
+    bus_id = int(case.bus_data.iloc[0]["id"])
+    case.bus_data.loc[case.bus_data.index[0], "bus_type"] = bus_type
+    model = pyo.ConcreteModel()
+    create_network_components(model, case)
+    with pytest.raises(ValueError, match="swing/boundary bus"):
+        validate_mpssd_data(
+            mpssd_data,
+            {"151": bus_id},
+            injectable_bus_phases(model),
+            set(model.swing_bus_set),
+        )
+
+
+@pytest.mark.parametrize("phases", ["s1", "s2", "s1s2"])
+def test_mpssd_reports_primary_phase_only_support(mpssd_data, phases):
+    mpssd_data["phases"] = phases
+    with pytest.raises(ValueError, match="MPSSD supports phases a, b, c only"):
+        validate_mpssd_data(mpssd_data, {"151": 1}, {(1, "s1"), (1, "s2")}, set())
+
+
+def test_mpssd_unknown_bus_reports_validation_error(mpssd_data):
+    with pytest.raises(ValueError, match="bus_name '151' not found"):
+        validate_mpssd_data(mpssd_data, {}, set(), set())
+
+
+@pytest.mark.parametrize(
+    "missing", ["bus_name_to_id_map", "branch_phase_set", "swing_bus_set", "time_set"]
+)
+def test_mpssd_requires_network_components(missing, mpssd_data):
+    attrs = {
+        "bus_name_to_id_map": {"151": 1},
+        "branch_phase_set": [(2, 1, "a")],
+        "swing_bus_set": {2},
+        "time_set": [0],
+    }
+    del attrs[missing]
+    with pytest.raises(RuntimeError, match=f"needs model.{missing}"):
+        MpssdProvider().create_components(
+            SimpleNamespace(**attrs), SimpleNamespace(mpssd_data=mpssd_data), None
+        )
+
+
+def test_mpssd_builds_valid_multiperiod_ports(mpssd_data):
+    model = pyo.ConcreteModel()
+    model.bus_name_to_id_map = {"151": 1}
+    model.branch_phase_set = pyo.Set(
+        initialize=[(2, 1, phase) for phase in "abc"], dimen=3
+    )
+    model.swing_bus_set = pyo.Set(initialize=[2])
+    model.time_set = pyo.RangeSet(0, 1)
+    MpssdProvider().create_components(
+        model, SimpleNamespace(mpssd_data=mpssd_data), None
+    )
+    assert len(model.p_mpssd) == 6
+    assert model.mpssd_devices_by_bus_phase[(1, "c")] == ["port"]
+
+
+def test_mpssd_results_preserve_device_names_and_network_results(mpssd_data):
+    second = mpssd_data.copy()
+    second["device_name"] = "1"
+    data = pd.concat([mpssd_data, second], ignore_index=True)
+    model = pyo.ConcreteModel()
+    model.bus_name_to_id_map = {"151": 1}
+    model.name_map = {1: "151", 2: "source"}
+    model.branch_phase_set = pyo.Set(
+        initialize=[(2, 1, phase) for phase in "abc"], dimen=3
+    )
+    model.swing_bus_set = pyo.Set(initialize=[2])
+    model.time_set = pyo.RangeSet(0, 1)
+    model.bus_phase_set = pyo.Set(initialize=[(1, phase) for phase in "abc"], dimen=2)
+    model.v2 = pyo.Var(model.bus_phase_set, model.time_set, initialize=1.21)
+    model.p_flow = pyo.Var(model.branch_phase_set, model.time_set, initialize=0.5)
+    MpssdProvider().create_components(model, SimpleNamespace(mpssd_data=data), None)
+    for variable, value in ((model.p_mpssd, 0.25), (model.q_mpssd, -0.1)):
+        for entry in variable.values():
+            entry.set_value(value)
+        tidy = get_values_tidy(variable)
+        assert tidy.columns.tolist() == ["device_name", "t", "phase", "value"]
+        assert set(tidy.device_name) == {"port", "1"}
+        assert len(tidy) == 12
+
+    result = PyoResult(model, results=None)
+
+    for name, value in (("p_mpssd", 0.25), ("q_mpssd", -0.1)):
+        frame = getattr(result, name)
+        assert frame.columns.tolist() == ["device_name", "t", "a", "b", "c"]
+        assert set(zip(frame.device_name, frame.t)) == {
+            ("port", 0),
+            ("port", 1),
+            ("1", 0),
+            ("1", 1),
+        }
+        assert (frame[["a", "b", "c"]] == value).all().all()
+    assert result.p_flow.columns.tolist() == [
+        "fb",
+        "tb",
+        "from_name",
+        "to_name",
+        "t",
+        "a",
+        "b",
+        "c",
+    ]
+    assert result.p_flow.to_name.tolist() == ["151", "151"]
+    assert result.voltages.name.tolist() == ["151", "151"]
+    assert result.voltages.a.tolist() == pytest.approx([1.1, 1.1])
+
+
+@pytest.mark.parametrize("control", ["", "P", "Q", "PQ"])
+@pytest.mark.parametrize("circular", [True, False])
+@pytest.mark.parametrize("equality_only", [True, False])
+def test_mpssd_equality_only_preserves_equalities(
+    mpssd_data, control, circular, equality_only
+):
+    mpssd_data["control_variable"] = control
+    mpssd_data["balanced_phases"] = True
+    for phase in "abc":
+        if control in ("", "Q"):
+            mpssd_data[f"p_{phase}"] = 0.0
+        if control in ("", "P"):
+            mpssd_data[f"q_{phase}"] = 0.0
+    model = pyo.ConcreteModel()
+    model.bus_name_to_id_map = {"151": 1}
+    model.branch_phase_set = pyo.Set(
+        initialize=[(2, 1, phase) for phase in "abc"], dimen=3
+    )
+    model.swing_bus_set = pyo.Set(initialize=[2])
+    model.time_set = pyo.RangeSet(0, 0)
+    provider = MpssdProvider()
+    provider.create_components(model, SimpleNamespace(mpssd_data=mpssd_data), None)
+    provider.add_constraints(
+        model,
+        SimpleNamespace(equality_only=equality_only, circular_constraints=circular),
+    )
+    assert len(model.mpssd_constant_p) == (3 if control in ("", "Q") else 0)
+    assert len(model.mpssd_constant_q) == (3 if control in ("", "P") else 0)
+    assert len(model.mpssd_dc_bus_balance) == 1
+    assert len(model.mpssd_p_balanced_phases) == 2
+    assert len(model.mpssd_q_balanced_phases) == 2
+    assert hasattr(model, "mpssd_p_limits") is not equality_only
+    assert hasattr(model, "mpssd_q_limits") is not equality_only
+    assert hasattr(model, "mpssd_circle") == (circular and not equality_only)
+    constraints = list(model.component_data_objects(pyo.Constraint))
+    if equality_only:
+        assert all(constraint.equality for constraint in constraints)
+    else:
+        assert any(not constraint.equality for constraint in constraints)
+
+
+def test_network_normalizes_bus_names_for_mpssd(mpssd_data):
+    case = create_case(CASES_DIR / "csv" / "ieee13")
+    case.bus_data["name"] = case.bus_data["name"].astype(str)
+    bus_index = case.bus_data.loc[
+        (case.bus_data.phases == "abc") & (case.bus_data.bus_type == "PQ")
+    ].index[0]
+    bus_id = int(case.bus_data.loc[bus_index, "id"])
+    case.bus_data.loc[bus_index, "name"] = " 151 "
+    model = pyo.ConcreteModel()
+    create_network_components(model, case)
+    assert model.bus_name_to_id_map["151"] == bus_id
+    assert model.bus_id_to_name_map[bus_id] == "151"
+    assert model.name_map is model.bus_id_to_name_map
+    MpssdProvider().create_components(
+        model, SimpleNamespace(mpssd_data=mpssd_data), None
+    )
+    assert model.mpssd_devices_by_bus_phase[(bus_id, "a")] == ["port"]
+
+
+def test_network_rejects_duplicate_normalized_bus_names():
+    case = create_case(CASES_DIR / "csv" / "ieee13")
+    case.bus_data["name"] = case.bus_data["name"].astype(str)
+    case.bus_data.loc[case.bus_data.index[:2], "name"] = ["151", " 151 "]
+    with pytest.raises(ValueError, match="duplicate bus names"):
+        create_network_components(pyo.ConcreteModel(), case)
 
 
 def test_parse_phases_preserves_order_and_repeated_triplex_phases():

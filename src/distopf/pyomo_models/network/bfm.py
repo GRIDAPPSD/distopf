@@ -201,18 +201,14 @@ def create_network_components(model: pyo.ConcreteModel, case: Case) -> None:
         ]
         for bus in case.bus_data.id
     }
-    model.name_map = {
-        int(row["id"]): str(row["name"])
-        for _, row in case.bus_data[["id", "name"]].iterrows()
-    }
-    model.bus_id_to_name_map = {
-        int(row["id"]): str(row["name"])
-        for _, row in case.bus_data[["id", "name"]].iterrows()
-    }
-    model.bus_name_to_id_map = {
-        str(row["name"]): int(row["id"])
-        for _, row in case.bus_data[["id", "name"]].iterrows()
-    }
+    bus_names = case.bus_data["name"].map(lambda value: str(value).strip())
+    dupes = sorted(set(bus_names[bus_names.duplicated()]))
+    if dupes:
+        raise ValueError(f"bus_data has duplicate bus names: {dupes}")
+    bus_ids = case.bus_data["id"].astype(int)
+    model.bus_name_to_id_map = dict(zip(bus_names, bus_ids))
+    model.bus_id_to_name_map = dict(zip(bus_ids, bus_names))
+    model.name_map = model.bus_id_to_name_map
     model.phase_map = {
         int(row.id): parse_phases(str(row.phases))
         for _, row in case.bus_data[["id", "phases"]].iterrows()
@@ -270,21 +266,16 @@ class BFMProvider:
             create_branchflow_components(model, case)
 
     def add_constraints(self, model: Any, config: Any) -> None:
-        thermal_constraints = getattr(config, "thermal_constraints", False)
-        equality_only = getattr(config, "equality_only", False)
-        circular_constraints = getattr(config, "circular_constraints", True)
-        free_swing_voltage = getattr(config, "free_swing_voltage", False)
-        linear = getattr(config, "linear", True)
-        socp = getattr(config, "socp_relaxation", False)
-        # Power flow constraints
         bfm_constraints.add_constraints(
             model,
-            circular_constraints=circular_constraints,
-            thermal_constraints=thermal_constraints,
-            equality_only=equality_only,
-            free_swing_voltage=free_swing_voltage,
-            linear=linear,
-            socp_relaxation=socp,
+            circular_constraints=getattr(config, "circular_constraints", True),
+            thermal_constraints=getattr(config, "thermal_constraints", True),
+            equality_only=getattr(config, "equality_only", False),
+            free_swing_voltage=getattr(config, "free_swing_voltage", False),
+            linear=getattr(config, "linear", True),
+            socp_relaxation=getattr(config, "socp_relaxation", False),
+            voltage_slacks=getattr(config, "voltage_slacks", False),
+            thermal_slacks=getattr(config, "thermal_slacks", False),
         )
 
 
