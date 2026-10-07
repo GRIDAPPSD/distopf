@@ -148,6 +148,8 @@ def handle_cap_input(cap_data: Optional[pd.DataFrame]) -> pd.DataFrame:
             ]
         )
     cap_data = _rename_known_columns(cap_data, CAP_COLUMN_RENAMES)
+    if "device_name" in cap_data.columns:
+        return cap_data.reset_index(drop=True)
     cap = cap_data.sort_values(by="id", ignore_index=True)
     cap.index = cap.id.to_numpy() - 1
     return cap

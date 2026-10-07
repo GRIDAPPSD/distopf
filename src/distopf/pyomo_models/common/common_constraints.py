@@ -117,17 +117,10 @@ def add_circular_generator_constraints_pq_control(m: LindistModelProtocol) -> No
 
 # Capacitors ------------------------------------------------------------------------
 def add_capacitor_constraints(m: LindistModelProtocol) -> None:
-    """
-    Add capacitor constraints.
-    q_C = q_rated * v^2
-    """
+    """Add the capacitor provider's voltage-dependent injection constraints."""
+    from distopf.pyomo_models.devices.capacitor import add_capacitor_constraints as add
 
-    def capacitor_rule(m: LindistModelProtocol, _id, ph, t):
-        return m.q_cap[_id, ph, t] == m.q_cap_nom[_id, ph] * m.v2[_id, ph, t]
-
-    m.capacitor_injection = pyo.Constraint(
-        m.cap_phase_set, m.time_set, rule=capacitor_rule
-    )
+    add(m)
 
 
 def add_swing_bus_constraints(m: LindistModelProtocol) -> None:
@@ -289,80 +282,28 @@ def add_capacitor_constraints_auto(m: LindistModelProtocol) -> None:
 
 
 def add_capacitor_mi_constraints(m: LindistModelProtocol) -> None:
-    """
-    Add mixed-integer capacitor constraints using McCormick envelope.
-
-    q_cap = q_cap_nom * z_cap
-
-    where z_cap represents the product u_cap * v2.
-    """
-
-    def capacitor_q_rule(m: LindistModelProtocol, _id, ph, t):
-        return m.q_cap[_id, ph, t] == m.q_cap_nom[_id, ph] * m.z_cap[_id, ph, t]
-
-    m.capacitor_mi_injection = pyo.Constraint(
-        m.cap_phase_set, m.time_set, rule=capacitor_q_rule
+    """Add the capacitor provider's switched injection constraints."""
+    from distopf.pyomo_models.devices.capacitor import (
+        add_capacitor_mi_constraints as add,
     )
+
+    add(m)
 
 
 def add_capacitor_mccormick_constraints(m: LindistModelProtocol) -> None:
-    """
-    Add McCormick envelope constraints to linearize z_cap = u_cap * v2.
-
-    For binary u in {0,1} and continuous v2 in [v_min^2, v_max^2]:
-        z <= v_max^2 * u           (when u=0, z=0)
-        z <= v2                    (z bounded by v2)
-        z >= v2 - v_max^2 * (1-u)  (when u=1, z=v2)
-        z >= v_min^2 * u           (when u=1, z >= v_min^2)
-    """
-
-    def mccormick_upper_1(m: LindistModelProtocol, _id, ph, t):
-        """z_cap <= v_max^2 * u_cap"""
-        v2_max = m.v_max[_id, ph] ** 2
-        return m.z_cap[_id, ph, t] <= v2_max * m.u_cap[_id, ph, t]
-
-    def mccormick_upper_2(m: LindistModelProtocol, _id, ph, t):
-        """z_cap <= v2"""
-        return m.z_cap[_id, ph, t] <= m.v2[_id, ph, t]
-
-    def mccormick_lower_1(m: LindistModelProtocol, _id, ph, t):
-        """z_cap >= v2 - v_max^2 * (1 - u_cap)"""
-        v2_max = m.v_max[_id, ph] ** 2
-        return m.z_cap[_id, ph, t] >= m.v2[_id, ph, t] - v2_max * (
-            1 - m.u_cap[_id, ph, t]
-        )
-
-    def mccormick_lower_2(m: LindistModelProtocol, _id, ph, t):
-        """z_cap >= v_min^2 * u_cap"""
-        v2_min = m.v_min[_id, ph] ** 2
-        return m.z_cap[_id, ph, t] >= v2_min * m.u_cap[_id, ph, t]
-
-    m.cap_mccormick_u1 = pyo.Constraint(
-        m.cap_phase_set, m.time_set, rule=mccormick_upper_1
+    """Add the capacitor provider's switching envelope."""
+    from distopf.pyomo_models.devices.capacitor import (
+        add_capacitor_mccormick_constraints as add,
     )
-    m.cap_mccormick_u2 = pyo.Constraint(
-        m.cap_phase_set, m.time_set, rule=mccormick_upper_2
-    )
-    m.cap_mccormick_l1 = pyo.Constraint(
-        m.cap_phase_set, m.time_set, rule=mccormick_lower_1
-    )
-    m.cap_mccormick_l2 = pyo.Constraint(
-        m.cap_phase_set, m.time_set, rule=mccormick_lower_2
-    )
+
+    add(m)
 
 
 def add_capacitor_z_bounds(m: LindistModelProtocol) -> None:
-    """
-    Add explicit bounds on z_cap auxiliary variable.
+    """Add the capacitor provider's auxiliary-variable bounds."""
+    from distopf.pyomo_models.devices.capacitor import add_capacitor_z_bounds as add
 
-    0 <= z_cap <= v_max^2
-    """
-
-    def z_cap_bounds(m: LindistModelProtocol, _id, ph, t):
-        v2_max = m.v_max[_id, ph] ** 2
-        return (0, m.z_cap[_id, ph, t], v2_max)
-
-    m.z_cap_bounds = pyo.Constraint(m.cap_phase_set, m.time_set, rule=z_cap_bounds)
+    add(m)
 
 
 # ============ Thermal Line Constraints ================================================

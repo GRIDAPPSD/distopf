@@ -1570,7 +1570,11 @@ def create_case_from_csv(
             gen_data = pd.read_csv(csv_files["gen_data"], header=0)
 
         if csv_files["cap_data"].exists():
-            cap_data = pd.read_csv(csv_files["cap_data"], header=0)
+            cap_data = pd.read_csv(
+                csv_files["cap_data"],
+                header=0,
+                dtype={"device_name": str, "bus_name": str},
+            )
 
         if csv_files["reg_data"].exists():
             reg_data = pd.read_csv(csv_files["reg_data"], header=0)

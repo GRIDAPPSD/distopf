@@ -188,7 +188,15 @@ def get_values(var: pyo.Var) -> pd.DataFrame:
 
 def get_values_tidy_3ph(var: pyo.Var) -> pd.DataFrame:
     """Extract 3-phase variable values in tidy format."""
-    if var.local_name in ("p_gen", "q_gen", "p_mpssd", "q_mpssd"):
+    if var.local_name in (
+        "p_gen",
+        "q_gen",
+        "p_mpssd",
+        "q_mpssd",
+        "q_cap",
+        "u_cap",
+        "z_cap",
+    ):
         return get_values_tidy(var)
     return pd.DataFrame(
         data=[
@@ -212,16 +220,22 @@ def get_values_1ph(var: pyo.Var) -> pd.DataFrame:
 
 def get_values_tidy(var: pyo.Var) -> pd.DataFrame:
     """Extract variable values in tidy format, handling different dimensionalities."""
-    if var.local_name in ("p_gen", "q_gen") and hasattr(
-        var.model(), "gen_bus_by_device"
-    ):
+    map_name = {
+        "p_gen": "gen_bus_by_device",
+        "q_gen": "gen_bus_by_device",
+        "q_cap": "cap_bus_by_device",
+        "u_cap": "cap_bus_by_device",
+        "z_cap": "cap_bus_by_device",
+    }.get(var.local_name)
+    bus_by_device = getattr(var.model(), map_name, None) if map_name else None
+    if bus_by_device is not None:
         model = var.model()
         return pd.DataFrame(
             data=[
                 [
                     device,
-                    model.gen_bus_by_device[device],
-                    model.name_map[model.gen_bus_by_device[device]],
+                    bus_by_device[device],
+                    model.name_map[bus_by_device[device]],
                     time,
                     phase,
                     value,
@@ -379,6 +393,11 @@ def get_constraint_duals_tidy(
         bus_by_device = getattr(model, "gen_bus_by_device", None)
     elif constraint.local_name.startswith("mpssd_"):
         bus_by_device = getattr(model, "mpssd_bus_by_device", None)
+    elif (
+        constraint.local_name.startswith(("cap_", "capacitor_"))
+        or constraint.local_name == "z_cap_bounds"
+    ):
+        bus_by_device = getattr(model, "cap_bus_by_device", None)
     if (
         bus_by_device is not None
         and isinstance(first_idx, tuple)

@@ -22,7 +22,11 @@ model_cap = create_lindist_model(
 m = model_cap
 # Minimize total capacitor reactive power
 m.obj = pyo.Objective(
-    expr=sum(m.q_cap[_id, ph, t] for (_id, ph) in m.cap_phase_set for t in m.time_set),
+    expr=sum(
+        m.q_cap[device, ph, t]
+        for device, ph in m.cap_device_phase_set
+        for t in m.time_set
+    ),
     sense=pyo.minimize,
 )
 solver = pyo.SolverFactory("cbc")

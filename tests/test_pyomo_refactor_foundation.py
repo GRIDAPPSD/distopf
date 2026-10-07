@@ -16,6 +16,7 @@ from distopf.pyomo_models.common.data import (
 from distopf.pyomo_models.common.device_data import (
     DeviceDataWarning,
     InfeasibleCaseError,
+    NetworkContext,
 )
 from distopf.pyomo_models.common.registry import DeviceRegistry
 from distopf.pyomo_models.common.injection_providers import MappedInjectionProvider
@@ -25,9 +26,153 @@ from distopf.pyomo_models.common.results import get_constraint_duals_pivoted
 from distopf.pyomo_models.common.results import get_values_tidy_3ph
 from distopf.pyomo_models.common import common_constraints, objectives
 from distopf.pyomo_models.devices.generator import GeneratorProvider
+from distopf.pyomo_models.devices.capacitor import CapacitorProvider, validate_cap_data
 from distopf.pyomo_models.devices.mpssd import MpssdProvider, validate_mpssd_data
 from distopf.pyomo_models.network.bfm import create_network_components
 from distopf.wrappers.pyomo_wrapper import PyomoWrapper
+from distopf.pyomo_models.common.factory import create_lindist_model
+from distopf.api import Case
+
+
+@pytest.fixture
+def capacitor_model():
+    model = pyo.ConcreteModel()
+    model.bus_name_to_id_map = {"source": 1, "151": 2}
+    model.name_map = {1: "source", 2: "151"}
+    model.branch_phase_set = pyo.Set(initialize=[(1, 2, "a")], dimen=3)
+    model.bus_phase_set = pyo.Set(initialize=[(2, "a")], dimen=2)
+    model.swing_bus_set = pyo.Set(initialize=[1])
+    model.time_set = pyo.RangeSet(0, 1)
+    model.v2 = pyo.Var(model.bus_phase_set, model.time_set, initialize=1)
+    model.v_min = pyo.Param(model.bus_phase_set, initialize=0.95)
+    model.v_max = pyo.Param(model.bus_phase_set, initialize=1.05)
+    return model
+
+
+@pytest.fixture
+def capacitor_data():
+    return pd.DataFrame(
+        [
+            {"device_name": device, "bus_name": "151", "phases": "a", "q_a": rating}
+            for device, rating in (("cap1", 0.1), ("cap2", 0.2))
+        ]
+    )
+
+
+@pytest.mark.parametrize("switched", [False, True])
+@pytest.mark.parametrize("voltage", [0.95, 1.05])
+def test_capacitor_constraints_and_results(
+    capacitor_model, capacitor_data, switched, voltage
+):
+    model = capacitor_model
+    model.cap_mi_enabled = switched
+    provider = CapacitorProvider()
+    provider.create_components(model, SimpleNamespace(cap_data=capacitor_data), None)
+    provider.add_constraints(model, None)
+    for device, phase, time in model.q_cap:
+        state = 0 if switched and device == "cap2" and time == 1 else 1
+        model.v2[2, phase, time].set_value(voltage**2)
+        model.q_cap[device, phase, time].set_value(
+            pyo.value(model.cap_q_nom[device, phase]) * voltage**2 * state
+        )
+        if switched:
+            model.u_cap[device, phase, time].set_value(state)
+            model.z_cap[device, phase, time].set_value(voltage**2 * state)
+    for constraint in model.component_data_objects(pyo.Constraint):
+        value = pyo.value(constraint.body)
+        assert constraint.lower is None or value >= pyo.value(constraint.lower) - 1e-9
+        assert constraint.upper is None or value <= pyo.value(constraint.upper) + 1e-9
+    assert pyo.value(
+        provider.reactive_power_injection(model, 2, "a", 0)
+    ) == pytest.approx(0.3 * voltage**2)
+    assert provider.reactive_power_injection(model, 3, "a", 0) == 0
+    assert provider.active_power_injection(model, 2, "a", 0) == 0
+    model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
+    injection = model.capacitor_mi_injection if switched else model.capacitor_injection
+    for constraint in injection.values():
+        model.dual[constraint] = 1.5
+    result = PyoResult(model, results=None)
+    assert result.q_cap.columns.tolist() == ["device_name", "id", "name", "t", "a"]
+    assert len(result.q_cap) == 4
+    assert set(result.get_dual(injection.local_name).device_name) == {"cap1", "cap2"}
+    if switched:
+        assert len(result.u_cap) == len(result.z_cap) == 4
+    wrapper = PyomoWrapper(case=None)
+    wrapper.result = result
+    assert wrapper.get_q_caps().a.tolist() == pytest.approx(
+        [0.3 * voltage**2, (0.1 if switched else 0.3) * voltage**2]
+    )
+
+
+@pytest.mark.parametrize("phase", ["s1", "s2"])
+def test_capacitors_support_triplex_connections(capacitor_model, capacitor_data, phase):
+    model = capacitor_model
+    model.branch_phase_set.clear()
+    model.branch_phase_set.add((1, 2, phase))
+    model.bus_phase_set.clear()
+    model.bus_phase_set.add((2, phase))
+    model.v2[2, phase, 0].set_value(1)
+    model.v2[2, phase, 1].set_value(1)
+    capacitor_data["phases"] = phase
+    capacitor_data[f"q_{phase}"] = capacitor_data.pop("q_a")
+    provider = CapacitorProvider()
+    provider.create_components(model, SimpleNamespace(cap_data=capacitor_data), None)
+    provider.add_constraints(model, None)
+    assert ("cap1", phase, 0) in model.q_cap
+
+
+@pytest.mark.parametrize(
+    "column, value, message",
+    [
+        ("device_name", " ", "blank device_name"),
+        ("device_name", "cap2", "duplicate device_name"),
+        ("bus_name", "unknown", "not found in network"),
+        ("bus_name", "source", "swing/boundary bus"),
+        ("phases", "b", "no incoming branch"),
+        ("phases", "aa", "distinct phases"),
+        ("q_a", " ", "q_a is required"),
+        ("q_a", -0.1, "must be >= 0"),
+        ("q_a", float("inf"), "must be finite"),
+    ],
+)
+def test_capacitor_validation(capacitor_model, capacitor_data, column, value, message):
+    capacitor_data[column] = capacitor_data[column].astype(object)
+    capacitor_data.loc[0, column] = value
+    with pytest.raises(ValueError, match=message):
+        validate_cap_data(
+            capacitor_data, NetworkContext.from_model(capacitor_model, "test")
+        )
+
+
+def test_named_capacitors_work_through_case_and_factory():
+    original = create_case(CASES_DIR / "csv" / "ieee13")
+    bus = original.bus_data.loc[
+        (original.bus_data.bus_type == "PQ") & (original.bus_data.phases == "abc")
+    ].iloc[0]
+    data = pd.DataFrame(
+        [
+            {
+                "device_name": device,
+                "bus_name": str(bus["name"]),
+                "phases": "a",
+                "q_a": 0.1,
+            }
+            for device in ("cap1", "cap2")
+        ]
+    )
+    case = Case(
+        branch_data=original.branch_data, bus_data=original.bus_data, cap_data=data
+    )
+    model = create_lindist_model(case)
+    assert model.cap_bus_by_device == {"cap1": int(bus["id"]), "cap2": int(bus["id"])}
+    assert len(model.capacitor_injection) == 2
+
+
+def test_empty_capacitor_provider(capacitor_model):
+    provider = CapacitorProvider()
+    provider.create_components(capacitor_model, SimpleNamespace(), None)
+    provider.add_constraints(capacitor_model, None)
+    assert len(capacitor_model.cap_device_set) == len(capacitor_model.q_cap) == 0
 
 
 @pytest.fixture

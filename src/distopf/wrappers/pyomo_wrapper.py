@@ -288,7 +288,7 @@ class PyomoWrapper(Wrapper):
         """Build PowerFlowResult from solved pyomo model."""
         from distopf.results import PowerFlowResult
 
-        q_caps = getattr(self.result, "q_cap", None)
+        q_caps = self.get_q_caps() if hasattr(self.result, "q_cap") else None
         tap_ratios = getattr(self.result, "reg_ratio", None)
         reg_taps = getattr(self.result, "reg_taps", None)
         p_loads = getattr(self.result, "p_load", None)
@@ -533,14 +533,18 @@ class PyomoWrapper(Wrapper):
 
     def get_p_gens(self) -> pd.DataFrame:
         """Extract active power generation results from solved model."""
-        return self._get_generator_values("p_gen")
+        return self._get_bus_values("p_gen")
 
     def get_q_gens(self) -> pd.DataFrame:
         """Extract reactive power generation results from solved model."""
-        return self._get_generator_values("q_gen")
+        return self._get_bus_values("q_gen")
 
-    def _get_generator_values(self, variable: str) -> pd.DataFrame:
-        """Aggregate device-level generation to the bus-level result contract."""
+    def get_q_caps(self) -> pd.DataFrame:
+        """Extract bus-level capacitor reactive power."""
+        return self._get_bus_values("q_cap")
+
+    def _get_bus_values(self, variable: str) -> pd.DataFrame:
+        """Aggregate device-level injections to the bus-level result contract."""
         frame = getattr(self.result, variable)
         if "device_name" not in frame.columns:
             return frame

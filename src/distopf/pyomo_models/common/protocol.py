@@ -17,7 +17,8 @@ class LindistModelProtocol(Protocol):
     gen_device_set: pyo.Set
     gen_device_phase_set: pyo.Set
     gen_phase_pair_set: pyo.Set
-    cap_phase_set: pyo.Set
+    cap_device_set: pyo.Set
+    cap_device_phase_set: pyo.Set
     reg_phase_set: pyo.Set
     bat_phase_set: pyo.Set
     bat_set: pyo.Set
@@ -49,7 +50,7 @@ class LindistModelProtocol(Protocol):
     gen_phase_lock: pyo.Param
 
     # Capacitor parameters
-    q_cap_nom: pyo.Param  # Nominal capacitor reactive power at 1.0 p.u. voltage
+    cap_q_nom: pyo.Param  # Nominal capacitor reactive power at 1.0 p.u. voltage
 
     # Regulator parameters
     reg_ratio: pyo.Param  # Voltage regulator turn ratio
@@ -114,6 +115,8 @@ class LindistModelProtocol(Protocol):
     name_map: Dict[int, str]  # Mapping from bus ID to bus name
     gen_bus_by_device: Dict[str, int]
     gen_devices_by_bus_phase: Dict[Tuple[int, str], List[str]]
+    cap_bus_by_device: Dict[str, int]
+    cap_devices_by_bus_phase: Dict[Tuple[int, str], List[str]]
 
     # ==================== PYOMO UTILITIES ====================
     dual: pyo.Suffix  # Dual variable suffix for sensitivity analysis

@@ -138,7 +138,8 @@ class TestCreateLinDistModel:
         assert hasattr(model, "branch_phase_set")
         assert hasattr(model, "gen_device_set")
         assert hasattr(model, "gen_device_phase_set")
-        assert hasattr(model, "cap_phase_set")
+        assert hasattr(model, "cap_device_set")
+        assert hasattr(model, "cap_device_phase_set")
         assert hasattr(model, "reg_phase_set")
         assert hasattr(model, "bat_phase_set")
         assert hasattr(model, "bat_set")
@@ -159,7 +160,7 @@ class TestCreateLinDistModel:
         assert hasattr(model, "gen_q_max")
         assert hasattr(model, "gen_q_min")
         assert hasattr(model, "gen_control")
-        assert hasattr(model, "q_cap_nom")
+        assert hasattr(model, "cap_q_nom")
         assert hasattr(model, "reg_ratio")
         assert hasattr(model, "v_swing")
         assert hasattr(model, "v_min")
@@ -290,7 +291,7 @@ class TestSets:
 
         assert len(model.gen_device_phase_set) == 0
 
-    def test_cap_phase_set_ieee13(self, ieee13_case):
+    def test_cap_device_phase_set_ieee13(self, ieee13_case):
         """Test capacitor phase set for IEEE 13"""
         case = Case(
             branch_data=ieee13_case.branch_data,
@@ -302,7 +303,10 @@ class TestSets:
 
         model = create_lindist_model(case)
 
-        cap_phase_list = list(model.cap_phase_set)
+        cap_phase_list = [
+            (model.cap_bus_by_device[device], phase)
+            for device, phase in model.cap_device_phase_set
+        ]
 
         # From the cap_data CSV: bus 10 (675) has abc, bus 11 (611) has c
         assert (10, "a") in cap_phase_list
@@ -373,8 +377,8 @@ class TestModelIntegrity:
         assert q_gen_keys == gen_device_phase_set
 
         q_cap_keys = set(model.q_cap.keys())
-        cap_phase_set = set(model.cap_phase_set * model.time_set)
-        assert q_cap_keys == cap_phase_set
+        cap_device_phase_set = set(model.cap_device_phase_set * model.time_set)
+        assert q_cap_keys == cap_device_phase_set
 
 
 if __name__ == "__main__":
