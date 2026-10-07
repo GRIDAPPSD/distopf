@@ -205,6 +205,14 @@ def create_network_components(model: pyo.ConcreteModel, case: Case) -> None:
         int(row["id"]): str(row["name"])
         for _, row in case.bus_data[["id", "name"]].iterrows()
     }
+    model.bus_id_to_name_map = {
+        int(row["id"]): str(row["name"])
+        for _, row in case.bus_data[["id", "name"]].iterrows()
+    }
+    model.bus_name_to_id_map = {
+        str(row["name"]): int(row["id"])
+        for _, row in case.bus_data[["id", "name"]].iterrows()
+    }
     model.phase_map = {
         int(row.id): parse_phases(str(row.phases))
         for _, row in case.bus_data[["id", "phases"]].iterrows()

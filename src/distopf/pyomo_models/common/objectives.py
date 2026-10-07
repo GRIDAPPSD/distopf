@@ -115,6 +115,9 @@ def cost_minimization_rule(m):
         for t in m.time_set:
             if fb in m.swing_bus_set:
                 total_cost += m.p_flow[fb, tb, ph, t] * m.price[t] * m.delta_t
+    for _id, ph in m.gen_phase_set:
+        for t in m.time_set:
+            total_cost += m.p_gen[_id, ph, t] * m.gen_cost[_id, ph] * m.delta_t
     return total_cost
 
 

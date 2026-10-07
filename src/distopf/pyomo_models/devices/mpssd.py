@@ -19,6 +19,32 @@ from distopf.pyomo_models.common.protocol import LindistModelProtocol
 
 sqrt2 = sqrt(2)
 
+"""
+MPSSD CSV specs
+columns:
+id: unique identifier for the device
+name: name of the device
+bus_id: identifier of the bus the device is connected to
+bus_name: name of the bus the device is connected to
+phases: phases the device is connected to
+dc_bus: identifier of the DC bus the device is connected to
+control_variable: control variable type (e.g., "PQ", "P", "Q", "")
+p_a, p_b, p_c: 
+                Active power setpoints for phases a, b, c;
+                Only active for control modes, "Q" and "", otherwise ignored; 
+                Must satisfy the power balance for the DC bus. 
+                Other wise it will result in an infeasible solution.
+q_a, q_b, q_c: 
+                Reactive power setpoints for phases a, b, c;
+                Only active for control modes, "P" and "", otherwise ignored; 
+s_a_max, s_b_max, s_c_max: maximum apparent power ratings for phases a, b, c
+
+example:
+id,name,bus_id,bus_name,phases,dc_bus,control_variable,p_a,p_b,p_c,q_a,q_b,q_c,s_a_max,s_b_max,s_c_max
+1,mpssd_p1,61,151,abc,1,PQ,,,,,,,0.4,0.4,0.4
+2,mpssd_p2,102,300,abc,1,PQ,,,,,,,0.4,0.4,0.4
+"""
+
 
 class MpssdProvider(DeviceProvider):
     """Own MPSSD sets, parameters, variables, injections, and constraints."""
@@ -30,25 +56,36 @@ class MpssdProvider(DeviceProvider):
         model.mpssd_set = pyo.Set(
             initialize=[] if data.empty else data.id.astype(int).tolist()
         )
-        phase_pairs = []
+        device_phase_list = []
+        device_phase_map = {}
+        device_phase_dc_bus_list = []
         bus_map: dict[tuple[int, str], list[int]] = {}
+        dc_bus_to_device_phase_map = {}
         if not data.empty:
             for _, row in data.iterrows():
                 device = int(row.id)
                 for phase in parse_phases(str(row.phases)):
-                    phase_pairs.append((device, phase))
-                    bus_map.setdefault((int(row.bus), phase), []).append(device)
-        model.mpssd_phase_set = pyo.Set(initialize=phase_pairs, dimen=2)
+                    bus_name = str(row.bus_name)
+                    bus_id = int(model.bus_name_to_id_map.get(bus_name, 0))
+                    dc_bus = int(row.dc_bus)
+                    device_phase_list.append((device, phase))
+                    device_phase_map.setdefault(device, []).append(phase)
+                    device_phase_dc_bus_list.append((device, phase, dc_bus))
+                    dc_bus_to_device_phase_map.setdefault(dc_bus, []).append(
+                        (device, phase)
+                    )
+                    bus_map.setdefault((bus_id, phase), []).append(device)
+        model.mpssd_phase_set = pyo.Set(initialize=device_phase_list, dimen=2)
+        model.mpssd_phase_dc_bus_set = pyo.Set(
+            initialize=device_phase_dc_bus_list, dimen=3
+        )
+        model.mpssd_phases_map = device_phase_map
         model.mpssd_bus_map = bus_map
         dc_labels = sorted(
-            {
-                int(value)
-                for value in data.get("dc_bus", pd.Series(dtype=int)).tolist()
-                if pd.notna(value) and int(value) != 0
-            }
+            {int(value) for value in data.get("dc_bus", pd.Series(dtype=int)).tolist()}
         )
         model.dc_bus_set = pyo.Set(initialize=dc_labels)
-
+        model.dc_bus_to_device_phase_map = dc_bus_to_device_phase_map
         model.p_mpssd = pyo.Var(model.mpssd_phase_set, model.time_set, initialize=0)
         model.q_mpssd = pyo.Var(model.mpssd_phase_set, model.time_set, initialize=0)
 
@@ -63,11 +100,13 @@ class MpssdProvider(DeviceProvider):
             "control": {},
             "p_nom": {},
             "q_nom": {},
+            "balanced_phases": {},
         }
         for _, row in data.iterrows():
             device = int(row.id)
             dc_bus = int(row.dc_bus) if pd.notna(row.get("dc_bus", 0)) else 0
             control = CONTROL_VARIABLE_MAP.get(row.get("control_variable", "PQ"), 3)
+            values["balanced_phases"][device] = bool(row.get("balanced_phases", False))
             for phase in parse_phases(str(row.phases)):
                 key = (device, phase)
                 rating = row.get(f"s_{phase}_max", 1000.0)
@@ -101,6 +140,9 @@ class MpssdProvider(DeviceProvider):
         model.q_mpssd_nom = pyo.Param(
             model.mpssd_phase_set, model.time_set, initialize=values["q_nom"], default=0
         )
+        model.mpssd_balanced_phases = pyo.Param(
+            model.mpssd_set, initialize=values["balanced_phases"], default=False
+        )
 
     def active_power_injection(
         self, model: Any, bus: int, phase: str, time: Any
@@ -131,6 +173,8 @@ class MpssdProvider(DeviceProvider):
             add_octagonal_mpssd_constraints(model)
         if len(model.dc_bus_set) > 0:
             add_dc_bus_balance_constraints(model)
+        add_p_phase_balance_constraints(model)
+        add_q_phase_balance_constraints(model)
 
 
 def add_mpssd_constant_p_constraints_q_control(m: LindistModelProtocol) -> None:
@@ -252,13 +296,37 @@ def add_dc_bus_balance_constraints(m: LindistModelProtocol) -> None:
     """Enforce zero net active injection for each shared DC bus."""
 
     def rule(m, dc_bus, time):
+        device_phase_list = m.dc_bus_to_device_phase_map.get(dc_bus, [])
         return (
-            sum(
-                m.p_mpssd[device, phase, time]
-                for device, phase in m.mpssd_phase_set
-                if m.mpssd_dc_bus[device, phase] == dc_bus
-            )
+            sum(m.p_mpssd[device, phase, time] for device, phase in device_phase_list)
             == 0
         )
 
     m.dc_bus_balance = pyo.Constraint(m.dc_bus_set, m.time_set, rule=rule)
+
+
+def add_p_phase_balance_constraints(m: LindistModelProtocol) -> None:
+    """Enforce phase balance for devices with the balanced_phases attribute set to True."""
+
+    def rule(m, device, phase, time):
+        if not m.mpssd_balanced_phases[device]:
+            return pyo.Constraint.Skip
+        phases = m.mpssd_phases_map.get(device, [])
+        if phase == phases[0]:
+            return pyo.Constraint.Skip
+        return m.p_mpssd[device, phase, time] == m.p_mpssd[device, phases[0], time]
+
+    m.mpssd_p_balanced_phases = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=rule)
+
+def add_q_phase_balance_constraints(m: LindistModelProtocol) -> None:
+    """Enforce phase balance for devices with the balanced_phases attribute set to True."""
+
+    def rule(m, device, phase, time):
+        if not m.mpssd_balanced_phases[device]:
+            return pyo.Constraint.Skip
+        phases = m.mpssd_phases_map.get(device, [])
+        if phase == phases[0]:
+            return pyo.Constraint.Skip
+        return m.q_mpssd[device, phase, time] == m.q_mpssd[device, phases[0], time]
+
+    m.mpssd_q_balanced_phases = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=rule)
