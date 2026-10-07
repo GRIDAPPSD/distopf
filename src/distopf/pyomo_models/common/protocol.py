@@ -14,7 +14,9 @@ class LindistModelProtocol(Protocol):
     phase_pair_set: pyo.Set
     bus_phase_set: pyo.Set
     branch_phase_set: pyo.Set
-    gen_phase_set: pyo.Set
+    gen_device_set: pyo.Set
+    gen_device_phase_set: pyo.Set
+    gen_phase_pair_set: pyo.Set
     cap_phase_set: pyo.Set
     reg_phase_set: pyo.Set
     bat_phase_set: pyo.Set
@@ -37,12 +39,14 @@ class LindistModelProtocol(Protocol):
     cvr_q: pyo.Param  # CVR factor for reactive power loads
 
     # Generator parameters
-    p_gen_nom: pyo.Param  # Nominal active power generation
-    q_gen_nom: pyo.Param  # Nominal reactive power generation
-    s_rated: pyo.Param  # Maximum apparent power rating
-    q_gen_max: pyo.Param  # Maximum reactive power generation
-    q_gen_min: pyo.Param  # Minimum reactive power generation
-    gen_control_type: pyo.Param  # Generator control variable type
+    gen_p_available: pyo.Param  # Shape-scaled available active power
+    gen_q_setpoint: pyo.Param  # Reactive power setpoint
+    gen_s_max: pyo.Param  # Maximum apparent power rating
+    gen_q_max: pyo.Param  # Clamped maximum reactive power
+    gen_q_min: pyo.Param  # Clamped minimum reactive power
+    gen_control: pyo.Param  # Generator control variable type
+    gen_cost: pyo.Param
+    gen_phase_lock: pyo.Param
 
     # Capacitor parameters
     q_cap_nom: pyo.Param  # Nominal capacitor reactive power at 1.0 p.u. voltage
@@ -108,6 +112,8 @@ class LindistModelProtocol(Protocol):
     ]  # Mapping from bus to (fb, tb) downstream branches
     primary_phase_map: Dict[Tuple[int, int], str]  # Center-tap primary phase by branch
     name_map: Dict[int, str]  # Mapping from bus ID to bus name
+    gen_bus_by_device: Dict[str, int]
+    gen_devices_by_bus_phase: Dict[Tuple[int, str], List[str]]
 
     # ==================== PYOMO UTILITIES ====================
     dual: pyo.Suffix  # Dual variable suffix for sensitivity analysis

@@ -102,9 +102,11 @@ def generation_curtailment_objective_rule(model: LindistModelProtocol):
     Pyomo expression for total curtailment
     """
     total_curtailment = 0
-    for _id, ph in model.gen_phase_set:
+    for device, ph in model.gen_device_phase_set:
         for t in model.time_set:
-            total_curtailment += model.p_gen_nom[_id, ph, t] - model.p_gen[_id, ph, t]
+            total_curtailment += (
+                model.gen_p_available[device, ph, t] - model.p_gen[device, ph, t]
+            )
     return total_curtailment
 
 
@@ -115,9 +117,9 @@ def cost_minimization_rule(m):
         for t in m.time_set:
             if fb in m.swing_bus_set:
                 total_cost += m.p_flow[fb, tb, ph, t] * m.price[t] * m.delta_t
-    for _id, ph in m.gen_phase_set:
+    for device, ph in m.gen_device_phase_set:
         for t in m.time_set:
-            total_cost += m.p_gen[_id, ph, t] * m.gen_cost[_id, ph] * m.delta_t
+            total_cost += m.p_gen[device, ph, t] * m.gen_cost[device, ph] * m.delta_t
     return total_cost
 
 
@@ -136,10 +138,10 @@ def substation_cost_objective_rule(model: LindistModelProtocol):
 
 def gen_cost_rule(model: LindistModelProtocol):
     generation_cost = 0
-    for _id, ph in model.gen_phase_set:
+    for device, ph in model.gen_device_phase_set:
         for t in model.time_set:
             generation_cost += (
-                model.p_gen[_id, ph, t] * model.gen_cost[_id, ph] * model.delta_t
+                model.p_gen[device, ph, t] * model.gen_cost[device, ph] * model.delta_t
             )
     return generation_cost
 
@@ -174,12 +176,12 @@ def generation_cost_with_substation_quadratic_penalty_objective_rule(
     """
     print(f"Substation penalty weight: {substation_penalty_weight}")
     generation_cost = 0
-    for _id, ph in model.gen_phase_set:
+    for device, ph in model.gen_device_phase_set:
         for t in model.time_set:
             energy_price = (
                 model.schedule_price[t] if hasattr(model, "schedule_price") else 1.0
             )
-            generation_cost += model.p_gen[_id, ph, t] * energy_price
+            generation_cost += model.p_gen[device, ph, t] * energy_price
 
     substation_penalty = 0
     for fb, tb, ph in model.branch_phase_set:
@@ -387,14 +389,14 @@ def generator_violation_penalty(model: LindistModelProtocol, weight: float = 1e3
     Returns 0 if model has no generators.
     Requires nonlinear solver.
     """
-    if len(model.gen_phase_set) == 0:
+    if len(model.gen_device_phase_set) == 0:
         return 0
 
     penalty = 0
-    for _id, ph in model.gen_phase_set:
-        s_rated_sq = pyo.value(model.s_rated[_id, ph]) ** 2
+    for device, ph in model.gen_device_phase_set:
+        s_rated_sq = pyo.value(model.gen_s_max[device, ph]) ** 2
         for t in model.time_set:
-            s_sq = model.p_gen[_id, ph, t] ** 2 + model.q_gen[_id, ph, t] ** 2
+            s_sq = model.p_gen[device, ph, t] ** 2 + model.q_gen[device, ph, t] ** 2
             violation = s_sq - s_rated_sq
             penalty += pyo.sqrt(violation**2 + 1e-8) + violation
     return weight * 0.5 * penalty

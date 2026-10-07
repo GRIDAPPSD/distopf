@@ -200,17 +200,24 @@ def add_capacity_expansion_variables(m, case: Case, zones):
 
 def add_capacity_expansion_p_flow_constraints(m):
     # --- custom power balance (includes p_der_inj) ----------------------------
-    def _p_balance(m: LindistModelProtocol, _id, ph, t):
-        load = m.p_load[_id, ph, t]
-        gen = m.p_gen[_id, ph, t] if (_id, ph, t) in m.p_gen else 0
-        bat = m.p_bat[_id, ph, t] if (_id, ph, t) in m.p_bat else 0
-        out = sum(
-            m.p_flow[tb, ph, t]
-            for tb in m.to_bus_map[_id]
-            if (tb, ph) in m.branch_phase_set
+    def _p_balance(m: LindistModelProtocol, fb, tb, ph, t):
+        load = m.p_load[tb, ph, t]
+        gen = sum(
+            m.p_gen[device, ph, t]
+            for device in m.gen_devices_by_bus_phase.get((tb, ph), [])
         )
-        return m.p_flow[_id, ph, t] == out + load - gen - bat - m.p_der_inj[_id, ph, t]
+        bat = m.p_bat[tb, ph, t] if (tb, ph, t) in m.p_bat else 0
+        out = sum(
+            m.p_flow[to_fb, to_tb, ph, t]
+            for to_fb, to_tb in m.to_bus_map[tb]
+            if (to_fb, to_tb, ph) in m.branch_phase_set
+        )
+        return (
+            m.p_flow[fb, tb, ph, t] == out + load - gen - bat - m.p_der_inj[tb, ph, t]
+        )
 
+    if hasattr(m, "power_balance_p"):
+        m.del_component("power_balance_p")
     m.power_balance_p = pyo.Constraint(m.branch_phase_set, m.time_set, rule=_p_balance)
 
 

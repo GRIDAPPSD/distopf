@@ -1561,7 +1561,7 @@ def create_case_from_csv(
 
         # Load bus data (required)
         if csv_files["bus_data"].exists():
-            bus_data = pd.read_csv(csv_files["bus_data"], header=0)
+            bus_data = pd.read_csv(csv_files["bus_data"], header=0, dtype={"name": str})
         else:
             raise FileNotFoundError(f"Required file not found: {csv_files['bus_data']}")
 

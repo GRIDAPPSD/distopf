@@ -176,7 +176,9 @@ def get_values(var: pyo.Var) -> pd.DataFrame:
     if {"fb", "tb", "from_name", "to_name"}.issubset(df.columns):
         index_cols = ["fb", "tb", "from_name", "to_name", "t"]
     elif "device_name" in df.columns:
-        index_cols = ["device_name", "t"]
+        index_cols = ["device_name"]
+        index_cols.extend(column for column in ("id", "name") if column in df.columns)
+        index_cols.append("t")
     else:
         index_cols = ["id", "name", "t"]
     df = df.pivot(index=index_cols, columns="phase", values="value").reset_index()
@@ -186,6 +188,8 @@ def get_values(var: pyo.Var) -> pd.DataFrame:
 
 def get_values_tidy_3ph(var: pyo.Var) -> pd.DataFrame:
     """Extract 3-phase variable values in tidy format."""
+    if var.local_name in ("p_gen", "q_gen", "p_mpssd", "q_mpssd"):
+        return get_values_tidy(var)
     return pd.DataFrame(
         data=[
             [_id, var.model().name_map[_id], t, _ph, _val]
@@ -208,6 +212,24 @@ def get_values_1ph(var: pyo.Var) -> pd.DataFrame:
 
 def get_values_tidy(var: pyo.Var) -> pd.DataFrame:
     """Extract variable values in tidy format, handling different dimensionalities."""
+    if var.local_name in ("p_gen", "q_gen") and hasattr(
+        var.model(), "gen_bus_by_device"
+    ):
+        model = var.model()
+        return pd.DataFrame(
+            data=[
+                [
+                    device,
+                    model.gen_bus_by_device[device],
+                    model.name_map[model.gen_bus_by_device[device]],
+                    time,
+                    phase,
+                    value,
+                ]
+                for (device, phase, time), value in var.extract_values().items()
+            ],
+            columns=["device_name", "id", "name", "t", "phase", "value"],
+        )
     if var.local_name in ("p_mpssd", "q_mpssd"):
         return pd.DataFrame(
             data=[
@@ -352,6 +374,26 @@ def get_constraint_duals_tidy(
 
     first_idx = next(iter(constraint))
 
+    bus_by_device = None
+    if constraint.local_name.startswith("gen_"):
+        bus_by_device = getattr(model, "gen_bus_by_device", None)
+    elif constraint.local_name.startswith("mpssd_"):
+        bus_by_device = getattr(model, "mpssd_bus_by_device", None)
+    if (
+        bus_by_device is not None
+        and isinstance(first_idx, tuple)
+        and len(first_idx) == 3
+    ):
+        data = []
+        for (device, phase, time), entry in constraint.items():
+            dual_value = model.dual.get(entry)
+            if dual_value is not None:
+                bus = bus_by_device[device]
+                data.append([device, bus, model.name_map[bus], time, phase, dual_value])
+        return pd.DataFrame(
+            data, columns=["device_name", "id", "name", "t", "phase", "dual"]
+        )
+
     # 3D constraint: either (_id, phase, t) or (fb, tb, phase)
     if isinstance(first_idx, tuple) and len(first_idx) == 3:
         data = []
@@ -447,8 +489,9 @@ def get_constraint_duals_pivoted(
     if df.empty or "phase" not in df.columns:
         return df
 
-    df_pivoted = df.pivot(
-        index=["id", "name", "t"], columns="phase", values="dual"
-    ).reset_index()
+    index = ["id", "name", "t"]
+    if "device_name" in df.columns:
+        index.insert(0, "device_name")
+    df_pivoted = df.pivot(index=index, columns="phase", values="dual").reset_index()
     df_pivoted.columns.name = None
     return df_pivoted

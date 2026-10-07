@@ -13,12 +13,125 @@ from distopf.pyomo_models.common.data import (
     normalize_device_table,
     parse_phases,
 )
+from distopf.pyomo_models.common.device_data import (
+    DeviceDataWarning,
+    InfeasibleCaseError,
+)
 from distopf.pyomo_models.common.registry import DeviceRegistry
 from distopf.pyomo_models.common.injection_providers import MappedInjectionProvider
 from distopf.pyomo_models.common.objectives import substation_cost_objective_rule
 from distopf.pyomo_models.common.results import PyoResult, get_values_tidy
+from distopf.pyomo_models.common.results import get_constraint_duals_pivoted
+from distopf.pyomo_models.common.results import get_values_tidy_3ph
+from distopf.pyomo_models.common import common_constraints, objectives
+from distopf.pyomo_models.devices.generator import GeneratorProvider
 from distopf.pyomo_models.devices.mpssd import MpssdProvider, validate_mpssd_data
 from distopf.pyomo_models.network.bfm import create_network_components
+from distopf.wrappers.pyomo_wrapper import PyomoWrapper
+
+
+@pytest.fixture
+def named_generator_model():
+    model = pyo.ConcreteModel()
+    model.bus_name_to_id_map = {"151": 2}
+    model.name_map = {1: "source", 2: "151"}
+    model.branch_phase_set = pyo.Set(initialize=[(1, 2, "a")], dimen=3)
+    model.bus_phase_set = pyo.Set(initialize=[(2, "a")], dimen=2)
+    model.swing_bus_set = pyo.Set(initialize=[1])
+    model.time_set = pyo.RangeSet(0, 1)
+    model.delta_t = pyo.Param(initialize=0.5)
+    model.price = pyo.Param(model.time_set, initialize=4)
+    model.schedule_price = pyo.Param(model.time_set, initialize=4)
+    model.p_flow = pyo.Var(model.branch_phase_set, model.time_set, initialize=2)
+    model.v2 = pyo.Var(model.bus_phase_set, model.time_set, initialize=1)
+    data = pd.DataFrame(
+        [
+            {
+                "device_name": device,
+                "bus_name": "151",
+                "phases": "a",
+                "control_variable": "PQ",
+                "p_a": power,
+                "s_a_max": 1,
+                "gen_shape": "profile",
+                "cost": cost,
+            }
+            for device, power, cost in (("pv1", 0.2, 3), ("pv2", 0.4, 5))
+        ]
+    )
+    case = SimpleNamespace(
+        gen_data=data, schedules=pd.DataFrame({"profile": [0.5, 1.0]})
+    )
+    GeneratorProvider().create_components(model, case, None)
+    for key, variable in model.p_gen.items():
+        variable.set_value(pyo.value(model.gen_p_available[key]) / 2)
+    return model
+
+
+def test_generator_objectives_use_scheduled_device_availability(named_generator_model):
+    model = named_generator_model
+    assert pyo.value(
+        objectives.generation_curtailment_objective_rule(model)
+    ) == pytest.approx(0.45)
+    assert pyo.value(objectives.gen_cost_rule(model)) == pytest.approx(0.975)
+    assert pyo.value(objectives.cost_minimization_rule(model)) == pytest.approx(8.975)
+    assert pyo.value(objectives.total_cost_rule(model)) == pytest.approx(16.975)
+    assert pyo.value(objectives.generator_violation_penalty(model)) >= 0
+    assert pyo.value(
+        objectives.generation_cost_with_substation_quadratic_penalty_objective_rule(
+            model
+        )
+    ) == pytest.approx(8000000.975)
+
+
+def test_generator_wrapper_aggregates_devices_by_bus(named_generator_model):
+    wrapper = PyomoWrapper(case=None)
+    wrapper.result = PyoResult(named_generator_model, results=None)
+    assert len(wrapper.result.p_gen) == 4
+    frame = wrapper.get_p_gens()
+    assert frame.columns.tolist() == ["id", "name", "t", "a"]
+    assert frame.id.tolist() == [2, 2]
+    assert frame.a.tolist() == pytest.approx([0.15, 0.3])
+    assert len(wrapper.get_q_gens()) == 2
+    pd.testing.assert_frame_equal(
+        get_values_tidy_3ph(named_generator_model.p_gen),
+        get_values_tidy(named_generator_model.p_gen),
+    )
+
+
+@pytest.mark.parametrize(
+    "helper, component",
+    [
+        ("add_generator_limits", "gen_p_limits"),
+        ("add_generator_constant_p_constraints", "gen_constant_p"),
+        ("add_generator_constant_q_constraints", "gen_constant_q"),
+        ("add_generator_constant_p_constraints_q_control", "gen_constant_p"),
+        ("add_generator_constant_q_constraints_p_control", "gen_constant_q"),
+        ("add_octagonal_inverter_constraints_pq_control", "gen_octagon_1"),
+        ("add_circular_generator_constraints_pq_control", "gen_circle"),
+    ],
+)
+def test_common_generator_helpers_use_provider_components(
+    named_generator_model, helper, component
+):
+    getattr(common_constraints, helper)(named_generator_model)
+    assert hasattr(named_generator_model, component)
+    assert not hasattr(named_generator_model, "gen_phase_set")
+
+
+def test_generator_duals_preserve_device_and_bus_metadata(named_generator_model):
+    model = named_generator_model
+    common_constraints.add_circular_generator_constraints_pq_control(model)
+    model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
+    for constraint in model.gen_circle.values():
+        model.dual[constraint] = 1.5
+    result = PyoResult(model, results=None)
+    tidy = result.get_dual("gen_circle")
+    assert tidy.columns.tolist() == ["device_name", "id", "name", "t", "phase", "dual"]
+    assert set(tidy.device_name) == {"pv1", "pv2"}
+    assert set(tidy.id) == {2}
+    assert set(tidy["name"]) == {"151"}
+    assert len(get_constraint_duals_pivoted(model.gen_circle, model)) == 4
 
 
 @pytest.fixture
@@ -77,6 +190,72 @@ def test_mpssd_unknown_bus_reports_validation_error(mpssd_data):
         validate_mpssd_data(mpssd_data, {}, set(), set())
 
 
+@pytest.mark.parametrize("column", ["dc_bus", "s_a_max"])
+def test_mpssd_shared_parsing_rejects_blank_required_numbers(mpssd_data, column):
+    mpssd_data[column] = "   "
+    with pytest.raises(ValueError, match=f"{column} is required"):
+        validate_mpssd_data(
+            mpssd_data, {"151": 1}, {(1, phase) for phase in "abc"}, set()
+        )
+
+
+@pytest.mark.parametrize(
+    "column, message",
+    [("id", "removed columns"), ("typo", "unrecognized columns")],
+)
+def test_mpssd_uses_shared_structural_checks(mpssd_data, column, message):
+    mpssd_data[column] = 1
+    with pytest.raises(ValueError, match=message):
+        validate_mpssd_data(
+            mpssd_data, {"151": 1}, {(1, phase) for phase in "abc"}, set()
+        )
+
+
+def test_mpssd_shared_validation_aggregates_errors(mpssd_data):
+    data = pd.concat([mpssd_data, mpssd_data], ignore_index=True)
+    data["s_a_max"] = "invalid"
+    with pytest.raises(ValueError) as caught:
+        validate_mpssd_data(data, {}, set(), set())
+    message = str(caught.value)
+    assert "duplicate device_name" in message
+    assert "bus_name '151' not found" in message
+    assert "s_a_max='invalid' is not a number" in message
+
+
+def test_mpssd_uses_shared_warnings(mpssd_data):
+    mpssd_data["phases"] = "a"
+    mpssd_data["p_a"] = 0.2
+    with pytest.warns(DeviceDataWarning) as caught:
+        validate_mpssd_data(mpssd_data, {"151": 1}, {(1, "a")}, set())
+    messages = [str(warning.message) for warning in caught]
+    assert any("p_a is ignored" in message for message in messages)
+    assert any("only one port" in message for message in messages)
+
+
+def test_mpssd_preserves_balanced_dc_interval_and_shared_exception(mpssd_data):
+    fixed = mpssd_data.copy()
+    fixed["device_name"] = "fixed"
+    fixed["control_variable"] = "Q"
+    for phase in "abc":
+        fixed[f"p_{phase}"] = 0.2
+    mpssd_data["s_a_max"] = 0.1
+    mpssd_data["s_b_max"] = 0.4
+    mpssd_data["s_c_max"] = 0.4
+    mpssd_data["balanced_phases"] = True
+    data = pd.concat([fixed, mpssd_data], ignore_index=True)
+    injectable = {(1, phase) for phase in "abc"}
+    with pytest.raises(InfeasibleCaseError, match="total P must be 0"):
+        validate_mpssd_data(data, {"151": 1}, injectable, set())
+    data.loc[1, "balanced_phases"] = False
+    validate_mpssd_data(data, {"151": 1}, injectable, set())
+    data.loc[1, "balanced_phases"] = True
+    data["dc_bus"] = data["dc_bus"].astype(object)
+    data.loc[0, "dc_bus"] = "invalid"
+    with pytest.raises(ValueError) as caught:
+        validate_mpssd_data(data, {"151": 1}, injectable, set())
+    assert not isinstance(caught.value, InfeasibleCaseError)
+
+
 @pytest.mark.parametrize(
     "missing", ["bus_name_to_id_map", "branch_phase_set", "swing_bus_set", "time_set"]
 )
@@ -88,7 +267,7 @@ def test_mpssd_requires_network_components(missing, mpssd_data):
         "time_set": [0],
     }
     del attrs[missing]
-    with pytest.raises(RuntimeError, match=f"needs model.{missing}"):
+    with pytest.raises(RuntimeError, match=f"needs model attributes .*{missing}"):
         MpssdProvider().create_components(
             SimpleNamespace(**attrs), SimpleNamespace(mpssd_data=mpssd_data), None
         )
@@ -107,6 +286,7 @@ def test_mpssd_builds_valid_multiperiod_ports(mpssd_data):
     )
     assert len(model.p_mpssd) == 6
     assert model.mpssd_devices_by_bus_phase[(1, "c")] == ["port"]
+    assert model.mpssd_bus_by_device == {"port": 1}
 
 
 def test_mpssd_results_preserve_device_names_and_network_results(mpssd_data):
@@ -158,6 +338,31 @@ def test_mpssd_results_preserve_device_names_and_network_results(mpssd_data):
     assert result.p_flow.to_name.tolist() == ["151", "151"]
     assert result.voltages.name.tolist() == ["151", "151"]
     assert result.voltages.a.tolist() == pytest.approx([1.1, 1.1])
+
+
+def test_generator_results_preserve_devices_sharing_a_bus():
+    model = pyo.ConcreteModel()
+    model.name_map = {1: "151"}
+    model.gen_bus_by_device = {"gen_1": 1, "gen_2": 1}
+    model.time_set = pyo.RangeSet(0, 1)
+    model.bus_phase_set = pyo.Set(initialize=[(1, "a")], dimen=2)
+    model.gen_device_phase_set = pyo.Set(
+        initialize=[("gen_1", "a"), ("gen_2", "a")], dimen=2
+    )
+    model.v2 = pyo.Var(model.bus_phase_set, model.time_set, initialize=1)
+    model.p_gen = pyo.Var(model.gen_device_phase_set, model.time_set, initialize=0.25)
+    model.q_gen = pyo.Var(model.gen_device_phase_set, model.time_set, initialize=-0.1)
+
+    result = PyoResult(model, results=None)
+
+    for name, value in (("p_gen", 0.25), ("q_gen", -0.1)):
+        frame = getattr(result, name)
+        assert frame.columns.tolist() == ["device_name", "id", "name", "t", "a"]
+        assert len(frame) == 4
+        assert set(frame.device_name) == {"gen_1", "gen_2"}
+        assert set(frame.id) == {1}
+        assert set(frame["name"]) == {"151"}
+        assert (frame.a == value).all()
 
 
 @pytest.mark.parametrize("control", ["", "P", "Q", "PQ"])

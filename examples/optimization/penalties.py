@@ -230,11 +230,11 @@ def extract_results(model: pyo.ConcreteModel) -> dict:
             results["power_flows"][(fb, tb, phase, t)] = {"p": p, "q": q}
 
     # Generator output
-    for _id, ph in model.gen_phase_set:
+    for device, ph in model.gen_device_phase_set:
         for t in model.time_set:
-            p = pyo.value(model.p_gen[_id, ph, t])
-            q = pyo.value(model.q_gen[_id, ph, t])
-            results["generator_output"][(_id, ph, t)] = {"p": p, "q": q}
+            p = pyo.value(model.p_gen[device, ph, t])
+            q = pyo.value(model.q_gen[device, ph, t])
+            results["generator_output"][(device, ph, t)] = {"p": p, "q": q}
 
     return results
 

@@ -35,18 +35,30 @@ mpssd_p2,300,abc,1,PQ,,,,,,,0.4,0.4,0.4
 
 from __future__ import annotations
 
-import math
-import warnings
 from typing import Any
 
 import pandas as pd
 import pyomo.environ as pyo  # type: ignore
 
 from distopf.pyomo_models.common.registry import DeviceProvider
-from distopf.pyomo_models.common.data import injectable_bus_phases, parse_phases
-from distopf.pyomo_models.common.model_types import (
-    ControlVariable,
-    CONTROL_VARIABLE_MAP,
+from distopf.pyomo_models.common.data import parse_phases
+from distopf.pyomo_models.common.model_types import ControlVariable
+from distopf.pyomo_models.common.device_data import (
+    TOL,
+    InfeasibleCaseError as InfeasibleCaseError,
+    NetworkContext,
+    cell_control,
+    cell_flag,
+    cell_num,
+    cell_opt_float,
+    cell_required_float,
+    cell_text,
+    check_columns,
+    check_connection,
+    check_device_names,
+    check_phases,
+    finish_validation,
+    row_label,
 )
 from distopf.utils.ngon import ngon_line_equations
 
@@ -65,77 +77,6 @@ _KNOWN = (
     | {f"s_{p}_max" for p in _PHASES}
     | {f"q_{p}_{b}" for p in _PHASES for b in ("min", "max")}
 )
-_TOL = 1e-9
-
-
-class InfeasibleCaseError(ValueError):
-    """The input data is well-formed but provably infeasible."""
-
-
-# --------------------------------------------------------------------------- #
-# Cell parsing helpers
-# --------------------------------------------------------------------------- #
-
-
-def _text(value: Any) -> str:
-    """Return a stripped string; missing or blank cells give ''."""
-    if value is None or pd.isna(value):
-        return ""
-    return str(value).strip()
-
-
-def _num(row: pd.Series, key: str, default: float) -> float:
-    """Return row[key] as float, treating missing columns and blank cells as default."""
-    value = row.get(key)
-    return default if value is None or pd.isna(value) else float(value)
-
-
-def _opt_float(row: pd.Series, key: str, label: str, errors: list[str]) -> float | None:
-    """Parse an optional numeric cell. Blank gives None; junk records an error."""
-    value = row.get(key)
-    if value is None or pd.isna(value):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        errors.append(f"{label}: {key}={value!r} is not a number")
-        return None
-    if not math.isfinite(number):
-        errors.append(f"{label}: {key} must be finite")
-        return None
-    return number
-
-
-def _flag(row: pd.Series, key: str, default: bool = False) -> bool:
-    """Parse a True/False CSV cell. Missing columns and blank cells give default."""
-    value = row.get(key)
-    if value is None or pd.isna(value):
-        return default
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text == "":
-            return default
-        if text in ("true", "1"):
-            return True
-        if text in ("false", "0"):
-            return False
-        raise ValueError(f"Cannot interpret {key}={value!r} as True/False")
-    return bool(value)
-
-
-def _control(row: pd.Series) -> ControlVariable:
-    """Parse control_variable. Missing or blank means ControlVariable.NONE."""
-    raw = row.get("control_variable")
-    text = _text(raw).upper()
-    if text == "":
-        return ControlVariable.NONE
-    try:
-        return CONTROL_VARIABLE_MAP[text]
-    except KeyError:
-        raise ValueError(
-            f"Unknown control_variable {raw!r}; expected one of "
-            f"{sorted(k for k in CONTROL_VARIABLE_MAP if k)} or blank"
-        ) from None
 
 
 # --------------------------------------------------------------------------- #
@@ -159,100 +100,63 @@ def validate_mpssd_data(
         return
 
     # ---- structural checks: fail immediately ----
-    cols = set(data.columns)
-    missing = _REQUIRED - cols
-    if missing:
-        raise ValueError(f"mpssd data missing columns: {sorted(missing)}")
-    legacy = _LEGACY & cols
-    if legacy:
-        raise ValueError(
-            f"mpssd data has removed columns {sorted(legacy)}; devices are "
-            "identified by 'device_name' and buses by 'bus_name'"
-        )
-    unknown = cols - _KNOWN
-    if unknown:
-        raise ValueError(
-            f"mpssd data has unrecognized columns (typo?): {sorted(unknown)}"
-        )
+    check_columns(
+        data,
+        "mpssd",
+        _REQUIRED,
+        _KNOWN,
+        _LEGACY,
+        "devices are identified by 'device_name' and buses by 'bus_name'",
+    )
+    ctx = NetworkContext(
+        bus_name_to_id=bus_name_to_id_map,
+        injectable=frozenset(injectable),
+        swing_buses=frozenset(swing_buses),
+        times=(),
+    )
 
     errors: list[str] = []
     warns: list[str] = []
 
     # ---- device names ----
-    names = data["device_name"].map(_text)
-    if (names == "").any():
-        errors.append("blank device_name values")
-    dupes = sorted(set(names[names.duplicated() & (names != "")]))
-    if dupes:
-        errors.append(f"duplicate device_name values: {dupes}")
+    check_device_names(data, errors)
 
     # dc_bus -> list of (label, p_lo, p_hi, n_ports)
     dc_intervals: dict[int, list[tuple[str, float, float, int]]] = {}
 
     for idx, row in data.iterrows():
-        name = _text(row["device_name"])
-        label = f"device {name!r}" if name else f"row {idx}"
+        label = row_label(row, idx)
         errors_before = len(errors)
 
         # bus
-        bus_name = _text(row["bus_name"])
-        if bus_name not in bus_name_to_id_map:
-            errors.append(f"{label}: bus_name {bus_name!r} not found in network")
+        bus_name = cell_text(row["bus_name"])
 
         # phases
-        try:
-            phases = list(parse_phases(str(row["phases"])))
-        except Exception as exc:
-            errors.append(f"{label}: cannot parse phases {row['phases']!r} ({exc})")
-            continue
-        if (
-            not phases
-            or len(set(phases)) != len(phases)
-            or not set(phases) <= set(_PHASES)
-        ):
-            errors.append(
-                f"{label}: MPSSD supports phases a, b, c only; "
-                f"phases {row['phases']!r} must be unique letters from 'abc'"
-            )
+        phases = check_phases(label, row["phases"], _PHASES, errors)
+        if phases is None:
+            errors[-1] += "; MPSSD supports phases a, b, c only"
             continue
 
-        if bus_name in bus_name_to_id_map:
-            bus_id = bus_name_to_id_map[bus_name]
-            if bus_id in swing_buses:
-                errors.append(
-                    f"{label}: bus {bus_name!r} is a swing/boundary bus; "
-                    "device injections there are not modeled"
-                )
-            else:
-                absent = [
-                    phase for phase in phases if (bus_id, phase) not in injectable
-                ]
-                if absent:
-                    errors.append(
-                        f"{label}: phases {absent} have no incoming branch at bus "
-                        f"{bus_name!r}; power on those ports would be unbalanced"
-                    )
+        check_connection(label, bus_name, phases, ctx, errors)
 
         # dc_bus
         dc_bus: int | None = None
-        dc_value = _opt_float(row, "dc_bus", label, errors)
-        if dc_value is None:
-            if pd.isna(row.get("dc_bus")):
-                errors.append(f"{label}: dc_bus is required")
-        elif dc_value != round(dc_value):
-            errors.append(f"{label}: dc_bus={dc_value} must be a whole number")
-        else:
-            dc_bus = int(dc_value)
+        dc_value = cell_required_float(row, "dc_bus", label, errors)
+        if dc_value is not None:
+            if dc_value != round(dc_value):
+                errors.append(f"{label}: dc_bus={dc_value} must be a whole number")
+            else:
+                dc_bus = int(dc_value)
 
         # control mode and phase-balance flag
         ctrl: ControlVariable | None
         try:
-            ctrl = _control(row)
+            ctrl = cell_control(row)
         except ValueError as exc:
             errors.append(f"{label}: {exc}")
             ctrl = None
         try:
-            balanced = _flag(row, "balanced_phases", default=False)
+            balanced = cell_flag(row, "balanced_phases", default=False)
         except ValueError as exc:
             errors.append(f"{label}: {exc}")
             balanced = False
@@ -266,20 +170,14 @@ def validate_mpssd_data(
 
         # per-phase checks
         for phase in phases:
-            s_max = _opt_float(row, f"s_{phase}_max", label, errors)
-            if s_max is None:
-                if pd.isna(row.get(f"s_{phase}_max")):
-                    errors.append(f"{label}: s_{phase}_max is required")
-            elif s_max <= 0:
-                errors.append(f"{label}: s_{phase}_max must be > 0")
-                s_max = None
+            s_max = cell_required_float(row, f"s_{phase}_max", label, errors, gt=0)
             if s_max is not None:
                 s_list.append(s_max)
 
-            p_set = _opt_float(row, f"p_{phase}", label, errors)
-            q_set = _opt_float(row, f"q_{phase}", label, errors)
-            q_lo = _opt_float(row, f"q_{phase}_min", label, errors)
-            q_hi = _opt_float(row, f"q_{phase}_max", label, errors)
+            p_set = cell_opt_float(row, f"p_{phase}", label, errors)
+            q_set = cell_opt_float(row, f"q_{phase}", label, errors)
+            q_lo = cell_opt_float(row, f"q_{phase}_min", label, errors)
+            q_hi = cell_opt_float(row, f"q_{phase}_max", label, errors)
 
             # effective Q bounds, same clamping as create_components
             lo = hi = None
@@ -302,7 +200,7 @@ def validate_mpssd_data(
                     )
                 else:
                     p_vals.append(p_set)
-                    if s_max is not None and abs(p_set) > s_max + _TOL:
+                    if s_max is not None and abs(p_set) > s_max + TOL:
                         errors.append(
                             f"{label}: p_{phase}={p_set} exceeds s_{phase}_max={s_max}"
                         )
@@ -321,7 +219,7 @@ def validate_mpssd_data(
                     if (
                         lo is not None
                         and hi is not None
-                        and not (lo - _TOL <= q_set <= hi + _TOL)
+                        and not (lo - TOL <= q_set <= hi + TOL)
                     ):
                         errors.append(
                             f"{label}: q_{phase}={q_set} is outside [{lo}, {hi}]"
@@ -338,7 +236,7 @@ def validate_mpssd_data(
                 and s_max is not None
                 and p_set is not None
                 and q_set is not None
-                and p_set**2 + q_set**2 > s_max**2 + _TOL
+                and p_set**2 + q_set**2 > s_max**2 + TOL
             ):
                 errors.append(
                     f"{label}: fixed (p_{phase}, q_{phase}) = ({p_set}, {q_set}) "
@@ -348,7 +246,7 @@ def validate_mpssd_data(
         # phase balance vs. fixed setpoints
         if balanced and len(phases) > 1:
             for kind, vals in (("p", p_vals), ("q", q_vals)):
-                if vals and max(vals) - min(vals) > _TOL:
+                if vals and max(vals) - min(vals) > TOL:
                     errors.append(
                         f"{label}: balanced_phases=True but fixed {kind} setpoints "
                         "differ between phases"
@@ -365,34 +263,21 @@ def validate_mpssd_data(
                 p_lo, p_hi = -sum(s_list), sum(s_list)
             dc_intervals.setdefault(dc_bus, []).append((label, p_lo, p_hi, n))
 
-    # ---- stage 1: data errors ----
-    for message in warns:
-        warnings.warn(f"mpssd: {message}", stacklevel=2)
-    if errors:
-        raise ValueError(
-            "Invalid mpssd data:\n" + "\n".join(f"  - {e}" for e in errors)
-        )
-
-    # ---- stage 2: provable infeasibility (data is well-formed here) ----
     infeasible: list[str] = []
     for dc_bus, items in sorted(dc_intervals.items()):
         lo = sum(item[1] for item in items)
         hi = sum(item[2] for item in items)
-        if lo > _TOL or hi < -_TOL:
+        if lo > TOL or hi < -TOL:
             who = ", ".join(item[0] for item in items)
             infeasible.append(
                 f"dc_bus {dc_bus}: total P must be 0 but can only range over "
                 f"[{lo:g}, {hi:g}] (devices: {who})"
             )
-        if sum(item[3] for item in items) == 1:
-            warnings.warn(
-                f"mpssd: dc_bus {dc_bus} has only one port; its P will be forced to 0",
-                stacklevel=2,
+        if not errors and sum(item[3] for item in items) == 1:
+            warns.append(
+                f"dc_bus {dc_bus} has only one port; its P will be forced to 0"
             )
-    if infeasible:
-        raise InfeasibleCaseError(
-            "mpssd case is infeasible:\n" + "\n".join(f"  - {m}" for m in infeasible)
-        )
+    finish_validation("mpssd", errors, infeasible, warns)
 
 
 # --------------------------------------------------------------------------- #
@@ -406,31 +291,22 @@ class MpssdProvider(DeviceProvider):
     name = "mpssd"
 
     def create_components(self, model: Any, case: Any, config: Any) -> None:
-        for attr in (
-            "bus_name_to_id_map",
-            "branch_phase_set",
-            "swing_bus_set",
-            "time_set",
-        ):
-            if not hasattr(model, attr):
-                raise RuntimeError(
-                    f"MpssdProvider needs model.{attr}; the network provider "
-                    "must create components first"
-                )
+        ctx = NetworkContext.from_model(model, "MpssdProvider")
         data = getattr(case, "mpssd_data", None)
         if data is None:
             data = pd.DataFrame()
         validate_mpssd_data(
             data,
-            model.bus_name_to_id_map,
-            injectable_bus_phases(model),
-            set(model.swing_bus_set),
+            ctx.bus_name_to_id,
+            set(ctx.injectable),
+            set(ctx.swing_buses),
         )
-        times = list(model.time_set)
+        times = ctx.times
 
         devices: list[str] = []
         ports: list[tuple[str, str]] = []
         phases_by_device: dict[str, list[str]] = {}
+        bus_by_device: dict[str, int] = {}
         devices_by_bus_phase: dict[tuple[int, str], list[str]] = {}
         ports_by_dc_bus: dict[int, list[tuple[str, str]]] = {}
 
@@ -443,29 +319,30 @@ class MpssdProvider(DeviceProvider):
         phase_balanced: dict[str, bool] = {}
 
         for _, row in data.iterrows():
-            device = _text(row["device_name"])
-            bus = int(model.bus_name_to_id_map[_text(row["bus_name"])])
+            device = cell_text(row["device_name"])
+            bus = int(ctx.bus_name_to_id[cell_text(row["bus_name"])])
             dc_bus = int(float(row["dc_bus"]))
-            phases = list(parse_phases(str(row["phases"])))
-            ctrl = _control(row)
+            phases = list(parse_phases(cell_text(row["phases"])))
+            ctrl = cell_control(row)
 
             devices.append(device)
             phases_by_device[device] = phases
-            phase_balanced[device] = _flag(row, "balanced_phases", default=False)
+            bus_by_device[device] = bus
+            phase_balanced[device] = cell_flag(row, "balanced_phases", default=False)
 
             for phase in phases:
                 port = (device, phase)
                 rating = float(row[f"s_{phase}_max"])
-                p_nom = _num(row, f"p_{phase}", 0.0)  # blank only where ignored
-                q_nom = _num(row, f"q_{phase}", 0.0)
+                p_nom = cell_num(row, f"p_{phase}", 0.0)  # blank only where ignored
+                q_nom = cell_num(row, f"q_{phase}", 0.0)
 
                 ports.append(port)
                 devices_by_bus_phase.setdefault((bus, phase), []).append(device)
                 ports_by_dc_bus.setdefault(dc_bus, []).append(port)
 
                 s_max[port] = rating
-                q_min[port] = max(-rating, _num(row, f"q_{phase}_min", -rating))
-                q_max[port] = min(rating, _num(row, f"q_{phase}_max", rating))
+                q_min[port] = max(-rating, cell_num(row, f"q_{phase}_min", -rating))
+                q_max[port] = min(rating, cell_num(row, f"q_{phase}_max", rating))
                 control[port] = ctrl
 
                 # Constant for now. Replace with a schedule lookup later.
@@ -480,6 +357,7 @@ class MpssdProvider(DeviceProvider):
 
         # Lookup maps (plain dicts)
         model.mpssd_phases_by_device = phases_by_device
+        model.mpssd_bus_by_device = bus_by_device
         model.mpssd_devices_by_bus_phase = devices_by_bus_phase
         model.mpssd_ports_by_dc_bus = ports_by_dc_bus
 
@@ -617,8 +495,6 @@ def add_ngon_constraints(m: Any, n: int = 8) -> None:
         return rule
 
     for i, (a, b) in enumerate(ngon_line_equations(n), start=1):
-        if a < -1e-9:
-            continue
         setattr(
             m,
             f"mpssd_ngon_limit_{i}",

@@ -533,11 +533,21 @@ class PyomoWrapper(Wrapper):
 
     def get_p_gens(self) -> pd.DataFrame:
         """Extract active power generation results from solved model."""
-        return self.result.p_gen
+        return self._get_generator_values("p_gen")
 
     def get_q_gens(self) -> pd.DataFrame:
         """Extract reactive power generation results from solved model."""
-        return self.result.q_gen
+        return self._get_generator_values("q_gen")
+
+    def _get_generator_values(self, variable: str) -> pd.DataFrame:
+        """Aggregate device-level generation to the bus-level result contract."""
+        frame = getattr(self.result, variable)
+        if "device_name" not in frame.columns:
+            return frame
+        phases = [phase for phase in ("a", "b", "c", "s1", "s2") if phase in frame]
+        return frame.groupby(["id", "name", "t"], as_index=False)[phases].sum(
+            min_count=1
+        )
 
     def get_all_results(self) -> dict[str, pd.DataFrame]:
         """Get all variable results from the solved model.

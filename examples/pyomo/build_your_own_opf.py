@@ -213,7 +213,9 @@ def _(model, pyo):
     from pyomo.core.expr.calculus.derivatives import differentiate
 
     control_variables = [
-        model.q_gen[i, "a", 12] for i, ph in model.gen_phase_set if ph == "a"
+        model.q_gen[device, "a", 12]
+        for device, ph in model.gen_device_phase_set
+        if ph == "a"
     ]
 
     obj_expr = model.objective.expr
