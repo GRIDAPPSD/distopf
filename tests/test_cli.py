@@ -161,9 +161,7 @@ def test_compare_reports_substation_active_and_reactive_power_errors(tmp_path):
     )
     assert exact_result.exit_code == 0
     exact_substation = json.loads(exact_result.output)["substation"]
-    assert exact_substation["active_power"]["relative_error_pct"] == pytest.approx(
-        20.0
-    )
+    assert exact_substation["active_power"]["relative_error_pct"] == pytest.approx(20.0)
     assert exact_substation["reactive_power"]["relative_error_pct"] == pytest.approx(
         50.0
     )
@@ -277,9 +275,9 @@ def test_compare_exact_reuses_existing_comparison_unless_overwritten(tmp_path):
     assert reused.exit_code == 0
     reused_payload = json.loads(reused.output)
     assert reused_payload["comparison_reused"] is True
-    assert reused_payload["tables"]["active_power_loads.csv"]["max_abs"] == pytest.approx(
-        1.0
-    )
+    assert reused_payload["tables"]["active_power_loads.csv"][
+        "max_abs"
+    ] == pytest.approx(1.0)
     assert comparison_file.read_text(encoding="utf-8") == original_content
 
     overwritten = CliRunner().invoke(
@@ -296,9 +294,9 @@ def test_compare_exact_reuses_existing_comparison_unless_overwritten(tmp_path):
     assert overwritten.exit_code == 0
     overwritten_payload = json.loads(overwritten.output)
     assert overwritten_payload["exact_replay_run"] is False
-    assert overwritten_payload["tables"]["active_power_loads.csv"]["max_abs"] == pytest.approx(
-        3.0
-    )
+    assert overwritten_payload["tables"]["active_power_loads.csv"][
+        "max_abs"
+    ] == pytest.approx(3.0)
     assert "comparison_reused" not in overwritten_payload
 
 
@@ -508,7 +506,9 @@ def test_compare_exact_batch_reports_finished_folders_in_human_output(
             )
         )
     ]
-    assert all(re.match(r"^\[\d{4}-\d{2}-\d{2}T[^\]]+\] ", line) for line in progress_lines)
+    assert all(
+        re.match(r"^\[\d{4}-\d{2}-\d{2}T[^\]]+\] ", line) for line in progress_lines
+    )
     assert f"[1/2] failed: {failed}" in result.output
     assert f"[2/2] finished: {succeeded}" in result.output
     assert "Compared 2 folders" in result.output
@@ -551,7 +551,9 @@ def test_compare_exact_batch_progress_does_not_corrupt_json_output(tmp_path):
             )
         )
     ]
-    assert all(re.match(r"^\[\d{4}-\d{2}-\d{2}T[^\]]+\] ", line) for line in progress_lines)
+    assert all(
+        re.match(r"^\[\d{4}-\d{2}-\d{2}T[^\]]+\] ", line) for line in progress_lines
+    )
     assert f"[1/2] finished: {first}" in result.stderr
     assert f"[2/2] finished: {second}" in result.stderr
 

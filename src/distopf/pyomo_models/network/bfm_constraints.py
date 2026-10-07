@@ -188,8 +188,9 @@ def add_q_flow_constraints(m: LindistModelProtocol, linear=True) -> None:
         loss = 0
         if not linear:
             loss = _reactive_power_loss(m, fb, tb, ph, t)
-        return incoming_flow - loss == outgoing_flows - registry.reactive_power_injection(
-            m, tb, ph, t
+        return (
+            incoming_flow - loss
+            == outgoing_flows - registry.reactive_power_injection(m, tb, ph, t)
         )
 
     m.power_balance_q = pyo.Constraint(

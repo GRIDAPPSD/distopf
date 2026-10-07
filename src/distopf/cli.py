@@ -337,8 +337,8 @@ def _generic_table_comparison(
 ) -> tuple[dict[str, Any], Any]:
     import pandas as pd
 
-    is_power_table = Path(name).stem.lower().startswith(
-        ("active_power_", "reactive_power_")
+    is_power_table = (
+        Path(name).stem.lower().startswith(("active_power_", "reactive_power_"))
     )
     keys = _comparison_keys(left, right)
     if keys:
@@ -452,9 +452,7 @@ def _generic_table_comparison(
         worst = differences.loc[differences["difference_abs"].idxmax()]
         reference = abs(worst["right"])
         stats["max_abs_pct"] = (
-            float(100 * worst["difference_abs"] / reference)
-            if reference != 0
-            else None
+            float(100 * worst["difference_abs"] / reference) if reference != 0 else None
         )
     return stats, differences
 
@@ -467,7 +465,9 @@ def _substation_power_error(left: Any, right: Any) -> dict[str, Any]:
         if "fb" not in frame.columns:
             raise ValueError(f"{label} flow table is missing 'fb'")
     if ("t" in left.columns) != ("t" in right.columns):
-        raise ValueError("Both flow tables must contain 't' for multi-period comparison")
+        raise ValueError(
+            "Both flow tables must contain 't' for multi-period comparison"
+        )
 
     metadata_columns = {
         "id",
@@ -528,9 +528,7 @@ def _substation_power_error(left: Any, right: Any) -> dict[str, Any]:
         "difference_signed": float(worst["difference_signed"]),
         "absolute_error": float(worst["difference_abs"]),
         "relative_error_pct": (
-            float(100 * worst["difference_abs"] / reference)
-            if reference != 0
-            else None
+            float(100 * worst["difference_abs"] / reference) if reference != 0 else None
         ),
     }
     if period_keys:
@@ -609,9 +607,7 @@ def _comparison_payload(
     ):
         if filename in flow_tables:
             try:
-                substation[power_type] = _substation_power_error(
-                    *flow_tables[filename]
-                )
+                substation[power_type] = _substation_power_error(*flow_tables[filename])
             except (ValueError, KeyError, TypeError) as exc:
                 substation[power_type] = {"error": str(exc)}
     return {
@@ -688,7 +684,9 @@ def _emit_comparison(response: dict[str, Any], as_json: bool) -> None:
                 f"{filename}: max={stats['max_abs_pu']:.6g} p.u., mean={stats['mean_abs_pu']:.6g} p.u."
             )
         else:
-            line = f"{filename}: max={stats['max_abs']:.6g}, mean={stats['mean_abs']:.6g}"
+            line = (
+                f"{filename}: max={stats['max_abs']:.6g}, mean={stats['mean_abs']:.6g}"
+            )
             if "max_abs_pct" in stats:
                 percent = (
                     "undefined"
@@ -806,9 +804,7 @@ def _directories_at_depth(folder: Path, depth: int) -> list[Path]:
             except OSError:
                 continue
         directories = children
-    return sorted(
-        directories, key=lambda path: path.relative_to(folder).as_posix()
-    )
+    return sorted(directories, key=lambda path: path.relative_to(folder).as_posix())
 
 
 def _report_batch_progress(

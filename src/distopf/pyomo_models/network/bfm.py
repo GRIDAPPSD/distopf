@@ -144,7 +144,7 @@ def create_network_operating_parameters(model: pyo.ConcreteModel, case: Case) ->
                     break
     if thermal:
         model.s_branch_max = pyo.Param(
-            model.branch_phase_set, initialize=thermal, default=None
+            model.branch_phase_set, initialize=thermal, default=None, within=pyo.Any
         )
     model.price = pyo.Param(
         model.time_set,

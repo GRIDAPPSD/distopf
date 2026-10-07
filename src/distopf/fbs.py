@@ -1560,7 +1560,9 @@ def run_fbs_with_opf_setpoints(
         current = case.copy()
         if current.schedules is not None and len(current.schedules):
             _apply_schedule_to_case(current, t)
-            current.ignore_schedule = True  # snapshot loads already include the schedule
+            current.ignore_schedule = (
+                True  # snapshot loads already include the schedule
+            )
         _apply_boundary_load_setpoints(
             current, _at_period(loads[0], t), _at_period(loads[1], t)
         )
@@ -1921,7 +1923,9 @@ def _apply_battery_setpoints_to_case(case, p_bats, q_bats):
 def _load_multiplier(schedules, t, shape, phase, kind):
     if phase == "s1s2":
         # The OPF splits s1s2 over both legs, so the mean keeps total power equal.
-        legs = [_load_multiplier(schedules, t, shape, leg, kind) for leg in ("s1", "s2")]
+        legs = [
+            _load_multiplier(schedules, t, shape, leg, kind) for leg in ("s1", "s2")
+        ]
         return sum(legs) / 2
     phase_column = f"{shape}.{phase}.{kind}"
     if phase_column in schedules.columns:

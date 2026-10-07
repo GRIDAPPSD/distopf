@@ -10,7 +10,7 @@ def ngon_line_equations(n, theta0=0, decimals=12):
         List of (a, b) tuples of Python floats.
     """
     r = 1.0 / np.cos(np.pi / n)
-    angles = theta0 + np.pi/n + np.arange(n) * (2 * np.pi / n)
+    angles = theta0 + np.pi / n + np.arange(n) * (2 * np.pi / n)
     eqs = np.column_stack((r * np.cos(angles), r * np.sin(angles)))
     eqs = np.round(eqs, decimals) + 0.0
     return [tuple(row) for row in eqs.tolist()]

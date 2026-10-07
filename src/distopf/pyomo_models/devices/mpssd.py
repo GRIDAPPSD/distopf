@@ -318,6 +318,7 @@ def add_p_phase_balance_constraints(m: LindistModelProtocol) -> None:
 
     m.mpssd_p_balanced_phases = pyo.Constraint(m.mpssd_phase_set, m.time_set, rule=rule)
 
+
 def add_q_phase_balance_constraints(m: LindistModelProtocol) -> None:
     """Enforce phase balance for devices with the balanced_phases attribute set to True."""
 

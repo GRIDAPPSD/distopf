@@ -54,9 +54,7 @@ def test_fbs_applies_cvr_to_regular_phase_loads():
 
 def test_fbs_applies_cvr_to_secondary_legs_and_pair_loads():
     fbs = FBS.__new__(FBS)
-    fbs.node_loads = {
-        2: np.array([0, 0, 0, 0.2 + 0.1j, 0.3 + 0.15j, 1.0 + 0.4j])
-    }
+    fbs.node_loads = {2: np.array([0, 0, 0, 0.2 + 0.1j, 0.3 + 0.15j, 1.0 + 0.4j])}
     fbs.node_generations = {}
     fbs.bus_data = pd.DataFrame([{"id": 2, "cvr_p": 0.8, "cvr_q": 0.5}])
     voltage = np.array([0, 0, 0, 0.8, 1.0], dtype=complex)
@@ -107,9 +105,26 @@ def test_gen_setpoints_are_noop_without_generators():
 def test_schedule_replay_scales_s1s2_loads_gen_p_and_swing_voltage():
     bus = pd.DataFrame(
         [
-            {"id": 1, "bus_type": "SWING", "load_shape": "", "v_a": 1.0, "v_b": 1.0, "v_c": 1.0},
-            {"id": 2, "bus_type": "PQ", "load_shape": "M", "v_a": 1.0, "v_b": 1.0, "v_c": 1.0,
-             "pl_s1": 1.0, "pl_s2": 2.0, "pl_s1s2": 4.0, "ql_s1s2": 2.0},
+            {
+                "id": 1,
+                "bus_type": "SWING",
+                "load_shape": "",
+                "v_a": 1.0,
+                "v_b": 1.0,
+                "v_c": 1.0,
+            },
+            {
+                "id": 2,
+                "bus_type": "PQ",
+                "load_shape": "M",
+                "v_a": 1.0,
+                "v_b": 1.0,
+                "v_c": 1.0,
+                "pl_s1": 1.0,
+                "pl_s2": 2.0,
+                "pl_s1s2": 4.0,
+                "ql_s1s2": 2.0,
+            },
         ]
     )
     schedules = pd.DataFrame(
@@ -138,8 +153,22 @@ def test_gen_setpoints_must_cover_every_generator():
 def test_boundary_load_setpoints_only_touch_out_buses():
     bus = pd.DataFrame(
         [
-            {"id": 1, "bus_type": "PQ", "pl_a": 1.0, "ql_a": 1.0, "cvr_p": 1.0, "cvr_q": 1.0},
-            {"id": 2, "bus_type": "OUT", "pl_a": 1.0, "ql_a": 1.0, "cvr_p": 1.0, "cvr_q": 1.0},
+            {
+                "id": 1,
+                "bus_type": "PQ",
+                "pl_a": 1.0,
+                "ql_a": 1.0,
+                "cvr_p": 1.0,
+                "cvr_q": 1.0,
+            },
+            {
+                "id": 2,
+                "bus_type": "OUT",
+                "pl_a": 1.0,
+                "ql_a": 1.0,
+                "cvr_p": 1.0,
+                "cvr_q": 1.0,
+            },
         ]
     )
     case = _Case(bus, pd.DataFrame())
@@ -191,9 +220,7 @@ def test_fbs_load_results_split_s1s2_between_reported_legs():
     ):
         reported = result_frame.set_index("id")
         for phase in ("s1", "s2"):
-            expected = raw_loads[f"{prefix}_{phase}"] + raw_loads[
-                f"{prefix}_s1s2"
-            ] / 2
+            expected = raw_loads[f"{prefix}_{phase}"] + raw_loads[f"{prefix}_s1s2"] / 2
             np.testing.assert_allclose(
                 reported[phase].reindex(expected.index), expected, equal_nan=True
             )
