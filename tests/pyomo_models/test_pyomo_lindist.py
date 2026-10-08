@@ -93,9 +93,9 @@ def simple_case_data():
         {
             "fb": [1],
             "tb": [2],
-            "ratio_a": [1.0],
-            "ratio_b": [1.0],
-            "ratio_c": [1.0],
+            "tap_a": [0],
+            "tap_b": [0],
+            "tap_c": [0],
             "phases": ["abc"],
         }
     )

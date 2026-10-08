@@ -113,8 +113,6 @@ class TestPyomoModelsExports:
         assert callable(bfm_constraints.add_q_flow_constraints)
         assert callable(bfm_constraints.add_voltage_drop_constraints)
         assert callable(common_constraints.add_voltage_limits)
-        assert callable(common_constraints.add_generator_limits)
-        assert callable(common_constraints.add_battery_energy_constraints)
 
     def test_result_extraction_exported(self):
         """Result extraction functions should be exported."""

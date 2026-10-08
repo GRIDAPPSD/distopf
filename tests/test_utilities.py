@@ -169,8 +169,8 @@ class TestUtilityFunctions:
         assert "ratio_a" in result.columns
         assert abs(result.loc[result.tb == 2, "ratio_a"].iloc[0] - 1.0) < 1e-6
 
-    def test_handle_reg_input_ratio_to_tap_conversion(self):
-        """handle_reg_input should compute tap from ratio."""
+    def test_handle_reg_input_rejects_ratio_without_tap(self):
+        """Regulator ratios are derived from taps, not accepted as input."""
         reg = pd.DataFrame(
             {
                 "fb": [1],
@@ -181,9 +181,21 @@ class TestUtilityFunctions:
                 "ratio_c": [1.0],
             }
         )
+        with pytest.raises(ValueError, match="tap_a is required"):
+            handle_reg_input(reg)
+
+    def test_handle_reg_input_tap_overrides_supplied_ratio(self):
+        reg = pd.DataFrame(
+            {
+                "fb": [1],
+                "tb": [2],
+                "phases": ["a"],
+                "tap_a": [4],
+                "ratio_a": [1.5],
+            }
+        )
         result = handle_reg_input(reg)
-        assert "tap_a" in result.columns
-        assert abs(result.loc[result.tb == 2, "tap_a"].iloc[0]) < 1e-6
+        assert result.loc[result.tb == 2, "ratio_a"].iloc[0] == pytest.approx(1.025)
 
     def test_handle_schedules_input_none(self):
         """handle_schedules_input(None) returns empty DataFrame."""

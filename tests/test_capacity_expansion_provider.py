@@ -3,11 +3,11 @@
 import pandas as pd
 import pyomo.environ as pyo
 
-from distopf.pyomo_models.extensions.capacity_expansion import (
+from distopf.pyomo_models.extensions.capacity_expansion.capacity_expansion_constraints import (
     add_capacity_expansion_as_fraction_of_load,
     add_capacity_expansion_p_flow_constraints,
 )
-from distopf.pyomo_models.extensions.capacity_expansion_provider import (
+from distopf.pyomo_models.extensions.capacity_expansion.capacity_expansion import (
     CapacityExpansionProvider,
 )
 from distopf.pyomo_models.common.registry import DeviceRegistry

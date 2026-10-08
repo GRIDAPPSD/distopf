@@ -26,12 +26,271 @@ from distopf.pyomo_models.common.results import get_constraint_duals_pivoted
 from distopf.pyomo_models.common.results import get_values_tidy_3ph
 from distopf.pyomo_models.common import common_constraints, objectives
 from distopf.pyomo_models.devices.generator import GeneratorProvider
+from distopf.pyomo_models.devices.load import LoadProvider
+from distopf.pyomo_models.devices.battery import BatteryProvider, validate_bat_data
+from distopf.pyomo_models.devices.regulator import RegulatorProvider, validate_reg_data
 from distopf.pyomo_models.devices.capacitor import CapacitorProvider, validate_cap_data
-from distopf.pyomo_models.devices.mpssd import MpssdProvider, validate_mpssd_data
+from distopf.pyomo_models.extensions.mpssd.mpssd import (
+    MpssdProvider,
+    validate_mpssd_data,
+)
 from distopf.pyomo_models.network.bfm import create_network_components
 from distopf.wrappers.pyomo_wrapper import PyomoWrapper
 from distopf.pyomo_models.common.factory import create_lindist_model
 from distopf.api import Case
+
+
+@pytest.mark.parametrize("bus_name", ["151", " 151 "])
+def test_legacy_capacitors_accept_decomposition_bus_names(capacitor_model, bus_name):
+    data = pd.DataFrame(
+        [
+            {
+                "id": 2,
+                "name": "capacitor",
+                "bus_name": bus_name,
+                "phases": "a",
+                "q_a": 0.1,
+            }
+        ]
+    )
+    original = data.copy(deep=True)
+    provider = CapacitorProvider()
+    provider.create_components(capacitor_model, SimpleNamespace(cap_data=data), None)
+    provider.add_constraints(capacitor_model, None)
+    assert capacitor_model.cap_bus_by_device == {"cap_0": 2}
+    assert pyo.value(capacitor_model.cap_q_nom["cap_0", "a"]) == pytest.approx(0.1)
+    pd.testing.assert_frame_equal(data, original)
+
+
+def test_legacy_capacitors_reject_conflicting_bus_names(capacitor_model):
+    data = pd.DataFrame([{"id": 2, "bus_name": "source", "phases": "a", "q_a": 0.1}])
+    with pytest.raises(ValueError, match="conflicting legacy 'id' and 'bus_name'"):
+        CapacitorProvider().create_components(
+            capacitor_model, SimpleNamespace(cap_data=data), None
+        )
+
+
+@pytest.mark.parametrize("control", ["", "P", "Q", "PQ"])
+@pytest.mark.parametrize("phases", ["a", "s1s2"])
+def test_named_batteries_share_bus_and_preserve_soc(capacitor_model, control, phases):
+    model = capacitor_model
+    phase_list = parse_phases(phases)
+    model.branch_phase_set.clear()
+    model.bus_phase_set.clear()
+    for phase in phase_list:
+        model.branch_phase_set.add((1, 2, phase))
+        model.bus_phase_set.add((2, phase))
+    model.start_step = pyo.Param(initialize=0)
+    model.delta_t = pyo.Param(initialize=0.25)
+    data = pd.DataFrame(
+        [
+            {
+                "device_name": device,
+                "bus_name": "151",
+                "phases": phases,
+                "s_max": 1,
+                "energy_capacity": 1,
+                "control_variable": control,
+                "p": 0.1,
+            }
+            for device in ("bat1", "bat2")
+        ]
+    )
+    provider = BatteryProvider()
+    provider.create_components(model, SimpleNamespace(bat_data=data), None)
+    provider.add_constraints(model, None)
+    for device in model.bat_set:
+        for time in model.time_set:
+            model.p_discharge[device, time].set_value(0.1)
+            model.soc[device, time].set_value(0.5 - 0.025 * (time + 1))
+            for phase in phase_list:
+                model.p_bat[device, phase, time].set_value(0.1 / len(phase_list))
+                model.v2[2, phase, time].set_value(1)
+    for constraint in model.component_data_objects(pyo.Constraint):
+        value = pyo.value(constraint.body)
+        assert constraint.lower is None or value >= pyo.value(constraint.lower) - 1e-9
+        assert constraint.upper is None or value <= pyo.value(constraint.upper) + 1e-9
+    assert pyo.value(
+        provider.active_power_injection(model, 2, phase_list[0], 0)
+    ) == pytest.approx(0.2 / len(phase_list))
+    assert len(model.battery_constant_p_bat) == (
+        4 * len(phase_list) if control in ("", "Q") else 0
+    )
+    assert len(model.battery_constant_q_bat) == (
+        4 * len(phase_list) if control in ("", "P") else 0
+    )
+    model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
+    for constraint in model.storage.values():
+        model.dual[constraint] = 2.0
+    result = PyoResult(model, results=None)
+    assert set(result.soc.device_name) == {"bat1", "bat2"}
+    assert len(result.soc) == 4
+    assert set(result.get_dual("storage").id) == {2}
+    wrapper = PyomoWrapper(case=None)
+    wrapper.result = result
+    assert wrapper._get_bus_values("p_discharge")["value"].tolist() == pytest.approx(
+        [0.2, 0.2]
+    )
+
+
+@pytest.mark.parametrize(
+    "column, value, message",
+    [
+        ("charge_efficiency", 0, "charge_efficiency must be"),
+        ("discharge_efficiency", 1.1, "discharge_efficiency must be"),
+        ("start_soc", 2, "require 0 <= min_soc"),
+        ("energy_capacity", 0, "must be > 0"),
+        ("s_max", float("nan"), "s_max is required"),
+        ("bus_name", "source", "swing/boundary bus"),
+        ("phases", "b", "no incoming branch"),
+        ("control_variable", "invalid", "Unknown control_variable"),
+    ],
+)
+def test_battery_shared_validation(capacitor_model, column, value, message):
+    data = pd.DataFrame(
+        [
+            {
+                "device_name": "bat",
+                "bus_name": "151",
+                "phases": "a",
+                "s_max": 1,
+                "energy_capacity": 1,
+            }
+        ]
+    )
+    data[column] = value
+    with pytest.raises(ValueError, match=message):
+        validate_bat_data(data, NetworkContext.from_model(capacitor_model, "test"))
+
+
+def test_named_battery_tables_work_through_case():
+    original = create_case(CASES_DIR / "csv" / "ieee13")
+    bus = original.bus_data.loc[
+        (original.bus_data.bus_type == "PQ") & (original.bus_data.phases == "abc")
+    ].iloc[0]
+    data = pd.DataFrame(
+        [
+            {
+                "device_name": "bat",
+                "bus_name": str(bus["name"]),
+                "phases": "a",
+                "s_max": 1,
+                "energy_capacity": 1,
+            }
+        ]
+    )
+    case = Case(
+        branch_data=original.branch_data, bus_data=original.bus_data, bat_data=data
+    )
+    model = create_lindist_model(case)
+    assert model.bat_bus_by_device == {"bat": int(bus["id"])}
+
+
+@pytest.mark.parametrize("controlled", [False, True])
+def test_regulator_ratios_and_tap_changes(capacitor_model, controlled):
+    model = capacitor_model
+    model.bus_phase_set.add((1, "a"))
+    model.v2[1, "a", 0].set_value(1)
+    model.v2[1, "a", 1].set_value(1)
+    model.start_step = pyo.Param(initialize=0)
+    model.reg_mi_enabled = controlled
+    case = SimpleNamespace(
+        reg_data=pd.DataFrame(
+            [{"fb": 1, "tb": 2, "phases": "a", "ratio_a": 1.5, "tap_a": 4}]
+        )
+    )
+    provider = RegulatorProvider()
+    provider.create_components(model, case, None)
+    provider.add_constraints(model, SimpleNamespace(reg_tap_change_limit=2))
+    assert pyo.value(model.reg_ratio[1, 2, "a"]) == pytest.approx(1.025)
+    for time in model.time_set:
+        if controlled:
+            tap = 16 + time
+            for candidate in model.tap_set:
+                model.u_reg[1, 2, "a", candidate, time].set_value(int(candidate == tap))
+            ratio = pyo.value(model.tap_ratio[tap])
+        else:
+            ratio = 1.025
+        model.v2_reg[1, 2, "a", time].set_value(ratio**2)
+    for constraint in model.component_data_objects(pyo.Constraint):
+        value = pyo.value(constraint.body)
+        assert constraint.lower is None or value >= pyo.value(constraint.lower) - 1e-9
+        assert constraint.upper is None or value <= pyo.value(constraint.upper) + 1e-9
+    result = PyoResult(model, results=None)
+    assert len(result.v2_reg) == 2
+    if controlled:
+        assert (1, 2, "a", 0) not in model.reg_tap_change_upper
+        assert result.reg_taps.a.tolist() == [0, 1]
+
+
+@pytest.mark.parametrize(
+    "column, value, message",
+    [
+        ("tb", 3, "does not exist"),
+        ("fb", 1.5, "integer bus IDs"),
+        ("phases", "b", "does not exist"),
+        ("ratio_a", 0, "tap_a is required"),
+        ("tap_a", 17, "integer in"),
+        ("tap_a", 0.5, "integer in"),
+    ],
+)
+def test_regulator_shared_validation(capacitor_model, column, value, message):
+    data = pd.DataFrame([{"fb": 1, "tb": 2, "phases": "a"}])
+    data[column] = value
+    with pytest.raises(ValueError, match=message):
+        validate_reg_data(data, capacitor_model)
+
+
+def test_regulator_rejects_duplicate_branch_phases(capacitor_model):
+    data = pd.DataFrame([{"fb": 1, "tb": 2, "phases": "a"}] * 2)
+    with pytest.raises(ValueError, match="duplicate regulated branch phase"):
+        validate_reg_data(data, capacitor_model)
+
+
+def test_load_blank_defaults_and_independent_phase_schedules():
+    case = create_case(CASES_DIR / "csv" / "ieee13", n_steps=2)
+    index = case.bus_data.loc[case.bus_data.bus_type == "PQ"].index[0]
+    bus = int(case.bus_data.loc[index, "id"])
+    case.bus_data.loc[index, ["pl_a", "ql_a", "cvr_p", "cvr_q"]] = [
+        0.2,
+        float("nan"),
+        float("nan"),
+        float("nan"),
+    ]
+    case.bus_data["load_shape"] = case.bus_data["load_shape"].astype(object)
+    case.bus_data.loc[index, "load_shape"] = "custom"
+    case.schedules = pd.DataFrame({"custom.a.p": [0.5, float("nan")]})
+    model = pyo.ConcreteModel()
+    create_network_components(model, case)
+    LoadProvider().create_components(model, case, None)
+    assert pyo.value(model.p_load_nom[bus, "a", 0]) == pytest.approx(0.1)
+    assert pyo.value(model.p_load_nom[bus, "a", 1]) == pytest.approx(0.2)
+    assert pyo.value(model.q_load_nom[bus, "a", 0]) == 0
+    assert pyo.value(model.cvr_p[bus, "a"]) == 0
+
+
+def test_load_rejects_nonzero_swing_injection():
+    case = create_case(CASES_DIR / "csv" / "ieee13")
+    case.bus_data.loc[case.bus_data.bus_type == "SWING", "pl_a"] = 0.1
+    model = pyo.ConcreteModel()
+    create_network_components(model, case)
+    with pytest.raises(ValueError, match="swing/boundary bus"):
+        LoadProvider().create_components(model, case, None)
+
+
+def test_load_preserves_free_boundary_cvr_constraints():
+    case = create_case(CASES_DIR / "csv" / "ieee13")
+    index = case.bus_data.loc[case.bus_data.bus_type == "PQ"].index[0]
+    bus = int(case.bus_data.loc[index, "id"])
+    case.bus_data.loc[index, "bus_type"] = "OUT"
+    model = pyo.ConcreteModel()
+    create_network_components(model, case)
+    provider = LoadProvider()
+    provider.create_components(model, case, None)
+    model.v2 = pyo.Var(model.bus_phase_set, model.time_set, initialize=1)
+    provider.add_constraints(model, SimpleNamespace(free_boundary_loads=True))
+    assert (bus, "a", 0) not in model.cvr_p_load
+    assert (bus, "a", 0) not in model.cvr_q_load
 
 
 @pytest.fixture
