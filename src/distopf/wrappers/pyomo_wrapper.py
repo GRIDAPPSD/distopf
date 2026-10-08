@@ -293,10 +293,22 @@ class PyomoWrapper(Wrapper):
         reg_taps = getattr(self.result, "reg_taps", None)
         p_loads = getattr(self.result, "p_load", None)
         q_loads = getattr(self.result, "q_load", None)
-        p_bats = getattr(self.result, "p_bat", None)
-        q_bats = getattr(self.result, "q_bat", None)
-        p_charge = getattr(self.result, "p_charge", None)
-        p_discharge = getattr(self.result, "p_discharge", None)
+        p_bats = (
+            self._get_bus_values("p_bat") if hasattr(self.result, "p_bat") else None
+        )
+        q_bats = (
+            self._get_bus_values("q_bat") if hasattr(self.result, "q_bat") else None
+        )
+        p_charge = (
+            self._get_bus_values("p_charge")
+            if hasattr(self.result, "p_charge")
+            else None
+        )
+        p_discharge = (
+            self._get_bus_values("p_discharge")
+            if hasattr(self.result, "p_discharge")
+            else None
+        )
         soc = getattr(self.result, "soc", None)
 
         objective_value = getattr(self.result, "objective_value", None)
@@ -548,7 +560,9 @@ class PyomoWrapper(Wrapper):
         frame = getattr(self.result, variable)
         if "device_name" not in frame.columns:
             return frame
-        phases = [phase for phase in ("a", "b", "c", "s1", "s2") if phase in frame]
+        phases = [
+            phase for phase in ("a", "b", "c", "s1", "s2", "value") if phase in frame
+        ]
         return frame.groupby(["id", "name", "t"], as_index=False)[phases].sum(
             min_count=1
         )

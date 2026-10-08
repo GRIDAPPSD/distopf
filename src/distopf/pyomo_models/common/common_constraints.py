@@ -5,7 +5,6 @@ Each function takes a Pyomo ConcreteModel and data, and adds constraints to the 
 """
 
 import pyomo.environ as pyo  # type: ignore
-from distopf.pyomo_models.common.model_types import ControlVariable
 from distopf.pyomo_models.common.protocol import LindistModelProtocol
 from numpy import sqrt
 
@@ -32,33 +31,10 @@ def add_voltage_limits(m: LindistModelProtocol) -> None:
 def add_cvr_load_constraints(
     m: LindistModelProtocol, free_boundary_loads: bool = False
 ) -> None:
-    """
-    Add voltage-dependent load constraints.
+    """Forward CVR load equations to the owning provider."""
+    from distopf.pyomo_models.devices.load import add_cvr_load_constraints as add
 
-    OUT buses represent downstream-area aggregate loads. Their load variables
-    must remain free when boundary loads are coordinated externally.
-    """
-
-    def cvr_p_rule(m: LindistModelProtocol, _id, ph, t):
-        if free_boundary_loads and _id in m.boundary_out_set:
-            return pyo.Constraint.Skip
-        p_nom = m.p_load_nom[_id, ph, t]
-        cvr_p = m.cvr_p[_id, ph]
-        return m.p_load[_id, ph, t] == p_nom + cvr_p * p_nom / 2 * (
-            m.v2[_id, ph, t] - 1
-        )
-
-    def cvr_q_rule(m: LindistModelProtocol, _id, ph, t):
-        if free_boundary_loads and _id in m.boundary_out_set:
-            return pyo.Constraint.Skip
-        q_nom = m.q_load_nom[_id, ph, t]
-        cvr_q = m.cvr_q[_id, ph]
-        return m.q_load[_id, ph, t] == q_nom + cvr_q * q_nom / 2 * (
-            m.v2[_id, ph, t] - 1
-        )
-
-    m.cvr_p_load = pyo.Constraint(m.bus_phase_set, m.time_set, rule=cvr_p_rule)
-    m.cvr_q_load = pyo.Constraint(m.bus_phase_set, m.time_set, rule=cvr_q_rule)
+    add(m, free_boundary_loads)
 
 
 # Generators ------------------------------------------------------------------------
@@ -142,124 +118,6 @@ def add_swing_bus_constraints(m: LindistModelProtocol) -> None:
 
     m.swing_voltage = pyo.Constraint(
         m.swing_phase_set, m.time_set, rule=swing_voltage_rule
-    )
-
-
-# Battery Constraints ----------------------------------------------------------------
-
-
-def add_battery_power_limits(m: LindistModelProtocol) -> None:
-    def _d(m: LindistModelProtocol, _id, ph, t):
-        return (0, m.p_discharge[_id, t], m.s_bat_rated[_id, ph])
-
-    def _c(m: LindistModelProtocol, _id, ph, t):
-        return (0, m.p_charge[_id, t], m.s_bat_rated[_id, ph])
-
-    m.battery_discharging_limits = pyo.Constraint(m.bat_phase_set, m.time_set, rule=_d)
-    m.battery_charging_limits = pyo.Constraint(m.bat_phase_set, m.time_set, rule=_c)
-
-
-def add_battery_soc_limits(m: LindistModelProtocol) -> None:
-    def battery_soc_limits(m: LindistModelProtocol, _id, t):
-        return (m.soc_min[_id], m.soc[_id, t], m.soc_max[_id])
-
-    m.battery_soc_limits = pyo.Constraint(
-        m.bat_set, m.time_set, rule=battery_soc_limits
-    )
-
-
-def add_battery_net_p_bat_constraints(m: LindistModelProtocol) -> None:
-    def net_discharge(m: LindistModelProtocol, _id, t):
-        p_bat_a = m.p_bat[_id, "a", t] if m.battery_has_phase[_id, "a"] else 0
-        p_bat_b = m.p_bat[_id, "b", t] if m.battery_has_phase[_id, "b"] else 0
-        p_bat_c = m.p_bat[_id, "c", t] if m.battery_has_phase[_id, "c"] else 0
-        return p_bat_a + p_bat_b + p_bat_c == m.p_discharge[_id, t] - m.p_charge[_id, t]
-
-    m.net_discharge = pyo.Constraint(m.bat_phase_set, m.time_set, rule=net_discharge)
-
-
-def add_battery_net_p_bat_equal_phase_constraints(m: LindistModelProtocol) -> None:
-    def net_discharge_equal_phases(m: LindistModelProtocol, _id, ph, t):
-        n_phases = m.battery_n_phases[_id]
-        return (
-            m.p_bat[_id, ph, t]
-            == (m.p_discharge[_id, t] - m.p_charge[_id, t]) / n_phases
-        )
-
-    m.net_discharge = pyo.Constraint(
-        m.bat_phase_set, m.time_set, rule=net_discharge_equal_phases
-    )
-
-
-def add_battery_energy_constraints(m: LindistModelProtocol) -> None:
-    def storage(m: LindistModelProtocol, _id, t):
-        eta_d = m.discharge_efficiency[_id]
-        eta_c = m.charge_efficiency[_id]
-        if t == m.start_step:
-            soc0 = m.start_soc[_id]
-        else:
-            soc0 = m.soc[_id, t - 1]
-        return (
-            m.soc[_id, t] - soc0
-            == eta_c * m.delta_t * m.p_charge[_id, t]
-            - (1 / eta_d) * m.delta_t * m.p_discharge[_id, t]
-        )
-
-    m.storage = pyo.Constraint(m.bat_set, m.time_set, rule=storage)
-
-
-def add_battery_constant_q_constraints_p_control(m: LindistModelProtocol) -> None:
-    def _rule(m: LindistModelProtocol, _id, ph, t):
-        if m.bat_control_type[_id] != ControlVariable.P:
-            return pyo.Constraint.Skip
-        return m.q_bat[_id, ph, t] == m.q_bat_nom[_id, ph, t]
-
-    m.battery_constant_q_bat = pyo.Constraint(m.bat_phase_set, m.time_set, rule=_rule)
-
-
-def add_circular_battery_constraints_pq_control(m: LindistModelProtocol) -> None:
-    """
-    Add circular battery apparent power constraints.
-
-    Enforces the exact quadratic constraint:
-        P_bat^2 + Q_bat^2 <= S_rated^2
-
-    This is a nonlinear (quadratic) constraint requiring a nonlinear solver
-    (e.g., IPOPT) or a solver supporting second-order cone constraints.
-    """
-
-    def bat_circle(m: LindistModelProtocol, _id, ph, t):
-        if m.bat_control_type[_id] != ControlVariable.PQ:
-            return pyo.Constraint.Skip
-        return (
-            m.p_bat[_id, ph, t] ** 2 + m.q_bat[_id, ph, t] ** 2
-            <= m.s_bat_rated[_id, ph] ** 2
-        )
-
-    m.bat_circle_constraint = pyo.Constraint(
-        m.bat_phase_set, m.time_set, rule=bat_circle
-    )
-
-
-def add_circular_battery_constraints(m: LindistModelProtocol) -> None:
-    """
-    Add circular battery apparent power constraints.
-
-    Enforces the exact quadratic constraint:
-        P_bat^2 + Q_bat^2 <= S_rated^2
-
-    This is a nonlinear (quadratic) constraint requiring a nonlinear solver
-    (e.g., IPOPT) or a solver supporting second-order cone constraints.
-    """
-
-    def bat_circle(m: LindistModelProtocol, _id, ph, t):
-        return (
-            m.p_bat[_id, ph, t] ** 2 + m.q_bat[_id, ph, t] ** 2
-            <= m.s_bat_rated[_id, ph] ** 2
-        )
-
-    m.bat_circle_constraint = pyo.Constraint(
-        m.bat_phase_set, m.time_set, rule=bat_circle
     )
 
 
@@ -592,95 +450,4 @@ def add_swing_bus_voltage_slack_constraints(m):
         m.time_set,
         rule=swing_voltage_slack_over_rule,
         doc="Slack constraint for maximum swing bus voltage",
-    )
-
-
-# ============ Regulator Constraints (Standard and MI) =================================
-# ======================================================================================
-
-
-def add_regulator_constraints(m: LindistModelProtocol) -> None:
-    """
-    v_reg = vi*reg_ratio^2
-    """
-
-    def regulator_rule(m: LindistModelProtocol, fb, tb, ph, t):
-        return m.v2_reg[fb, tb, ph, t] == m.v2[fb, ph, t] * m.reg_ratio[fb, tb, ph] ** 2
-
-    m.regulator_ratio = pyo.Constraint(m.reg_phase_set, m.time_set, rule=regulator_rule)
-
-
-def add_regulator_tap_sos1_constraints(m: LindistModelProtocol) -> None:
-    """
-    Add SOS1 (Special Ordered Set Type 1) constraint: exactly one tap position must be selected per regulator.
-
-    sum_k(u_reg[id, ph, k, t]) == 1 for all (id, ph, t)
-
-    Add Big-M regulator tap selection constraints for NL model.
-
-    Uses Big-M to enforce: v2_reg = tap_ratio^2 * v_i when tap k is selected
-    Then: v_j = v2_reg - 2*r*p_ij - 2*x*q_ij
-    """
-
-    def sos1_rule(m: LindistModelProtocol, fb, tb, ph, t):
-        return sum(m.u_reg[fb, tb, ph, k, t] for k in m.tap_set) == 1
-
-    def reg_tap_upper(m: LindistModelProtocol, fb, tb, ph, k, t):
-        return m.v2_reg[fb, tb, ph, t] - m.tap_ratio_squared[k] * m.v2[
-            fb, ph, t
-        ] <= m.reg_big_m * (1 - m.u_reg[fb, tb, ph, k, t])
-
-    def reg_tap_lower(m: LindistModelProtocol, fb, tb, ph, k, t):
-        return m.v2_reg[fb, tb, ph, t] - m.tap_ratio_squared[k] * m.v2[
-            fb, ph, t
-        ] >= -m.reg_big_m * (1 - m.u_reg[fb, tb, ph, k, t])
-
-    m.reg_tap_upper = pyo.Constraint(
-        m.reg_phase_set, m.tap_set, m.time_set, rule=reg_tap_upper
-    )
-    m.reg_tap_lower = pyo.Constraint(
-        m.reg_phase_set, m.tap_set, m.time_set, rule=reg_tap_lower
-    )
-    m.reg_tap_sos1 = pyo.Constraint(m.reg_phase_set, m.time_set, rule=sos1_rule)
-
-
-# ============ Regulator tap change limit ==============================================
-# ======================================================================================
-
-
-def add_regulator_tap_change_limit_constraints(
-    m: LindistModelProtocol, max_tap_change: int = 2
-) -> None:
-    """
-    Limit regulator tap changes between time steps.
-
-    Parameters
-    ----------
-    m : LindistModelProtocol
-        Pyomo model
-    max_tap_change : int
-        Maximum tap position change allowed per time step (default: 2)
-    """
-    if not getattr(m, "reg_mi_enabled", False):
-        return
-
-    def tap_change_limit_upper(m: LindistModelProtocol, fb, tb, ph, t):
-        if t == pyo.value(m.start_step):
-            return pyo.Constraint.Skip
-        tap_t = sum(k * m.u_reg[fb, tb, ph, k, t] for k in m.tap_set)
-        tap_prev = sum(k * m.u_reg[fb, tb, ph, k, t - 1] for k in m.tap_set)
-        return tap_t - tap_prev <= max_tap_change
-
-    def tap_change_limit_lower(m: LindistModelProtocol, fb, tb, ph, t):
-        if t == pyo.value(m.start_step):
-            return pyo.Constraint.Skip
-        tap_t = sum(k * m.u_reg[fb, tb, ph, k, t] for k in m.tap_set)
-        tap_prev = sum(k * m.u_reg[fb, tb, ph, k, t - 1] for k in m.tap_set)
-        return tap_t - tap_prev >= -max_tap_change
-
-    m.reg_tap_change_upper = pyo.Constraint(
-        m.reg_phase_set, m.time_set, rule=tap_change_limit_upper
-    )
-    m.reg_tap_change_lower = pyo.Constraint(
-        m.reg_phase_set, m.time_set, rule=tap_change_limit_lower
     )

@@ -1580,7 +1580,11 @@ def create_case_from_csv(
             reg_data = pd.read_csv(csv_files["reg_data"], header=0)
 
         if csv_files["bat_data"].exists():
-            bat_data = pd.read_csv(csv_files["bat_data"], header=0)
+            bat_data = pd.read_csv(
+                csv_files["bat_data"],
+                header=0,
+                dtype={"device_name": str, "bus_name": str},
+            )
 
         if csv_files["schedules"].exists():
             schedules = pd.read_csv(csv_files["schedules"], header=0)

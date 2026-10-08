@@ -156,6 +156,7 @@ def handle_cap_input(cap_data: Optional[pd.DataFrame]) -> pd.DataFrame:
 
 
 def handle_reg_input(reg_data: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """Normalize regulator data, treating tap positions as authoritative."""
     if reg_data is None:
         return pd.DataFrame(
             columns=[
@@ -173,17 +174,34 @@ def handle_reg_input(reg_data: Optional[pd.DataFrame]) -> pd.DataFrame:
     reg = reg_data.sort_values(by="tb", ignore_index=True)
     reg.index = reg.tb.to_numpy() - 1
     for ph in "abc":
-        if f"tap_{ph}" in reg.columns and f"ratio_{ph}" not in reg.columns:
-            reg[f"ratio_{ph}"] = 1 + 0.00625 * reg[f"tap_{ph}"]
-        elif f"ratio_{ph}" in reg.columns and f"tap_{ph}" not in reg.columns:
-            reg[f"tap_{ph}"] = (reg[f"ratio_{ph}"] - 1) / 0.00625
-        elif f"ratio_{ph}" in reg.columns and f"tap_{ph}" in reg.columns:
-            reg[f"ratio_{ph}"] = 1 + 0.00625 * reg[f"tap_{ph}"]
-            # check consistency
-            # if any(abs(reg[f"ratio_{ph}"]) - (1 + 0.00625 * reg[f"tap_{ph}"]) > 1e-6):
-            #     raise ValueError(
-            #         f"Regulator taps and ratio are inconsistent on phase {ph}!"
-            #     )
+        tap_key = f"tap_{ph}"
+        ratio_key = f"ratio_{ph}"
+        if tap_key not in reg.columns:
+            if ratio_key not in reg.columns:
+                continue
+            ratio_values = reg[ratio_key]
+            ratio_provided = ratio_values.notna() & ratio_values.astype(
+                str
+            ).str.strip().ne("")
+            if ratio_provided.any():
+                raise ValueError(
+                    f"{tap_key} is required; {ratio_key} is derived from {tap_key}"
+                )
+            reg[tap_key] = 0.0
+
+        tap_values = reg[tap_key]
+        tap_missing = tap_values.isna() | tap_values.astype(str).str.strip().eq("")
+        if ratio_key in reg.columns:
+            ratio_values = reg[ratio_key]
+            ratio_provided = ratio_values.notna() & ratio_values.astype(
+                str
+            ).str.strip().ne("")
+            if (ratio_provided & tap_missing).any():
+                raise ValueError(
+                    f"{tap_key} is required; {ratio_key} is derived from {tap_key}"
+                )
+        reg.loc[tap_missing, tap_key] = 0.0
+        reg[ratio_key] = 1 + 0.00625 * reg[tap_key]
     return reg
 
 
@@ -323,6 +341,8 @@ def handle_bat_input(bat_data: Optional[pd.DataFrame]) -> pd.DataFrame:
                 "control_variable",
             ]
         )
+    if "device_name" in bat_data.columns:
+        return bat_data.reset_index(drop=True)
     bat = bat_data.sort_values(by="id", ignore_index=True)
     bat.index = bat.id.to_numpy() - 1
     return bat

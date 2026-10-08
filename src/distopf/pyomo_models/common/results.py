@@ -196,6 +196,8 @@ def get_values_tidy_3ph(var: pyo.Var) -> pd.DataFrame:
         "q_cap",
         "u_cap",
         "z_cap",
+        "p_bat",
+        "q_bat",
     ):
         return get_values_tidy(var)
     return pd.DataFrame(
@@ -209,6 +211,10 @@ def get_values_tidy_3ph(var: pyo.Var) -> pd.DataFrame:
 
 def get_values_1ph(var: pyo.Var) -> pd.DataFrame:
     """Extract 1-phase variable values in tidy format."""
+    if var.local_name in ("p_charge", "p_discharge", "soc") and hasattr(
+        var.model(), "bat_bus_by_device"
+    ):
+        return get_values_tidy(var).drop(columns="phase")
     return pd.DataFrame(
         data=[
             [_id, var.model().name_map[_id], t, _val]
@@ -226,10 +232,30 @@ def get_values_tidy(var: pyo.Var) -> pd.DataFrame:
         "q_cap": "cap_bus_by_device",
         "u_cap": "cap_bus_by_device",
         "z_cap": "cap_bus_by_device",
+        "p_bat": "bat_bus_by_device",
+        "q_bat": "bat_bus_by_device",
+        "p_charge": "bat_bus_by_device",
+        "p_discharge": "bat_bus_by_device",
+        "soc": "bat_bus_by_device",
     }.get(var.local_name)
     bus_by_device = getattr(var.model(), map_name, None) if map_name else None
     if bus_by_device is not None:
         model = var.model()
+        if var.dim() == 2:
+            return pd.DataFrame(
+                [
+                    [
+                        device,
+                        bus_by_device[device],
+                        model.name_map[bus_by_device[device]],
+                        time,
+                        "value",
+                        value,
+                    ]
+                    for (device, time), value in var.extract_values().items()
+                ],
+                columns=["device_name", "id", "name", "t", "phase", "value"],
+            )
         return pd.DataFrame(
             data=[
                 [
@@ -398,6 +424,22 @@ def get_constraint_duals_tidy(
         or constraint.local_name == "z_cap_bounds"
     ):
         bus_by_device = getattr(model, "cap_bus_by_device", None)
+    elif constraint.local_name.startswith(
+        ("bat_", "battery_")
+    ) or constraint.local_name in ("storage", "net_discharge"):
+        bus_by_device = getattr(model, "bat_bus_by_device", None)
+    if (
+        bus_by_device is not None
+        and isinstance(first_idx, tuple)
+        and len(first_idx) == 2
+    ):
+        data = []
+        for (device, time), entry in constraint.items():
+            dual_value = model.dual.get(entry)
+            if dual_value is not None:
+                bus = bus_by_device[device]
+                data.append([device, bus, model.name_map[bus], time, dual_value])
+        return pd.DataFrame(data, columns=["device_name", "id", "name", "t", "dual"])
     if (
         bus_by_device is not None
         and isinstance(first_idx, tuple)

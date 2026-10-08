@@ -8,34 +8,6 @@ import pyomo.environ as pyo  # type: ignore
 from distopf.api import Case
 
 from distopf.pyomo_models.common.protocol import LindistModelProtocol
-# from distopf.pyomo_models.common_constraints import (
-#     add_battery_constant_q_constraints_p_control,
-#     add_battery_energy_constraints,
-#     add_battery_net_p_bat_equal_phase_constraints,
-#     add_battery_power_limits,
-#     add_battery_soc_limits,
-#     add_capacitor_constraints,
-#     add_octagonal_inverter_constraints_pq_control,
-#     add_cvr_load_constraints,
-#     add_generator_constant_p_constraints_q_control,
-#     add_generator_constant_q_constraints_p_control,
-#     add_generator_limits,
-#     add_regulator_constraints,
-#     add_swing_bus_constraints,
-#     add_regulator_tap_sos1_constraints,
-#     add_regulator_tap_change_limit_constraints,
-#     add_capacitor_mi_constraints,
-#     add_capacitor_z_bounds,
-#     add_capacitor_mccormick_constraints,
-# )
-# from distopf.pyomo_models.lindist_constraints import (
-#     add_q_flow_constraints,
-#     add_voltage_drop_constraints,
-# )
-# from distopf.pyomo_models.common_constraints import (
-#     add_thermal_slack_constraints,
-#     add_voltage_slack_constraints,
-# )
 
 
 def create_zones_from_edge_names(case: Case, border_edges):
@@ -206,7 +178,10 @@ def add_capacity_expansion_p_flow_constraints(m):
             m.p_gen[device, ph, t]
             for device in m.gen_devices_by_bus_phase.get((tb, ph), [])
         )
-        bat = m.p_bat[tb, ph, t] if (tb, ph, t) in m.p_bat else 0
+        bat = sum(
+            m.p_bat[device, ph, t]
+            for device in getattr(m, "bat_devices_by_bus_phase", {}).get((tb, ph), [])
+        )
         out = sum(
             m.p_flow[to_fb, to_tb, ph, t]
             for to_fb, to_tb in m.to_bus_map[tb]

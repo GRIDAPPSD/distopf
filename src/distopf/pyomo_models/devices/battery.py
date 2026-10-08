@@ -1,21 +1,119 @@
-"""Battery provider for the legacy-index migration path.
+"""Named battery devices with balanced phase power and SOC dynamics.
 
-This provider owns battery-specific model components and constraints while
-preserving the current one-battery-per-bus component names. It is the first
-concrete provider for a built-in device family and is intentionally compatible
-with the existing LinDistFlow and BranchFlow model factories.
+Tables use device_name, bus_name, phases, s_max and energy_capacity; existing
+bus-ID tables remain supported. Total P/Q and ratings are divided across phases.
+Optional SOC/efficiency fields retain their legacy defaults. Missing control
+mode defaults to P; blank fixes P and Q. Existing component names are retained.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
 import pyomo.environ as pyo  # type: ignore
 
 from distopf.pyomo_models.common.model_types import ControlVariable
 from distopf.pyomo_models.common.protocol import LindistModelProtocol
-from distopf.pyomo_models.common.data import parse_phases, phase_tuples
-from distopf.pyomo_models.common.model_types import CONTROL_VARIABLE_MAP
+from distopf.pyomo_models.common.data import parse_phases
+from distopf.pyomo_models.common.device_data import (
+    NetworkContext,
+    cell_control,
+    cell_num,
+    cell_opt_float,
+    cell_required_float,
+    cell_text,
+    check_columns,
+    check_connection,
+    check_device_names,
+    check_phases,
+    finish_validation,
+    row_label,
+)
+
+_PHASES = ("a", "b", "c", "s1", "s2")
+_REQUIRED = {"device_name", "bus_name", "phases", "s_max", "energy_capacity"}
+_KNOWN = _REQUIRED | {
+    "p",
+    "q",
+    "q_min",
+    "q_max",
+    "min_soc",
+    "max_soc",
+    "start_soc",
+    "charge_efficiency",
+    "discharge_efficiency",
+    "annual_cycle_limit",
+    "control_variable",
+    "s_base",
+}
+
+
+def _battery_data(model: Any, case: Any) -> pd.DataFrame:
+    data = getattr(case, "bat_data", None)
+    data = data.copy() if data is not None else pd.DataFrame()
+    if not data.empty and "device_name" not in data and "id" in data:
+        if "bus_name" in data:
+            raise ValueError("bat_data mixes legacy 'id' with 'bus_name'")
+        names = {bus: name for name, bus in model.bus_name_to_id_map.items()}
+        data["bus_name"] = data["id"].map(names)
+        data["device_name"] = [f"bat_{index}" for index in range(len(data))]
+        data = data.drop(columns=[key for key in ("id", "name") if key in data])
+    if "control_variable" not in data:
+        data["control_variable"] = "P"
+    return data
+
+
+def validate_bat_data(data: pd.DataFrame, ctx: NetworkContext) -> None:
+    """Validate battery connections, ratings, SOC ranges, and efficiencies."""
+    if data.empty:
+        return
+    check_columns(
+        data,
+        "bat_data",
+        _REQUIRED,
+        _KNOWN,
+        {"id", "name", "bus_id"},
+        "batteries use 'device_name' and 'bus_name'",
+    )
+    errors: list[str] = []
+    check_device_names(data, errors)
+    for index, row in data.iterrows():
+        label = row_label(row, index)
+        phases = check_phases(label, row["phases"], _PHASES, errors)
+        if phases is not None:
+            check_connection(label, cell_text(row["bus_name"]), phases, ctx, errors)
+        cell_required_float(row, "s_max", label, errors, gt=0)
+        cell_required_float(row, "energy_capacity", label, errors, gt=0)
+        values: dict[str, float] = {}
+        for key, default in (
+            ("min_soc", 0),
+            ("max_soc", 1),
+            ("start_soc", 0.5),
+            ("charge_efficiency", 1),
+            ("discharge_efficiency", 1),
+            ("annual_cycle_limit", 365),
+            ("p", 0),
+            ("q", 0),
+        ):
+            value = cell_opt_float(row, key, label, errors)
+            values[key] = default if value is None else value
+        if not 0 <= values["min_soc"] <= values["start_soc"] <= values["max_soc"] <= 1:
+            errors.append(f"{label}: require 0 <= min_soc <= start_soc <= max_soc <= 1")
+        for key in ("charge_efficiency", "discharge_efficiency"):
+            if not 0 < values[key] <= 1:
+                errors.append(f"{label}: {key} must be in (0, 1]")
+        if values["annual_cycle_limit"] < 0:
+            errors.append(f"{label}: annual_cycle_limit must be >= 0")
+        q_min = cell_opt_float(row, "q_min", label, errors)
+        q_max = cell_opt_float(row, "q_max", label, errors)
+        if q_min is not None and q_max is not None and q_min > q_max:
+            errors.append(f"{label}: q_min must not exceed q_max")
+        try:
+            cell_control(row)
+        except ValueError as exc:
+            errors.append(f"{label}: {exc}")
+    finish_validation("bat_data", errors, [], [])
 
 
 def create_battery_parameters(model: Any, case: Any) -> None:
@@ -27,9 +125,9 @@ def create_battery_parameters(model: Any, case: Any) -> None:
         (device, phase): False for device in model.bat_set for phase in ("a", "b", "c")
     }
     has_a, has_b, has_c, n_phases = {}, {}, {}, {}
-    for _, row in case.bat_data.iterrows():
-        device = row.id
-        phases = parse_phases(str(row.phases))
+    for _, row in _battery_data(model, case).iterrows():
+        device = cell_text(row["device_name"])
+        phases = parse_phases(cell_text(row["phases"]))
         count = len(phases)
         n_phases[device] = count
         has_a[device], has_b[device], has_c[device] = (
@@ -39,25 +137,25 @@ def create_battery_parameters(model: Any, case: Any) -> None:
         )
         for phase in ("a", "b", "c"):
             has_phase[(device, phase)] = phase in phases
-        energy[device] = getattr(row, "energy_capacity", 0)
-        soc_min[device] = getattr(row, "min_soc", 0)
-        soc_max[device] = getattr(row, "max_soc", 1)
-        start_soc[device] = getattr(row, "start_soc", 0.5)
-        charge_eff[device] = getattr(row, "charge_efficiency", 1)
-        discharge_eff[device] = getattr(row, "discharge_efficiency", 1)
-        cycles[device] = getattr(row, "annual_cycle_limit", 365)
-        control[device] = CONTROL_VARIABLE_MAP[getattr(row, "control_variable", "P")]
+        energy[device] = cell_num(row, "energy_capacity", 0)
+        soc_min[device] = cell_num(row, "min_soc", 0)
+        soc_max[device] = cell_num(row, "max_soc", 1)
+        start_soc[device] = cell_num(row, "start_soc", 0.5)
+        charge_eff[device] = cell_num(row, "charge_efficiency", 1)
+        discharge_eff[device] = cell_num(row, "discharge_efficiency", 1)
+        cycles[device] = cell_num(row, "annual_cycle_limit", 365)
+        control[device] = cell_control(row)
         for phase in phases:
             key = (device, phase)
             if key not in model.bat_phase_set:
                 continue
-            s_max = getattr(row, "s_max", 1000.0) / count
+            s_max = cell_num(row, "s_max", 1000.0) / count
             rating[key] = s_max
-            q_min[key] = getattr(row, "q_min", -getattr(row, "s_max", 1000.0)) / count
-            q_max[key] = getattr(row, "q_max", getattr(row, "s_max", 1000.0)) / count
+            q_min[key] = max(-s_max, cell_num(row, "q_min", -s_max * count) / count)
+            q_max[key] = min(s_max, cell_num(row, "q_max", s_max * count) / count)
             for time in model.time_set:
-                p_data[(*key, time)] = getattr(row, "p", 0.0) / count
-                q_data[(*key, time)] = getattr(row, "q", 0.0) / count
+                p_data[(*key, time)] = cell_num(row, "p", 0.0) / count
+                q_data[(*key, time)] = cell_num(row, "q", 0.0) / count
     model.p_bat_nom = pyo.Param(
         model.bat_phase_set, model.time_set, initialize=p_data, default=0.0
     )
@@ -69,7 +167,9 @@ def create_battery_parameters(model: Any, case: Any) -> None:
     )
     model.q_bat_min = pyo.Param(model.bat_phase_set, initialize=q_min, default=-1000.0)
     model.q_bat_max = pyo.Param(model.bat_phase_set, initialize=q_max, default=1000.0)
-    model.bat_control_type = pyo.Param(model.bat_set, initialize=control, default=0)
+    model.bat_control_type = pyo.Param(
+        model.bat_set, initialize=control, default=0, within=pyo.Any
+    )
     model.energy_capacity = pyo.Param(model.bat_set, initialize=energy, default=0)
     model.soc_min = pyo.Param(model.bat_set, initialize=soc_min, default=0)
     model.soc_max = pyo.Param(model.bat_set, initialize=soc_max, default=1)
@@ -96,66 +196,66 @@ class BatteryProvider:
     name = "batteries"
 
     def create_components(self, model: Any, case: Any, config: Any) -> None:
-        """Attach battery components only when the factory did not create them."""
-        if not hasattr(model, "bat_phase_set"):
-            model.bat_phase_set = pyo.Set(
-                initialize=phase_tuples(case.bat_data, "id"), dimen=2
-            )
-        if not hasattr(model, "bat_set"):
-            model.bat_set = pyo.Set(initialize=case.bat_data.id.tolist())
-
-        if not hasattr(model, "p_charge"):
-            model.p_charge = pyo.Var(model.bat_set, model.time_set, initialize=0)
-        if not hasattr(model, "p_discharge"):
-            model.p_discharge = pyo.Var(model.bat_set, model.time_set, initialize=0)
-        if not hasattr(model, "p_bat"):
-            model.p_bat = pyo.Var(model.bat_phase_set, model.time_set, initialize=0)
-        if not hasattr(model, "q_bat"):
-            model.q_bat = pyo.Var(model.bat_phase_set, model.time_set, initialize=0)
-        if not hasattr(model, "soc"):
-            model.soc = pyo.Var(model.bat_set, model.time_set, initialize=0.5)
-        if not hasattr(model, "p_bat_nom"):
-            create_battery_parameters(model, case)
+        """Create battery components after the network provider."""
+        ctx = NetworkContext.from_model(model, "BatteryProvider")
+        data = _battery_data(model, case)
+        validate_bat_data(data, ctx)
+        bus_by_device: dict[str, int] = {}
+        ports: list[tuple[str, str]] = []
+        devices_by_bus_phase: dict[tuple[int, str], list[str]] = {}
+        phases_by_device: dict[str, list[str]] = {}
+        for _, row in data.iterrows():
+            device = cell_text(row["device_name"])
+            bus = ctx.bus_name_to_id[cell_text(row["bus_name"])]
+            phases_by_device[device] = parse_phases(cell_text(row["phases"]))
+            bus_by_device[device] = bus
+            for phase in phases_by_device[device]:
+                ports.append((device, phase))
+                devices_by_bus_phase.setdefault((bus, phase), []).append(device)
+        model.bat_set = pyo.Set(initialize=list(bus_by_device))
+        model.bat_phase_set = pyo.Set(initialize=ports, dimen=2)
+        model.bat_bus_by_device = bus_by_device
+        model.bat_devices_by_bus_phase = devices_by_bus_phase
+        model.bat_phases_by_device = phases_by_device
+        create_battery_parameters(model, case)
+        model.p_charge = pyo.Var(model.bat_set, model.time_set, initialize=0)
+        model.p_discharge = pyo.Var(model.bat_set, model.time_set, initialize=0)
+        model.p_bat = pyo.Var(model.bat_phase_set, model.time_set, initialize=0)
+        model.q_bat = pyo.Var(model.bat_phase_set, model.time_set, initialize=0)
+        model.soc = pyo.Var(model.bat_set, model.time_set, initialize=0.5)
 
     def active_power_injection(
         self, model: Any, bus: int, phase: str, time: Any
     ) -> Any:
-        key = (bus, phase, time)
-        return model.p_bat[key] if key in model.p_bat else 0
+        return sum(
+            model.p_bat[device, phase, time]
+            for device in model.bat_devices_by_bus_phase.get((bus, phase), [])
+        )
 
     def reactive_power_injection(
         self, model: Any, bus: int, phase: str, time: Any
     ) -> Any:
-        key = (bus, phase, time)
-        return model.q_bat[key] if key in model.q_bat else 0
+        return sum(
+            model.q_bat[device, phase, time]
+            for device in model.bat_devices_by_bus_phase.get((bus, phase), [])
+        )
 
     def add_constraints(self, model: Any, config: Any) -> None:
-        """Attach shared battery operating constraints once."""
+        """Attach battery operating constraints."""
         if len(model.bat_set) == 0:
             return
-        for name, builder in (
-            (
-                "battery_constant_q_bat",
-                add_battery_constant_q_constraints_p_control,
-            ),
-            ("storage", add_battery_energy_constraints),
-            (
-                "net_discharge",
-                add_battery_net_p_bat_equal_phase_constraints,
-            ),
-        ):
-            if not hasattr(model, name):
-                builder(model)
+        add_battery_constant_q_constraints_p_control(model)
+        add_battery_energy_constraints(model)
+        add_battery_net_p_bat_equal_phase_constraints(model)
+        add_battery_constant_p_constraints(model)
 
         equality_only = getattr(config, "equality_only", False) if config else False
         if equality_only:
             return
-        if not hasattr(model, "battery_discharging_limits"):
-            add_battery_power_limits(model)
-        if not hasattr(model, "battery_soc_limits"):
-            add_battery_soc_limits(model)
+        add_battery_power_limits(model)
+        add_battery_soc_limits(model)
         circular = getattr(config, "circular_constraints", True) if config else True
-        if circular and not hasattr(model, "bat_circle_constraint"):
+        if circular:
             add_circular_battery_constraints_pq_control(model)
 
 
@@ -184,12 +284,12 @@ def add_battery_soc_limits(m: LindistModelProtocol) -> None:
 
 def add_battery_net_p_bat_constraints(m: LindistModelProtocol) -> None:
     def net_discharge(m: LindistModelProtocol, _id, t):
-        p_bat_a = m.p_bat[_id, "a", t] if m.battery_has_phase[_id, "a"] else 0
-        p_bat_b = m.p_bat[_id, "b", t] if m.battery_has_phase[_id, "b"] else 0
-        p_bat_c = m.p_bat[_id, "c", t] if m.battery_has_phase[_id, "c"] else 0
-        return p_bat_a + p_bat_b + p_bat_c == m.p_discharge[_id, t] - m.p_charge[_id, t]
+        return (
+            sum(m.p_bat[_id, phase, t] for phase in m.bat_phases_by_device[_id])
+            == m.p_discharge[_id, t] - m.p_charge[_id, t]
+        )
 
-    m.net_discharge = pyo.Constraint(m.bat_phase_set, m.time_set, rule=net_discharge)
+    m.net_discharge = pyo.Constraint(m.bat_set, m.time_set, rule=net_discharge)
 
 
 def add_battery_net_p_bat_equal_phase_constraints(m: LindistModelProtocol) -> None:
@@ -224,11 +324,27 @@ def add_battery_energy_constraints(m: LindistModelProtocol) -> None:
 
 def add_battery_constant_q_constraints_p_control(m: LindistModelProtocol) -> None:
     def _rule(m: LindistModelProtocol, _id, ph, t):
-        if m.bat_control_type[_id] != ControlVariable.P:
+        if m.bat_control_type[_id] not in (ControlVariable.NONE, ControlVariable.P):
             return pyo.Constraint.Skip
         return m.q_bat[_id, ph, t] == m.q_bat_nom[_id, ph, t]
 
     m.battery_constant_q_bat = pyo.Constraint(m.bat_phase_set, m.time_set, rule=_rule)
+
+
+def add_battery_constant_p_constraints(model: Any) -> None:
+    """Fix P for NONE and Q modes, retaining storage and balanced-phase equalities."""
+
+    def rule(model, device, phase, time):
+        if model.bat_control_type[device] not in (
+            ControlVariable.NONE,
+            ControlVariable.Q,
+        ):
+            return pyo.Constraint.Skip
+        return model.p_bat[device, phase, time] == model.p_bat_nom[device, phase, time]
+
+    model.battery_constant_p_bat = pyo.Constraint(
+        model.bat_phase_set, model.time_set, rule=rule
+    )
 
 
 def add_circular_battery_constraints_pq_control(m: LindistModelProtocol) -> None:
@@ -277,4 +393,4 @@ def add_circular_battery_constraints(m: LindistModelProtocol) -> None:
     )
 
 
-__all__ = ["BatteryProvider", "create_battery_parameters"]
+__all__ = ["BatteryProvider", "create_battery_parameters", "validate_bat_data"]

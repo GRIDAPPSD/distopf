@@ -533,7 +533,7 @@ class GeneratorProvider(DeviceProvider):
 def add_gen_constant_p_constraints(m: Any) -> None:
     """Fix P to available power for generators in control modes NONE and Q."""
 
-    def rule(m, device, phase, time):
+    def rule(m, device, phase, time):  # -> Any | type[Skip]:
         if m.gen_control[device, phase] in _P_FIXED:
             return (
                 m.p_gen[device, phase, time] == m.gen_p_available[device, phase, time]

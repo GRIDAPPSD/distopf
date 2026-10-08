@@ -13,7 +13,6 @@ from distopf.pyomo_models.devices.regulator import RegulatorProvider
 from distopf.pyomo_models.common.registry import DeviceRegistry
 from distopf.pyomo_models.network.bfm import BFMProvider
 from distopf.pyomo_models.common.protocol import LindistModelProtocol
-from distopf.pyomo_models.devices.mpssd import MpssdProvider
 
 
 def create_model(
@@ -95,32 +94,5 @@ def create_nl_branchflow_model(
         control_capacitors=control_capacitors,
         control_regulators=control_regulators,
         linear=False,
-        **kwargs,
-    )
-
-
-def create_mpssd_lindist_model(
-    case: Case,
-    control_capacitors: bool = False,
-    control_regulators: bool = False,
-    **kwargs,
-) -> LindistModelProtocol:
-    core = BFMProvider()
-    devices = [
-        LoadProvider(),
-        GeneratorProvider(),
-        CapacitorProvider(),
-        BatteryProvider(),
-        RegulatorProvider(),
-        MpssdProvider(),
-    ]
-    return create_model(
-        case=case,
-        core=core,
-        devices=devices,
-        control_capacitors=control_capacitors,
-        control_regulators=control_regulators,
-        linear=True,
-        mpssd=True,
         **kwargs,
     )

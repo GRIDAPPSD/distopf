@@ -37,11 +37,14 @@ def _capacitor_data(model: Any, case: Any) -> pd.DataFrame:
     if data is None:
         return pd.DataFrame()
     if not data.empty and "device_name" not in data and "id" in data:
-        if "bus_name" in data:
-            raise ValueError("cap_data mixes legacy 'id' with 'bus_name'")
-        data = data.copy()
         names_by_bus = {bus: name for name, bus in model.bus_name_to_id_map.items()}
-        data["bus_name"] = data["id"].map(names_by_bus)
+        bus_names = data["id"].map(names_by_bus)
+        if "bus_name" in data and not data["bus_name"].map(cell_text).equals(
+            bus_names.map(cell_text)
+        ):
+            raise ValueError("cap_data has conflicting legacy 'id' and 'bus_name'")
+        data = data.copy()
+        data["bus_name"] = bus_names
         data["device_name"] = [f"cap_{index}" for index in range(len(data))]
         data = data.drop(
             columns=[column for column in ("id", "name") if column in data]

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from itertools import combinations_with_replacement, product
 from typing import Any
-from math import sqrt
 
 import pandas as pd
 import pyomo.environ as pyo  # type: ignore
@@ -12,9 +11,6 @@ import pyomo.environ as pyo  # type: ignore
 from distopf.api import Case
 from distopf.pyomo_models.common.data import parse_phases
 from distopf.pyomo_models.network import bfm_constraints
-
-sqrt2 = sqrt(2)
-sqrt3 = sqrt(3)
 
 
 PHASE_PAIR_LABELS = ("aa", "ab", "ac", "bb", "bc", "cc", "s1s1", "s1s2", "s2s2")

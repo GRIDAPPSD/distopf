@@ -117,6 +117,9 @@ class LindistModelProtocol(Protocol):
     gen_devices_by_bus_phase: Dict[Tuple[int, str], List[str]]
     cap_bus_by_device: Dict[str, int]
     cap_devices_by_bus_phase: Dict[Tuple[int, str], List[str]]
+    bat_bus_by_device: Dict[str, int]
+    bat_devices_by_bus_phase: Dict[Tuple[int, str], List[str]]
+    bat_phases_by_device: Dict[str, List[str]]
 
     # ==================== PYOMO UTILITIES ====================
     dual: pyo.Suffix  # Dual variable suffix for sensitivity analysis
