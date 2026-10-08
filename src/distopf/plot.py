@@ -1604,7 +1604,7 @@ def _process_gen_data(gen_data, p_gen, q_gen, t):
                 # If phase column exists in phase_data, use it; otherwise use NaN
                 if phase in phase_data.columns:
                     try:
-                        gen_data[col_name] = phase_data[phase].to_numpy()
+                        gen_data[col_name] = phase_data[phase]
                     except (KeyError, ValueError):
                         pass
         return gen_data
