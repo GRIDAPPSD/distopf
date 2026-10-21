@@ -207,3 +207,22 @@ def test_set_current_angles_updates_parameters():
     i = pm.branch_angle_phase_pair_set.pos[key]
     np.testing.assert_allclose(pm.cos_d.value[i], np.cos(0.5))
     np.testing.assert_allclose(pm.sin_d.value[i], np.sin(0.5))
+
+
+def test_sdp_diagonal_variant_vs_socp():
+    case = load("ieee13")
+    socp = perf_model(case, linear=False, socp_relaxation=True, equality_only=True)
+    diag = perf_model(
+        case, linear=False, sdp_diagonal_relaxation=True, equality_only=True
+    )
+    full = perf_model(case, linear=False, sdp_relaxation=True, equality_only=True)
+    assert "psd_constraint" in diag.constraint_names
+    assert "psd_v_re" not in diag.var_names
+    assert "psd_v_re" in full.var_names
+    results = {}
+    for name, model in (("socp", socp), ("diag", diag), ("full", full)):
+        perf.set_objective(model, pobj.loss_objective_rule)
+        results[name] = perf.solve(model, solver="CLARABEL", duals=False)
+    print({k: v.objective_value for k, v in results.items()})
+    # Fixing off-diagonals to zero restricts the SDP, so it cannot beat the full SDP.
+    assert results["diag"].objective_value >= results["full"].objective_value - 1e-6
