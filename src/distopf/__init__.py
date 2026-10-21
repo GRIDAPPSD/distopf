@@ -123,6 +123,7 @@ CONTROL_PQ = "PQ"
 _lazy_imports = {
     "DSSToCSVConverter": "distopf.dss_importer.dss_to_csv_converter",
     "pyomo_models": "distopf.pyomo_models",
+    "cvxpy_models": "distopf.cvxpy_models",
 }
 
 def __getattr__(name: str):
@@ -130,7 +131,7 @@ def __getattr__(name: str):
     if name in _lazy_imports:
         import importlib
         module_path = _lazy_imports[name]
-        if name == "pyomo_models":
+        if name in ("pyomo_models", "cvxpy_models"):
             return importlib.import_module(module_path)
         else:
             module = importlib.import_module(module_path)

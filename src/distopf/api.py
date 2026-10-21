@@ -40,12 +40,14 @@ def _get_wrapper_registry() -> dict:
             MatrixWrapper,
             MatrixBessWrapper,
             PyomoWrapper,
+            CvxpyWrapper,
         )
 
         _WRAPPER_REGISTRY = {
             "matrix": MatrixWrapper,
             "matrix_bess": MatrixBessWrapper,
             "pyomo": PyomoWrapper,
+            "cvxpy": CvxpyWrapper,
         }
     return _WRAPPER_REGISTRY
 
@@ -57,19 +59,19 @@ _FORMULATION_REGISTRY: dict[str, dict] = {
     "branchflow": {
         "default_wrapper": "pyomo",
         "model_type": "branchflow",
-        "compatible_wrappers": ["pyomo"],
+        "compatible_wrappers": ["pyomo", "cvxpy"],
     },
     # Pyomo SOCP relaxation of BranchFlow (NLP/IPOPT path)
     "socp": {
         "default_wrapper": "pyomo",
         "model_type": "socp",
-        "compatible_wrappers": ["pyomo"],
+        "compatible_wrappers": ["pyomo", "cvxpy"],
     },
     # LinDistFlow — supported by both pyomo (default) and matrix
     "lindist": {
         "default_wrapper": "pyomo",
         "model_type": "lindist",
-        "compatible_wrappers": ["pyomo", "matrix"],
+        "compatible_wrappers": ["pyomo", "matrix", "cvxpy"],
     },
     # Matrix single-step formulations
     "lindist_cap_mi": {
@@ -117,7 +119,7 @@ def _resolve_wrapper(wrapper: Optional[str], formulation: Optional[str]) -> tupl
     Parameters
     ----------
     wrapper : str or None
-        Wrapper name: "pyomo", "matrix", or "matrix_bess". If None, the wrapper
+        Wrapper name: "pyomo", "cvxpy", "matrix", or "matrix_bess". If None, the wrapper
         is auto-selected from the formulation (or defaults to "pyomo").
     formulation : str or None
         Formulation name (e.g., "lindist", "branchflow", "lindist_cap_mi").
@@ -778,6 +780,32 @@ class Case:
         >>> results = solve(model)
         """
         from distopf.pyomo_models import create_lindist_model
+
+        return create_lindist_model(self, **kwargs)
+
+    def to_cvxpy_model(self, **kwargs):
+        """
+        Create a CVXPY model that mirrors :meth:`to_pyomo_model`.
+
+        Parameters
+        ----------
+        **kwargs
+            Additional arguments passed to ``cvxpy_models.create_lindist_model``
+
+        Returns
+        -------
+        distopf.cvxpy_models.CvxModel
+            CVXPY optimization model
+
+        Examples
+        --------
+        >>> case = create_case(CASES_DIR / "csv" / "ieee13")
+        >>> model = case.to_cvxpy_model()
+        >>> from distopf.cvxpy_models import solve, set_objective, loss_objective_rule
+        >>> set_objective(model, loss_objective_rule)
+        >>> results = solve(model)
+        """
+        from distopf.cvxpy_models import create_lindist_model
 
         return create_lindist_model(self, **kwargs)
 
