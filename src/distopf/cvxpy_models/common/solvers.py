@@ -18,7 +18,9 @@ def build_problem(model: CvxModel) -> cp.Problem:
     if expression is None:
         raise ValueError("No objective set. Call set_objective(model, ...) first.")
     sense = getattr(model, "objective_sense", "minimize")
-    objective = cp.Minimize(expression) if sense == "minimize" else cp.Maximize(expression)
+    objective = (
+        cp.Minimize(expression) if sense == "minimize" else cp.Maximize(expression)
+    )
     model.problem = cp.Problem(objective, model.all_constraints())
     return model.problem
 
@@ -29,8 +31,8 @@ def _has_integers(model: CvxModel) -> bool:
 
 def _default_solver(model: CvxModel, problem: cp.Problem) -> str:
     if not _has_integers(model):
-        return "CLARABEL"
-    return "HIGHS" if (problem.is_lp() or problem.is_qp()) else "SCIP"
+        return "SCIP"
+    return "HIGHS" if (problem.is_qp()) else "CLARABEL"
 
 
 def _cyipopt_available() -> bool:
@@ -76,7 +78,10 @@ def _solve_nlp(model: CvxModel, problem: cp.Problem, verbose: bool) -> float:
 
 
 def solve(
-    model: CvxModel, solver: str | None = None, duals: bool = True, verbose: bool = False
+    model: CvxModel,
+    solver: str | None = None,
+    duals: bool = True,
+    verbose: bool = False,
 ) -> CvxResult:
     """Solve the model with CVXPY.
 

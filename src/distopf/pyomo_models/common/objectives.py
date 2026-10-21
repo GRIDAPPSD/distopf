@@ -37,6 +37,30 @@ def loss_objective_rule(model: LindistModelProtocol):
             total_loss += (model.q_flow[fb, tb, ph, t] ** 2) * model.r[fb, tb, ph + ph]
     return total_loss
 
+def loss_objective_i2r_rule(model: LindistModelProtocol):
+    """
+    Calculate total system losses based on branch currents using I^2*R.
+
+    For each branch-phase combination, calculates l_flow * R.
+    This is a linear objective.
+
+    Parameters
+    ----------
+    model : LindistModelProtocol
+        Pyomo model
+
+    Returns
+    -------
+    Pyomo expression for total losses based on current
+    """
+    if not hasattr(model, "l_flow"):
+        raise AttributeError("Model does not have l_flow attribute required for I^2*R loss calculation.")
+    total_loss = 0
+    for fb, tb, ph in model.branch_phase_set:
+        for t in model.time_set:
+            total_loss += model.l_flow[fb, tb, ph + ph, t] * model.r[fb, tb, ph + ph]
+    return total_loss
+
 
 def substation_power_objective_rule(model: LindistModelProtocol):
     """

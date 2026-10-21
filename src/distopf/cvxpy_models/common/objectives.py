@@ -38,6 +38,16 @@ def loss_objective_rule(model: CvxModel):
             total_loss += (model.q_flow[fb, tb, ph, t] ** 2) * r
     return total_loss
 
+def loss_objective_i2r_rule(model: CvxModel):
+    """Total total losses based on current: sum(l_flow*r) (linear)."""
+    if not hasattr(model, "l_flow"):
+        raise AttributeError("Model does not have l_flow attribute required for I^2*R loss calculation.")
+    total_loss = 0
+    for fb, tb, ph in model.branch_phase_set:
+        for t in model.time_set:
+            r = model.r[fb, tb, ph + ph]
+            total_loss += model.l_flow[fb, tb, ph + ph, t] * r
+    return total_loss
 
 def substation_power_objective_rule(model: CvxModel):
     """Total active power on branches leaving swing buses (linear)."""

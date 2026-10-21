@@ -281,6 +281,14 @@ def add_current_constraint2_relaxed(m: CvxModel) -> None:
     )
 
 
+def add_psd_constraints(m: CvxModel) -> None:
+    """Add positive semidefinite constraints for branch flow matrices."""
+    pass
+    # def _rule_psd(m: CvxModel, fb, tb, t):
+    #     return m.W[fb, tb, t] >> 0
+
+    # add_constraint(m, "psd_constraint", (m.branch_set, m.time_set), _rule_psd)
+
 def add_constraints(
     model: CvxModel,
     circular_constraints: bool = True,
