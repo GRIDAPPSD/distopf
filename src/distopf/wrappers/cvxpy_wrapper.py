@@ -184,6 +184,7 @@ class CvxpyWrapper(PyomoWrapper):
         from distopf.cvxpy_models.common.solvers import solve
 
         socp_relaxation = kwargs.pop("socp_relaxation", False)
+        sdp_relaxation = kwargs.pop("sdp_relaxation", False)
         circular_constraints = kwargs.pop("circular_constraints", True)
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         initialize = kwargs.pop("initialize", "fbs")
@@ -209,6 +210,7 @@ class CvxpyWrapper(PyomoWrapper):
             circular_constraints=circular_constraints,
             thermal_constraints=thermal_constraints,
             socp_relaxation=socp_relaxation,
+            sdp_relaxation=sdp_relaxation,
             free_swing_voltage=free_swing_voltage,
             free_boundary_loads=free_boundary_loads,
         )

@@ -282,6 +282,7 @@ class BFMProvider:
             socp_relaxation=getattr(config, "socp_relaxation", False),
             voltage_slacks=getattr(config, "voltage_slacks", False),
             thermal_slacks=getattr(config, "thermal_slacks", False),
+            sdp_relaxation=getattr(config, "sdp_relaxation", False),
         )
 
 

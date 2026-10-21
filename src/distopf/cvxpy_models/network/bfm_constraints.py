@@ -21,9 +21,15 @@ from itertools import combinations
 from math import sqrt
 
 import cvxpy as cp
+import numpy as np
 
 from distopf.cvxpy_models.common import common_constraints as const
-from distopf.cvxpy_models.common.model import SKIP, CvxModel, add_constraint
+from distopf.cvxpy_models.common.model import (
+    SKIP,
+    CvxModel,
+    VarDict,
+    add_constraint,
+)
 from distopf.pyomo_models.common.data import parse_phases
 
 sqrt2 = sqrt(2)
@@ -282,12 +288,77 @@ def add_current_constraint2_relaxed(m: CvxModel) -> None:
 
 
 def add_psd_constraints(m: CvxModel) -> None:
-    """Add positive semidefinite constraints for branch flow matrices."""
-    pass
-    # def _rule_psd(m: CvxModel, fb, tb, t):
-    #     return m.W[fb, tb, t] >> 0
+    """Add the PSD constraint ``M_ij >= 0`` on each branch and time step.
 
-    # add_constraint(m, "psd_constraint", (m.branch_set, m.time_set), _rule_psd)
+    ``M_ij`` is the 4n x 4n real matrix of voltage, power flow and current
+    terms (n = number of phases). Diagonal entries reuse ``v2``, ``p_flow``,
+    ``q_flow`` and ``l_flow``; off-diagonal entries use auxiliary variables
+    ``psd_v_re``, ``psd_v_im``, ``psd_p_off`` and ``psd_q_off``.
+    """
+    if not hasattr(m, "psd_v_re"):
+        v_keys, pq_keys = [], []
+        for fb, tb in m.branch_set:
+            phases = [ph for ph in "abc" if (fb, tb, ph) in m.branch_phase_set]
+            for t in m.time_set:
+                for p1, p2 in combinations(phases, 2):
+                    v_keys.append((fb, tb, p1 + p2, t))
+                for p1 in phases:
+                    for p2 in phases:
+                        if p1 != p2:
+                            pq_keys.append((fb, tb, p1 + p2, t))
+        m.psd_v_re = VarDict(v_keys)
+        m.psd_v_im = VarDict(v_keys)
+        m.psd_p_off = VarDict(pq_keys)
+        m.psd_q_off = VarDict(pq_keys)
+
+    def _block(rows):
+        return cp.bmat(
+            [
+                [cp.reshape(cp.Constant(e) if isinstance(e, (int, float)) else e, (1, 1), order="C") for e in row]
+                for row in rows
+            ]
+        )
+
+    def _rule_psd(m: CvxModel, fb, tb, t):
+        phases = [ph for ph in "abc" if (fb, tb, ph) in m.branch_phase_set]
+        if not phases:
+            return SKIP
+        n = len(phases)
+        vr = [[0] * n for _ in range(n)]
+        vi = [[0] * n for _ in range(n)]
+        pm = [[0] * n for _ in range(n)]
+        qm = [[0] * n for _ in range(n)]
+        lm = [[0] * n for _ in range(n)]
+        for i, a in enumerate(phases):
+            for j, b in enumerate(phases):
+                if i == j:
+                    vr[i][i] = _source_voltage(m, fb, tb, a, t)
+                    pm[i][i] = m.p_flow[fb, tb, a, t]
+                    qm[i][i] = m.q_flow[fb, tb, a, t]
+                    lm[i][i] = m.l_flow[fb, tb, a + a, t]
+                    continue
+                pair = a + b if i < j else b + a
+                vr[i][j] = m.psd_v_re[fb, tb, pair, t]
+                vi_var = m.psd_v_im[fb, tb, pair, t]
+                vi[i][j] = vi_var if i < j else -vi_var
+                pm[i][j] = m.psd_p_off[fb, tb, a + b, t]
+                qm[i][j] = m.psd_q_off[fb, tb, a + b, t]
+                lm[i][j] = m.l_flow[fb, tb, pair, t]
+
+        vr_m, vi_m, p_m, q_m, l_m = (_block(x) for x in (vr, vi, pm, qm, lm))
+        zero = cp.Constant(np.zeros((n, n)))
+        big_m = cp.bmat(
+            [
+                [vr_m, p_m, -vi_m, -q_m],
+                [p_m.T, l_m, q_m.T, zero],
+                [vi_m, q_m, vr_m, p_m],
+                [-q_m.T, zero, p_m.T, l_m],
+            ]
+        )
+        return big_m >> 0
+
+    add_constraint(m, "psd_constraint", (m.branch_set, m.time_set), _rule_psd)
+
 
 def add_constraints(
     model: CvxModel,
@@ -299,13 +370,16 @@ def add_constraints(
     socp_relaxation: bool = False,
     voltage_slacks: bool = False,
     thermal_slacks: bool = False,
+    sdp_relaxation: bool = False,
 ) -> None:
     add_p_flow_constraints(model, linear=linear)
     add_q_flow_constraints(model, linear=linear)
     add_voltage_drop_constraints(model, linear=linear)
 
     if not linear:
-        if socp_relaxation:
+        if sdp_relaxation:
+            add_psd_constraints(model)
+        elif socp_relaxation:
             add_current_constraint1_relaxed(model)
             add_current_constraint2_relaxed(model)
         else:
