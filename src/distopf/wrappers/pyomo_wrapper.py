@@ -506,6 +506,8 @@ class PyomoWrapper(Wrapper):
             "substation": objectives.substation_power_objective_rule,
             "substation_power": objectives.substation_power_objective_rule,
             "voltage_deviation": objectives.voltage_deviation_objective_rule,
+            "voltage_min": objectives.voltage_min_objective_rule,
+            "min_voltage": objectives.voltage_min_objective_rule,
             "curtail": objectives.generation_curtailment_objective_rule,
             "curtail_min": objectives.generation_curtailment_objective_rule,
             "curtailment": objectives.generation_curtailment_objective_rule,

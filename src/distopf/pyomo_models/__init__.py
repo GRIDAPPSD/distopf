@@ -10,6 +10,7 @@ from .common.objectives import (
     substation_power_objective_rule,
     total_cost_rule,
     voltage_deviation_objective_rule,
+    voltage_min_objective_rule,
 )
 from .common.results import PyoResult, get_values, get_voltages
 from .common.solvers import solve
@@ -29,4 +30,5 @@ __all__ = [
     "substation_power_objective_rule",
     "total_cost_rule",
     "voltage_deviation_objective_rule",
+    "voltage_min_objective_rule",
 ]

@@ -85,6 +85,28 @@ def voltage_deviation_objective_rule(model: LindistModelProtocol):
     return total_deviation
 
 
+def voltage_min_objective_rule(model: LindistModelProtocol):
+    """
+    Minimize the sum of squared voltage magnitudes: min sum(v2).
+
+    Uses the model's v2 variable (voltage squared), so the objective is linear.
+
+    Parameters
+    ----------
+    model : LindistModelProtocol
+        Pyomo model
+
+    Returns
+    -------
+    Pyomo expression for the sum of v2 over all buses, phases and time steps
+    """
+    total_voltage = 0
+    for _id, ph in model.bus_phase_set:
+        for t in model.time_set:
+            total_voltage += model.v2[_id, ph, t]
+    return total_voltage
+
+
 def generation_curtailment_objective_rule(model: LindistModelProtocol):
     """
     Minimize total generation curtailment.

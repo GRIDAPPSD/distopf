@@ -8,9 +8,9 @@ authors = [
   {  name="Rabayet Sadnan", email="rabayet.sadnan@pnnl.gov"},
   {  name="Abodh Poudyal"},
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "cvxpy>=1.7.2",
+    "cvxpy>=1.9.0",
     "networkx>=3.4.2",
     "numpy>=2.2.6",
     "opendssdirect-py>=0.9.4",
@@ -26,6 +26,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+nlp = [
+    "cyipopt>=1.5.0",
+]
 cim = [
     "cim-graph==0.4.1a2",
     "gridappsd-python==2025.3.2a13",

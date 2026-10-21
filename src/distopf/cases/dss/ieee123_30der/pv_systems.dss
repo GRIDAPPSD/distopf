@@ -1,0 +1,3 @@
+New PVSystem.site_35 phases=3 bus1=35   kV=4.16 kVA=150 irradiance=1 Pmpp=150 pf=1 %cutin=0.1 %cutout=0.1 	
+New PVSystem.site_105 phases=3 bus1=105   kV=4.16 kVA=80 irradiance=1 Pmpp=80 pf=1 %cutin=0.1 %cutout=0.1 	
+New PVSystem.site_76 phases=3 bus1=76   kV=4.16 kVA=125 irradiance=1 Pmpp=125 pf=1 %cutin=0.1 %cutout=0.1 	
