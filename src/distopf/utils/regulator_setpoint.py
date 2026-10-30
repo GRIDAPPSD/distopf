@@ -35,21 +35,6 @@ TAP_STEP = 0.00625  # per-unit ratio change per tap
 MAX_TAP = 16
 
 
-def _allow_solver_integrality_tolerance() -> None:
-    """distopf requires the regulator binaries to be exactly 0/1, but HiGHS returns values
-    within its integrality tolerance (e.g. 0.9999999999). Snap values within 1e-6 of an
-    integer, and still raise if any are further off. Monkeypatches PyoResult (process-wide)."""
-
-    def validate_u_reg(self):
-        if hasattr(self, "u_reg"):
-            value = self.u_reg["value"]
-            if ((value - value.round()).abs() > 1e-6).any():
-                raise ValueError("u_reg DataFrame contains non-binary values.")
-            self.u_reg["value"] = value.round()
-
-    PyoResult.validate_u_reg = validate_u_reg
-
-
 def fix_regulator_branches(case: Case) -> Case:
     """Make every ``reg_data`` (fb, tb) an actual branch (in place); returns ``case``.
 
@@ -131,7 +116,6 @@ def default_regulator_setpoint(
     [v_min + d, v_max - d], to within ``margin_tol``. Returns ``(case, None)`` unchanged
     if no tap set works even at d = 0.
     """
-    _allow_solver_integrality_tolerance()
     case = fix_regulator_branches(case.copy())
     case2 = _two_period_case(case)
 
@@ -173,9 +157,10 @@ if __name__ == "__main__":
 
     from distopf import create_case
 
-    base = create_case(Path("released/modified/partition_47/04_der"))
-    tuned, margin = default_regulator_setpoint(base)
+    base = create_case(Path("src/distopf/cases/csv/ieee9500_wye"))
+    tuned, margin = default_regulator_setpoint(base, v_min=0.848, v_max=1.153)
     print("margin", margin)
     print(
         tuned.reg_data[["fb", "tb", "tap_a", "tap_b", "tap_c"]].to_string(index=False)
     )
+    tuned.save(Path("src/distopf/cases/csv/ieee9500_wye_tuned"))
