@@ -73,9 +73,10 @@ class PyoResult:
     def validate_u_reg(self):
         """Validate that u_reg variable is present and has only binary values."""
         if hasattr(self, "u_reg"):
-            u_reg_df = getattr(self, "u_reg")
-            if not ((u_reg_df["value"] == 0) | (u_reg_df["value"] == 1)).all():
+            value = self.u_reg["value"]
+            if ((value - value.round()).abs() > 1e-6).any():
                 raise ValueError("u_reg DataFrame contains non-binary values.")
+            self.u_reg["value"] = value.round()
 
     def _populate_common_duals(self, model: pyo.ConcreteModel | LindistModelProtocol):
         """Populate commonly-used dual attributes for convenience.

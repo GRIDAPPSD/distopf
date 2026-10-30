@@ -2,7 +2,7 @@ from pathlib import Path
 import logging
 import warnings
 import pandas as pd
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 from collections.abc import Callable
 from distopf.utils.call_recorder import record_call
 
@@ -415,7 +415,12 @@ class Case:
 
     @record_call
     def run_fbs(
-        self, max_iterations: int = 100, tolerance: float = 1e-6, verbose: bool = False
+        self,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+        verbose: bool = False,
+        initial_voltages: Optional[dict[int, Any]] = None,
+        initial_currents: Optional[dict[int, Any]] = None,
     ):
         """
         Run Forward-Backward Sweep (FBS) power flow analysis.
@@ -432,6 +437,10 @@ class Case:
             Convergence tolerance (voltage change in p.u.)
         verbose : bool, default False
             Print iteration information
+        initial_voltages : dict, optional
+            Initial voltage state, such as the previous time step's solution.
+        initial_currents : dict, optional
+            Initial branch-current state, used with ``initial_voltages``.
 
         Returns
         -------
@@ -463,7 +472,11 @@ class Case:
             self._log_schedule_summary()
             fbs = FBS(self)
             result = fbs.solve(
-                max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                verbose=verbose,
+                initial_voltages=initial_voltages,
+                initial_currents=initial_currents,
             )
             logger.info("FBS completed")
             return result

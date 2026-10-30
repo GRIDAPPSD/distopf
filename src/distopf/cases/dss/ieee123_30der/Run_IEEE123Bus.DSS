@@ -44,6 +44,10 @@ Set MaxControlIter=30
 
 New EnergyMeter.Feeder Line.L115 1
 
+! add PV systems to the circuit
+
+Redirect gens.dss
+
 ! checking the solution by opening NC sectionalizing switches
 !open Line.Sw4
 !open Line.Sw5

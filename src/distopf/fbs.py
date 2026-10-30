@@ -1,1476 +1,1008 @@
+"""Multi-period forward/backward sweep (FBS) power flow.
+
+Static network data is prepared once, sweeps run level by level on arrays, and each
+time step only refreshes the schedule-dependent injections. Each step starts from the
+previous step's converged voltages. Schedules follow the Pyomo OPF conventions.
+
+Saved OPF decisions (generator, battery and ``OUT`` boundary-load setpoints) can be
+replayed through the exact power flow with :func:`run_fbs_with_opf_setpoints`,
+:func:`replay_exact_power_flow_from_opf_result`, :func:`run_fbs_from_saved_results`
+and :func:`replay_exact_power_flow`.
+"""
+
+from __future__ import annotations
+
 import json
 import re
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Iterable, NamedTuple, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
-from distopf.api import Case
-from distopf.utils.input_handlers import get
 from distopf.results import PowerFlowResult
 
-PHASE_IDX_MAP = {"a": 0, "b": 1, "c": 2, "s1": 3, "s2": 4}
+if TYPE_CHECKING:
+    from distopf.api import Case
+
+_PHASES = ("a", "b", "c", "s1", "s2")
+_PHASE_IDX = {phase: i for i, phase in enumerate(_PHASES)}
+_LOAD_SLOTS = (*_PHASES, "s1s2")
+_SWING_TYPES = ("SWING", "SWING_FREE", "IN")
+_PHASE_RE = re.compile(r"[A-Za-z]\d|.")
+_ANGLES = np.exp(1j * np.array([0.0, -2 * np.pi / 3, 2 * np.pi / 3]))
+_EPS = 1e-10
+
+# Backwards-compatible names from the original fbs.py.
+PHASE_IDX_MAP = _PHASE_IDX
 
 
 def _parse_phases(phases_str: str) -> list[str]:
-    """Parse a phases string into a list of phase names.
+    """Split a phase string such as ``"abc"`` or ``"s1s2"`` into phase names."""
+    return _PHASE_RE.findall(phases_str)
 
-    Handles both standard phases ('a', 'b', 'c', 'ab', 'abc') and
-    triplex phases ('s1', 's2', 's1s2').
 
-    Examples
-    --------
-    >>> _parse_phases("abc")
-    ['a', 'b', 'c']
-    >>> _parse_phases("s1s2")
-    ['s1', 's2']
-    >>> _parse_phases("s1")
-    ['s1']
-    """
-    return re.findall(r"[A-Za-z]\d|.", phases_str)
+def _column(df: pd.DataFrame, name: str) -> np.ndarray:
+    if name in df.columns:
+        return df[name].to_numpy(float)
+    return np.zeros(len(df))
+
+
+def _complex(real: np.ndarray, imag: np.ndarray) -> np.ndarray:
+    out = np.empty(len(real), dtype=complex)
+    out.real = real
+    out.imag = imag
+    return out
+
+
+def _table(lead: dict, values: np.ndarray) -> pd.DataFrame:
+    """Build a result frame from lead columns and a (steps, rows, 5) phase array."""
+    data = dict(lead)
+    for k, phase in enumerate(_PHASES):
+        data[phase] = values[:, :, k].reshape(-1)
+    return pd.DataFrame(data)
+
+
+def _at_period(frame: Optional[pd.DataFrame], t: int) -> Optional[pd.DataFrame]:
+    """Rows of ``frame`` for period ``t``; untimed frames apply to every period."""
+    if frame is None:
+        return None
+    if "t" not in frame.columns:
+        return frame
+    return frame[frame["t"] == t]
+
+
+class _Level(NamedTuple):
+    rows: slice
+    parent: np.ndarray
+    starts: np.ndarray
+    group_parent: np.ndarray
+    tap: np.ndarray
+    has_tap: bool
+    tri: np.ndarray
+    tri_phase: np.ndarray
+    z: np.ndarray
+
+
+class _Step(NamedTuple):
+    pl: np.ndarray
+    ql: np.ndarray
+    sec_load: np.ndarray
+    gen: np.ndarray
+    bat: np.ndarray
+    v_swing: np.ndarray
 
 
 class FBS:
-    """
-    Forward Backward Sweep method for 3-phase unbalanced power flow analysis.
-    Designed to work with the distopf Case structure and CSV data format.
+    """Forward/backward sweep over ``times``.
+
+    ``times`` defaults to ``range(case.start_step, case.start_step + case.n_steps)``.
     """
 
-    def __init__(self, case: Case):
-        """
-        Initialize the power flow solver with a Case object.
-
-        Parameters
-        ----------
-        case : Case
-            Case object containing network data
-        """
+    def __init__(self, case: Case, times: Optional[Sequence[int]] = None):
         self.case = case
-        self.bus_data = case.bus_data
-        self.branch_data = case.branch_data
-        self.gen_data = case.gen_data
-        self.cap_data = case.cap_data
-        self.reg_data = case.reg_data
-        self.bat_data = case.bat_data
+        if times is None:
+            start = int(case.start_step)
+            self.times = list(range(start, start + int(case.n_steps)))
+        else:
+            self.times = [int(t) for t in times]
+        if not self.times:
+            raise ValueError("At least one time step is required")
+        self.result: Optional[PowerFlowResult] = None
+        self._volts: Optional[np.ndarray] = None
+        self._currents: Optional[np.ndarray] = None
+        self._build_topology()
+        self._build_network()
+        self._build_devices()
+        self._build_schedules()
 
-        # Build network topology
-        self.topology = self._build_topology()
-        self.line_impedances = self._build_line_impedances()
-        self.node_loads = self._build_node_loads()
-        self.node_generations = self._build_node_generations()
-        self.node_capacitors = self._build_node_capacitors()
-        self.phase_connections = self._build_phase_connections()
-        self.node_batteries = self._build_node_batteries()
+    # ------------------------------------------------------------------ setup
 
-        # Find the real or decomposed input swing bus.
-        swing_buses = self.bus_data[
-            self.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
-        ]
-        if len(swing_buses) != 1:
+    def _build_topology(self) -> None:
+        bus = self.case.bus_data
+        branch = self.case.branch_data
+        swing = bus.index[bus["bus_type"].isin(_SWING_TYPES)]
+        if len(swing) != 1:
             raise ValueError("Exactly one swing bus must be defined")
-        self.swing_bus = swing_buses.at[swing_buses.index[0], "id"]
+        root = int(bus.at[swing[0], "id"])
 
-        # Results storage
-        self.voltages = {}
-        self.currents = {}
-        self.converged = False
-        self.iterations = 0
-        self.solve_time = None
+        children: dict[int, list[int]] = {}
+        for fb, tb in zip(
+            branch["fb"].astype(int).tolist(), branch["tb"].astype(int).tolist()
+        ):
+            children.setdefault(fb, []).append(tb)
 
-    def _is_secondary_node(self, node):
-        return 3 in self.phase_connections[node] or 4 in self.phase_connections[node]
+        ids = [root]
+        parents = [-1]
+        bounds: list[tuple[int, int]] = []
+        seen = {root}
+        frontier = [0]
+        while frontier:
+            nxt = []
+            for pos in frontier:
+                for child in children.get(ids[pos], ()):
+                    if child not in seen:
+                        seen.add(child)
+                        ids.append(child)
+                        parents.append(pos)
+                        nxt.append(len(ids) - 1)
+            if nxt:
+                bounds.append((nxt[0], nxt[-1] + 1))
+            frontier = nxt
+        self.node_ids = np.array(ids, dtype=np.int64)
+        self.parent = np.array(parents, dtype=np.int64)
+        self._bounds = bounds
 
-    def _is_triplex_transformer(self, fb, tb):
-        secondary_transformer = (
-            0 in self.phase_connections[fb]
-            or 1 in self.phase_connections[fb]
-            or 2 in self.phase_connections[fb]
-        ) and self._is_secondary_node(tb)
-        return secondary_transformer
+    def _build_network(self) -> None:
+        case = self.case
+        bus = case.bus_data
+        branch = case.branch_data
+        n = len(self.node_ids)
 
-    def _get_primary_phase(self, _id):
-        primary_phase = self.bus_data.loc[
-            self.bus_data.id == _id, "primary_phase"
-        ].to_numpy()[0]
-        primary_phase = PHASE_IDX_MAP[primary_phase]
-        return primary_phase
+        bus_pos = pd.Index(bus["id"].to_numpy(np.int64)).get_indexer(self.node_ids)
+        if (bus_pos < 0).any():
+            raise ValueError("Branch endpoints are missing from bus_data")
+        self._bus_pos = bus_pos
+        self._names = bus["name"].to_numpy(dtype=object)[bus_pos]
 
-    def _build_topology(self) -> dict:
-        """Build network topology from branch data."""
-        topology = {"nodes": set(), "children": {}, "parent": {}}
+        phases = bus["phases"].astype(str).str.lower().to_numpy()
+        uniq, inverse = np.unique(phases, return_inverse=True)
+        table = np.zeros((len(uniq), 5), dtype=bool)
+        for k, text in enumerate(uniq):
+            for phase in _PHASE_RE.findall(text):
+                table[k, _PHASE_IDX[phase]] = True
+        conn = table[inverse][bus_pos]
+        sec = conn[:, 3] | conn[:, 4]
+        self.connected = conn
+        self._is_sec = sec
+        self._cn = conn & ~sec[:, None]
+        self._sec_idx = np.flatnonzero(sec)
 
-        # Extract nodes and branches
-        for idx, branch in self.branch_data.iterrows():
-            fb = int(branch["fb"])
-            tb = int(branch["tb"])
+        tri = np.zeros(n, dtype=bool)
+        tri[1:] = conn[self.parent[1:], :3].any(axis=1) & sec[1:]
+        primary = np.zeros(n, dtype=np.int64)
+        if tri.any():
+            labels = bus["primary_phase"].to_numpy()[bus_pos]
+            primary[tri] = [_PHASE_IDX[label] for label in labels[tri]]
+        self._tri = tri
+        self._primary = primary
 
-            topology["nodes"].add(fb)
-            topology["nodes"].add(tb)
+        self._cvr_p = _column(bus, "cvr_p")[bus_pos]
+        self._cvr_q = _column(bus, "cvr_q")[bus_pos]
 
-            # Build parent-child relationships (assuming radial network)
-            if fb not in topology["children"]:
-                topology["children"][fb] = []
-            topology["children"][fb].append(tb)
-            topology["parent"][tb] = fb
+        v_nom = np.column_stack([_column(bus, f"v_{p}") for p in "abc"])[bus_pos]
+        v_init = np.zeros((n, 5), dtype=complex)
+        v_init[:, :3] = v_nom * _ANGLES
+        self._v_init = v_init
 
-        topology["nodes"] = sorted(list(topology["nodes"]))
-        return topology
+        tap = np.ones((n, 5), dtype=complex)
+        reg = case.reg_data
+        if reg is not None and len(reg):
+            node_pos = {int(i): k for k, i in enumerate(self.node_ids)}
+            for rec in reg.drop_duplicates(subset="tb", keep="first").to_dict(
+                "records"
+            ):
+                k = node_pos.get(int(rec["tb"]))
+                if k is None:
+                    continue
+                for phase in str(rec["phases"]).lower():
+                    tap[k, "abc".index(phase)] = rec[f"ratio_{phase}"]
+        self._tap = tap
 
-    def _build_phase_connections(self) -> dict[int, list[int]]:
-        """Build phase connection information for each bus."""
-        phase_connections = {}
+        z = np.zeros((n, 5, 5), dtype=complex)
+        tb_pos = pd.Index(self.node_ids).get_indexer(branch["tb"].to_numpy(np.int64))
+        sel = np.flatnonzero(tb_pos > 0)
+        rows = tb_pos[sel]
 
-        for idx, bus in self.bus_data.iterrows():
-            node_id = int(bus["id"])
-            phases_str = get(bus, "phases", "abc").lower()
-            phases_list = _parse_phases(phases_str)
-            # Convert phase string to phase indices
-            phase_connections[node_id] = [PHASE_IDX_MAP[p] for p in phases_list]
+        def zc(r: str, x: str) -> np.ndarray:
+            return _complex(_column(branch, r)[sel], _column(branch, x)[sel])
 
-        return phase_connections
+        z[rows, 0, 0] = zc("r_aa", "x_aa")
+        z[rows, 1, 1] = zc("r_bb", "x_bb")
+        z[rows, 2, 2] = zc("r_cc", "x_cc")
+        z[rows, 3, 3] = zc("r_s1s1", "x_s1s1")
+        z[rows, 4, 4] = -zc("r_s2s2", "x_s2s2")
+        z[rows, 0, 1] = z[rows, 1, 0] = zc("r_ab", "x_ab")
+        z[rows, 0, 2] = z[rows, 2, 0] = zc("r_ac", "x_ac")
+        z[rows, 1, 2] = z[rows, 2, 1] = zc("r_bc", "x_bc")
+        # The s2 voltage and current are sign-flipped, so the mutual term is antisymmetric.
+        mutual = zc("r_s1s2", "x_s1s2")
+        z[rows, 3, 4] = mutual
+        z[rows, 4, 3] = -mutual
+        self._z = z
 
-    def _build_line_impedances(self) -> dict[int, np.ndarray]:
-        """Build 3x3 impedance matrices for each line segment."""
-        impedances = {}
-
-        for idx, branch in self.branch_data.iterrows():
-            tb = int(branch["tb"])
-
-            # Build 3x3 impedance matrix from branch data
-            z = np.zeros((5, 5), dtype=complex)
-
-            # Diagonal elements
-            z[0, 0] = complex(get(branch, "r_aa", 0), get(branch, "x_aa", 0))
-            z[1, 1] = complex(get(branch, "r_bb", 0), get(branch, "x_bb", 0))
-            z[2, 2] = complex(get(branch, "r_cc", 0), get(branch, "x_cc", 0))
-            z[3, 3] = complex(get(branch, "r_s1s1", 0), get(branch, "x_s1s1", 0))
-            z[4, 4] = -complex(get(branch, "r_s2s2", 0), get(branch, "x_s2s2", 0))
-
-            # Off-diagonal elements (mutual impedances)
-            z[0, 1] = z[1, 0] = complex(
-                get(branch, "r_ab", 0), get(branch, "x_ab", 0)
-            )  # A-B
-            z[0, 2] = z[2, 0] = complex(
-                get(branch, "r_ac", 0), get(branch, "x_ac", 0)
-            )  # A-C
-            z[1, 2] = z[2, 1] = complex(
-                get(branch, "r_bc", 0), get(branch, "x_bc", 0)
-            )  # B-C
-            z[4, 3] = complex(
-                get(branch, "r_s1s2", 0), get(branch, "x_s1s2", 0)
-            )  # S1-S2
-            z[3, 4] = -z[3, 4]
-
-            impedances[tb] = z
-
-        return impedances
-
-    def _build_node_loads(self) -> dict[int, np.ndarray]:
-        """Build load data for each node."""
-        loads = {}
-
-        for idx, bus in self.bus_data.iterrows():
-            node_id = int(bus["id"])
-
-            # Check if there's any load on this bus
-            total_load = (
-                get(bus, "pl_a", 0)
-                + get(bus, "ql_a", 0)
-                + get(bus, "pl_b", 0)
-                + get(bus, "ql_b", 0)
-                + get(bus, "pl_c", 0)
-                + get(bus, "ql_c", 0)
-                + get(bus, "pl_s1", 0)
-                + get(bus, "ql_s1", 0)
-                + get(bus, "pl_s2", 0)
-                + get(bus, "ql_s2", 0)
-                + get(bus, "pl_s1s2", 0)
-                + get(bus, "ql_s1s2", 0)
+        self._levels = []
+        for start, end in self._bounds:
+            par = self.parent[start:end]
+            starts = np.flatnonzero(np.r_[True, par[1:] != par[:-1]])
+            tri_loc = np.flatnonzero(tri[start:end])
+            self._levels.append(
+                _Level(
+                    rows=slice(start, end),
+                    parent=par,
+                    starts=starts,
+                    group_parent=par[starts],
+                    tap=tap[start:end],
+                    has_tap=bool(np.any(tap[start:end] != 1)),
+                    tri=tri_loc,
+                    tri_phase=primary[start:end][tri_loc],
+                    z=z[start:end],
+                )
             )
 
-            if abs(total_load) > 1e-10:
-                # Build complex power array [S_a, S_b, S_c]
-                S_load = np.array(
-                    [
-                        complex(get(bus, "pl_a", 0), get(bus, "ql_a", 0)),
-                        complex(get(bus, "pl_b", 0), get(bus, "ql_b", 0)),
-                        complex(get(bus, "pl_c", 0), get(bus, "ql_c", 0)),
-                        complex(
-                            get(bus, "pl_s1", 0),  # + get(bus, "pl_s1s2", 0) / 2,
-                            get(bus, "ql_s1", 0),  # + get(bus, "ql_s1s2", 0) / 2,
-                        ),
-                        complex(
-                            get(bus, "pl_s2", 0),  # + get(bus, "pl_s1s2", 0) / 2,
-                            get(bus, "ql_s2", 0),  # + get(bus, "ql_s1s2", 0) / 2,
-                        ),
-                        complex(get(bus, "pl_s1s2", 0), get(bus, "ql_s1s2", 0)),
-                    ]
-                )
+    def _build_devices(self) -> None:
+        case = self.case
+        node_pos = pd.Index(self.node_ids)
+        n_phase = len(_PHASES)
 
-                loads[node_id] = S_load
+        gen = case.gen_data
+        self._gen_rows = np.zeros(0, dtype=np.int64)
+        self._gen_nodes = np.zeros(0, dtype=np.int64)
+        self._gen_p = np.zeros((0, n_phase))
+        self._gen_q = np.zeros((0, n_phase))
+        if gen is not None and len(gen):
+            self._gen_p = np.column_stack([_column(gen, f"p_{p}") for p in _PHASES])
+            self._gen_q = np.column_stack([_column(gen, f"q_{p}") for p in _PHASES])
+            gen_pos = node_pos.get_indexer(gen["id"].to_numpy(np.int64))
+            last = {int(n): g for g, n in enumerate(gen_pos) if n >= 0}
+            self._gen_nodes = np.array(list(last), dtype=np.int64)
+            self._gen_rows = np.array(list(last.values()), dtype=np.int64)
+        self._gen_sec = np.flatnonzero(self._is_sec[self._gen_nodes])
 
-        return loads
-
-    def _build_node_generations(self) -> dict[int, np.ndarray]:
-        """Build generation data for each node."""
-        generations = {}
-
-        if self.gen_data is not None and len(self.gen_data) > 0:
-            for idx, gen in self.gen_data.iterrows():
-                node_id = int(gen["id"])
-                # Build complex power array [S_a, S_b, S_c]
-                S_gen = np.array(
-                    [
-                        complex(get(gen, "p_a", 0), get(gen, "q_a", 0)),
-                        complex(get(gen, "p_b", 0), get(gen, "q_b", 0)),
-                        complex(get(gen, "p_c", 0), get(gen, "q_c", 0)),
-                        complex(get(gen, "p_s1", 0), get(gen, "q_s1", 0)),
-                        complex(get(gen, "p_s2", 0), get(gen, "q_s2", 0)),
-                    ]
-                )
-                generations[node_id] = S_gen
-        return generations
-
-    def _build_node_batteries(self) -> dict[int, np.ndarray]:
-        """Build battery injections, mapped only to the battery's phases.
-
-        Native battery input stores net ``p``/``q`` at a bus and distributes it
-        equally over the declared phases.  Per-phase ``p_*``/``q_*`` columns,
-        when present, are used directly instead.
-        """
-        batteries = {}
-        if self.bat_data is None or len(self.bat_data) == 0:
-            return batteries
-        for _, bat in self.bat_data.iterrows():
-            phases = [
-                phase
-                for phase in _parse_phases(str(get(bat, "phases", "abc")).lower())
-                if phase in PHASE_IDX_MAP
-            ]
-            values = np.zeros(5, dtype=complex)
-            has_phase_values = any(
-                f"p_{phase}" in bat.index or f"q_{phase}" in bat.index
-                for phase in PHASE_IDX_MAP
-            )
-            if has_phase_values:
-                for phase in phases:
-                    values[PHASE_IDX_MAP[phase]] = complex(
-                        get(bat, f"p_{phase}", 0), get(bat, f"q_{phase}", 0)
-                    )
-            elif phases:
-                value = complex(get(bat, "p", 0), get(bat, "q", 0)) / len(phases)
-                for phase in phases:
-                    values[PHASE_IDX_MAP[phase]] = value
-            batteries[int(bat["id"])] = values
-        return batteries
-
-    def _build_node_capacitors(self) -> dict[int, np.ndarray]:
-        """Build capacitor data for each node."""
-        capacitors = {}
-        if self.cap_data is not None and len(self.cap_data) > 0:
-            for idx, cap in self.cap_data.iterrows():
-                node_id = int(cap["id"])
-                Q_cap = np.array(
-                    [get(cap, "q_a", 0), get(cap, "q_b", 0), get(cap, "q_c", 0)]
-                )
-                capacitors[node_id] = Q_cap
-        return capacitors
-
-    def _get_swing_voltage(self) -> np.ndarray:
-        """Get swing bus voltage specification."""
-        swing_data = self.bus_data[self.bus_data.id == self.swing_bus].iloc[0]
-
-        # Get voltage magnitudes and angles
-        v_a_mag = get(swing_data, "v_a", 1.0)
-        v_b_mag = get(swing_data, "v_b", 1.0)
-        v_c_mag = get(swing_data, "v_c", 1.0)
-
-        # For IEEE systems, typically use 1.0 pu balanced voltages
-        # Create balanced 3-phase voltage set
-        v_swing = np.array(
-            [
-                v_a_mag * np.exp(1j * 0),  # Phase A: 0°
-                v_b_mag * np.exp(1j * (-2 * np.pi / 3)),  # Phase B: -120°
-                v_c_mag * np.exp(1j * (2 * np.pi / 3)),  # Phase C: +120°
-                0,  # s1
-                0,  # s2
-            ]
+        bat = case.bat_data
+        bat_nodes: dict[int, np.ndarray] = {}
+        bat_legs: dict[int, np.ndarray] = {}
+        if bat is not None and len(bat):
+            for rec in bat.to_dict("records"):
+                legs = [
+                    p
+                    for p in _PHASE_RE.findall(str(rec.get("phases", "abc")).lower())
+                    if p in _PHASE_IDX
+                ]
+                values = np.zeros(n_phase, dtype=complex)
+                if any(f"p_{p}" in rec or f"q_{p}" in rec for p in _PHASE_IDX):
+                    for p in legs:
+                        values[_PHASE_IDX[p]] = complex(
+                            rec.get(f"p_{p}", 0), rec.get(f"q_{p}", 0)
+                        )
+                elif legs:
+                    share = complex(rec.get("p", 0), rec.get("q", 0)) / len(legs)
+                    for p in legs:
+                        values[_PHASE_IDX[p]] = share
+                mask = np.zeros(n_phase, dtype=bool)
+                mask[np.array([_PHASE_IDX[p] for p in legs], dtype=np.int64)] = True
+                k = node_pos.get_indexer([int(rec["id"])])[0]
+                if k >= 0:
+                    bat_nodes[int(k)] = values
+                    bat_legs[int(k)] = mask
+        self._bat_nodes = np.array(list(bat_nodes), dtype=np.int64)
+        self._bat = np.array(list(bat_nodes.values()), dtype=complex).reshape(
+            -1, n_phase
+        )
+        self._bat_legs = np.array(list(bat_legs.values()), dtype=bool).reshape(
+            -1, n_phase
         )
 
-        return v_swing
+        cap = case.cap_data
+        cap_nodes: dict[int, np.ndarray] = {}
+        if cap is not None and len(cap):
+            for rec in cap.to_dict("records"):
+                q = np.zeros(n_phase)
+                q[:3] = [rec.get("q_a", 0), rec.get("q_b", 0), rec.get("q_c", 0)]
+                k = node_pos.get_indexer([int(rec["id"])])[0]
+                if k >= 0:
+                    cap_nodes[int(k)] = q
+        self._cap_nodes = np.array(list(cap_nodes), dtype=np.int64)
+        self._cap = np.array(list(cap_nodes.values()), dtype=float).reshape(-1, n_phase)
 
-    def _initialize_voltages(self) -> dict[int, np.ndarray]:
-        """Initialize node voltages."""
-        v_nodes = {}
-        for node in self.topology["nodes"]:
-            v = self.bus_data.loc[
-                self.bus_data.id == node, ["v_a", "v_b", "v_c"]
-            ].to_numpy()[0]
-            v_nodes[node] = np.array(
-                [
-                    v[0] + 0j,
-                    v[1] * np.exp(1j * (-2 * np.pi / 3)),
-                    v[2] * np.exp(1j * (2 * np.pi / 3)),
-                    0,  # s1
-                    0,  # s2
-                ]
+    def _schedule_column(self, column: str) -> np.ndarray:
+        sched = self._sched
+        missing = [t for t in self.times if t not in sched.index]
+        if missing:
+            raise ValueError(
+                f"schedule {column!r} has no row for time steps {missing[:5]}"
             )
-        return v_nodes
+        values = pd.to_numeric(sched.loc[self.times, column], errors="raise")
+        return values.to_numpy(float)
 
-    def _calculate_node_injection_current(
-        self, node: int, v_node: np.ndarray
-    ) -> np.ndarray:
-        """Calculate total injection current at a node (loads + generation + capacitors)."""
-        I_injection = np.zeros(5, dtype=complex)
+    def _build_schedules(self) -> None:
+        case = self.case
+        bus = case.bus_data
+        gen = case.gen_data
+        sched = getattr(case, "schedules", None)
+        if sched is None or getattr(case, "ignore_schedule", False):
+            sched = pd.DataFrame()
+        self._sched = sched
+        columns = set(sched.columns)
+        n_steps = len(self.times)
 
-        # Get phases connected to this node
-        connected_phases = self.phase_connections.get(node, [0, 1, 2])
+        self._pl_bus = np.column_stack([_column(bus, f"pl_{s}") for s in _LOAD_SLOTS])
+        self._ql_bus = np.column_stack([_column(bus, f"ql_{s}") for s in _LOAD_SLOTS])
+        if "load_shape" in bus.columns:
+            shapes = bus["load_shape"].fillna("").astype(str).str.strip()
+        else:
+            shapes = pd.Series("", index=bus.index)
+        shapes = shapes.replace("", "default").to_numpy()
+        uniq, self._shape_idx = np.unique(shapes, return_inverse=True)
+        self._node_shape = self._shape_idx[self._bus_pos]
+        self._pl_node = self._pl_bus[self._bus_pos]
+        self._ql_node = self._ql_bus[self._bus_pos]
 
-        # Load current
-        if node in self.node_loads:
-            s_load_nom = self.node_loads[node]
-            cvr_p = self.bus_data.loc[self.bus_data.id == node, "cvr_p"].tolist()[0]
-            cvr_q = self.bus_data.loc[self.bus_data.id == node, "cvr_q"].tolist()[0]
-            for ph in connected_phases:
-                p_nom = s_load_nom[ph].real
-                q_nom = s_load_nom[ph].imag
-                p_load = p_nom + cvr_p * p_nom / 2 * (abs(v_node[ph]) ** 2 - 1)
-                q_load = q_nom + cvr_q * q_nom / 2 * (abs(v_node[ph]) ** 2 - 1)
-                s_load = p_load + 1j * q_load
-                if abs(v_node[ph]) > 1e-10 and abs(s_load) > 1e-10:
-                    I_injection[ph] -= np.conj(s_load / v_node[ph])
+        self._mp = np.ones((n_steps, len(uniq), 6))
+        self._mq = np.ones((n_steps, len(uniq), 6))
+        if len(sched):
+            for si, shape in enumerate(uniq):
+                for slot, phase in enumerate(_PHASES):
+                    for kind, out in (("p", self._mp), ("q", self._mq)):
+                        column = (
+                            shape if shape in columns else f"{shape}.{phase}.{kind}"
+                        )
+                        if column not in columns:
+                            continue
+                        values = self._schedule_column(column)
+                        if np.isinf(values).any():
+                            raise ValueError(f"schedule {column!r} must be finite")
+                        out[:, si, slot] = np.where(np.isnan(values), 1.0, values)
+        # A line-to-line load is scaled by the mean of the leg multipliers.
+        self._mp[:, :, 5] = (self._mp[:, :, 3] + self._mp[:, :, 4]) / 2
+        self._mq[:, :, 5] = (self._mq[:, :, 3] + self._mq[:, :, 4]) / 2
 
-        # Generation current
-        if node in self.node_generations:
-            s_gen = self.node_generations[node]
-            for ph in connected_phases:
-                if abs(v_node[ph]) > 1e-10 and abs(s_gen[ph]) > 1e-10:
-                    I_injection[ph] += np.conj(s_gen[ph] / v_node[ph])
-
-        # Battery current
-        if node in self.node_batteries:
-            s_bat = self.node_batteries[node]
-            for ph in connected_phases:
-                if abs(v_node[ph]) > 1e-10 and abs(s_bat[ph]) > 1e-10:
-                    I_injection[ph] += np.conj(s_bat[ph] / v_node[ph])
-
-        # Capacitor current
-        if node in self.node_capacitors:
-            Q_cap_nom = self.node_capacitors[node]
-            for ph in connected_phases:
-                if abs(v_node[ph]) > 1e-10 and abs(Q_cap_nom[ph]) > 1e-10:
-                    S_cap = -1j * abs(v_node[ph]) ** 2 * Q_cap_nom[ph]
-                    I_injection[ph] -= np.conj(S_cap / v_node[ph])
-        return I_injection
-
-    def _calculate_triplex_node_injection_current(self, node: int, v_node: np.ndarray):
-        I_injection = np.zeros(5, dtype=complex)
-
-        # Load current
-        if node in self.node_loads:
-            cvr_p = self.bus_data.loc[self.bus_data.id == node, "cvr_p"].tolist()[0]
-            cvr_q = self.bus_data.loc[self.bus_data.id == node, "cvr_q"].tolist()[0]
-            s_load_nom = self.node_loads[node][3:]
-            v_load = np.array([v_node[3], v_node[4], v_node[3] + v_node[4]])
-            v2_for_cvr = np.array(
-                [
-                    abs(v_load[0]) ** 2,
-                    abs(v_load[1]) ** 2,
-                    (abs(v_load[0]) ** 2 + abs(v_load[1]) ** 2) / 2,
-                ]
-            )
-            p_nom = s_load_nom.real
-            q_nom = s_load_nom.imag
-            p_load = p_nom + cvr_p * p_nom / 2 * (v2_for_cvr - 1)
-            q_load = q_nom + cvr_q * q_nom / 2 * (v2_for_cvr - 1)
-            s_load = p_load + 1j * q_load
-            if all(abs(v_load) > 1e-10):
-                I_load = np.conj(s_load / v_load)
-                I_injection[3:] += -np.array([[1, 0, 1], [0, -1, -1]]) @ I_load
-
-        # Generation current
-        if node in self.node_generations:
-            s_gen = self.node_generations[node][3:]
-            if all(abs(v_node[3:]) > 1e-10):
-                I_gen = np.conj(s_gen / v_node[3:])
-                I_injection[3:] += np.array([[1, 0], [0, -1]]) @ I_gen
-
-        return I_injection
-
-    # def _apply_voltage_regulator(self, v_sending: np.ndarray, tb: int) -> np.ndarray:
-    #     """Apply voltage regulator transformation."""
-    #     if tb in self.reg_data.tb.array:
-    #         reg_index = self.reg_data.loc[self.reg_data.tb == tb].index[0]
-    #         phases_str = self.reg_data.at[reg_index, "phases"].lower()
-
-    #         # Apply tap ratios to appropriate phases
-    #         v_regulated = v_sending.copy()
-    #         for ph in phases_str:
-    #             i_ph = "abc".index(ph)
-    #             v_regulated[i_ph] *= self.reg_data.at[reg_index, f"ratio_{ph}"]
-
-    #         return v_regulated
-
-    #     return v_sending
-
-    def _get_tap_ratio_matrix(self, tb: int) -> np.ndarray:
-        """Get tap ratio matrix for a given branch."""
-        a_t = np.eye(5, dtype=complex)
-
-        if tb in self.reg_data.tb.array:
-            reg_index = self.reg_data.loc[self.reg_data.tb == tb].index[0]
-            phases_str = self.reg_data.at[reg_index, "phases"].lower()
-
-            for ph in phases_str:
-                i_ph = "abc".index(ph)
-                tap_ratio = self.reg_data.at[reg_index, f"ratio_{ph}"]
-                a_t[i_ph, i_ph] = tap_ratio
-
-        return a_t
-
-    def _get_tap_current_ratio_matrix(self, tb: int) -> np.ndarray:
-        """Get tap current ratio matrix for a given branch."""
-        d_t = np.eye(5, dtype=complex)
-
-        if tb in self.reg_data.tb.array:
-            reg_index = self.reg_data.loc[self.reg_data.tb == tb].index[0]
-            phases_str = self.reg_data.at[reg_index, "phases"].lower()
-
-            for ph in phases_str:
-                i_ph = "abc".index(ph)
-                tap_ratio = self.reg_data.at[reg_index, f"ratio_{ph}"]
-                d_t[i_ph, i_ph] = 1 / tap_ratio
-
-        return d_t
-
-    def _backward_sweep(self, v_nodes: dict[int, np.ndarray]) -> dict[int, np.ndarray]:
-        """Backward sweep: Calculate branch currents from loads to source."""
-        I_branches = {}
-
-        # Process nodes in reverse order (from leaves to root)
-        nodes_ordered = self._get_nodes_reverse_order()
-
-        for node in nodes_ordered:
-            if node == self.swing_bus:
-                continue
-
-            secondary = (
-                3 in self.phase_connections[node] or 4 in self.phase_connections[node]
-            )
-
-            # Calculate injection current at this node
-            if secondary:
-                I_injection = self._calculate_triplex_node_injection_current(
-                    node, v_nodes[node]
-                )
+        self._gen_mult = np.ones((n_steps, len(self._gen_p)))
+        has_schedules = not sched.empty and any(c != "time" for c in sched.columns)
+        if has_schedules and gen is not None and len(gen):
+            if "gen_shape" in gen.columns:
+                shape_col = gen["gen_shape"].fillna("").astype(str).str.strip()
             else:
-                I_injection = self._calculate_node_injection_current(
-                    node, v_nodes[node]
-                )
-
-            # Add currents from downstream branches
-            I_total = -I_injection.copy()
-            for child in self.topology["children"].get(node, {}):
-                if child not in I_branches:
-                    continue
-
-                secondary_transformer = self._is_triplex_transformer(node, child)
-                child_current = I_branches[child].copy()
-                if secondary_transformer:
-                    primary_phase = self.bus_data.loc[
-                        self.bus_data.id == child, "primary_phase"
-                    ].to_numpy()[0]
-                    primary_phase = PHASE_IDX_MAP[primary_phase]
-                    child_current_sending = np.zeros(5, dtype=complex)
-                    child_current_sending[primary_phase] = (
-                        child_current[3] - child_current[4]
-                    )
-                # Transform child current through regulator/transformer
-                # Current is inverse-transformed by tap ratio (opposite of voltage)
-                elif child in self.reg_data.tb.array:
-                    d_t = self._get_tap_ratio_matrix(child)
-                    child_current_sending = d_t @ child_current
+                shape_col = pd.Series("", index=gen.index)
+            for g, shape in enumerate(shape_col.to_numpy()):
+                if shape:
+                    if shape not in columns:
+                        raise ValueError(
+                            f"gen_shape {shape!r} is not a column of case.schedules"
+                        )
+                elif "PV" in columns:
+                    shape = "PV"
                 else:
-                    child_current_sending = child_current
+                    continue
+                values = self._schedule_column(shape)
+                if not np.isfinite(values).all():
+                    raise ValueError(
+                        f"schedule {shape!r} has blank or non-numeric values"
+                    )
+                if (values < 0).any():
+                    raise ValueError(f"schedule {shape!r} has negative values")
+                self._gen_mult[:, g] = values
 
-                I_total += child_current_sending
+        # Per-step injections. These start from the case + schedules and may be
+        # overwritten by :meth:`apply_setpoints`.
+        self._gen_p_t = self._gen_p[None] * self._gen_mult[:, :, None]
+        self._gen_q_t = np.repeat(self._gen_q[None], n_steps, axis=0)
+        self._bat_t = np.repeat(self._bat[None], n_steps, axis=0)
+        # Bus-ordered (n_steps, n_bus, 6) fixed loads; NaN means "use the schedule".
+        self._pl_fixed: Optional[np.ndarray] = None
+        self._ql_fixed: Optional[np.ndarray] = None
 
-            # Store current in upstream branch
-            parent = self.topology["parent"].get(node)
-            if parent is not None:
-                # d_t = self._get_tap_ratio_matrix(node)
-                # I_branches[node] = d_t @ I_total
-                I_branches[node] = I_total
+        base = np.array([float(bus[f"v_{p}"].iloc[self._swing_row()]) for p in "abc"])
+        swing = np.tile(base, (n_steps, 1))
+        for k, phase in enumerate("abc"):
+            column = f"v_{phase}"
+            if column in columns:
+                present = [t for t in self.times if t in sched.index]
+                values = pd.to_numeric(sched.loc[present, column], errors="coerce")
+                for t, value in zip(present, values):
+                    if pd.notna(value):
+                        swing[self.times.index(t), k] = float(value)
+        self._v_swing = np.zeros((n_steps, 5), dtype=complex)
+        self._v_swing[:, :3] = swing * _ANGLES
 
-        return I_branches
+    def _swing_row(self) -> int:
+        bus = self.case.bus_data
+        return int(np.flatnonzero(bus["bus_type"].isin(_SWING_TYPES).to_numpy())[0])
 
-    def _forward_sweep(
-        self, I_branches: dict[int, np.ndarray]
-    ) -> dict[int, np.ndarray]:
-        """Forward sweep: Calculate node voltages from source to loads."""
-        v_nodes = {}
-        v_nodes[self.swing_bus] = self._get_swing_voltage()
+    # ------------------------------------------------------------ setpoints
 
-        # Process nodes in forward order (from root to leaves)
-        nodes_ordered = self._get_nodes_forward_order()
-
-        for node in nodes_ordered:
-            if node == self.swing_bus:
-                continue
-
-            parent = self.topology["parent"][node]
-            branch_key = node
-
-            valid_key = branch_key in I_branches and branch_key in self.line_impedances
-            secondary_transformer = self._is_triplex_transformer(parent, node)
-            if not valid_key:
-                # If no current calculated, maintain parent voltage
-                v_nodes[node] = v_nodes[parent].copy()
-                continue
-
-            A_t = self._get_tap_ratio_matrix(branch_key)
-            B_t = self.line_impedances[branch_key]
-            i_branch = I_branches[branch_key]
-            v_parent = v_nodes[parent]
-            if secondary_transformer:
-                A_t = A_t[3:, 3:]
-                B_t = B_t[3:, 3:]
-                i12 = i_branch[3:]
-                primary_phase = self.bus_data.loc[
-                    self.bus_data.id == node, "primary_phase"
-                ].to_numpy()[0]
-                primary_phase = PHASE_IDX_MAP[primary_phase]
-                vss = np.array([v_parent[primary_phase], v_parent[primary_phase]])
-                if node not in v_nodes:
-                    v_nodes[node] = np.zeros(5, dtype=complex)
-                v_nodes[node][3:] = A_t @ vss - B_t @ i12
-                continue
-            # Voltage drop calculation: v_node = v_parent - Z * I
-            v_nodes[node] = A_t @ v_parent - B_t @ i_branch
-
-            # Apply voltage regulator if present
-            # v_nodes[node] = self._apply_voltage_regulator(v_before_reg, branch_key)
-
-        return v_nodes
-
-    def _get_nodes_reverse_order(self) -> list[int]:
-        """Get nodes in reverse topological order (leaves to root)."""
-        # Simple implementation: reverse of forward order
-        return list(reversed(self._get_nodes_forward_order()))
-
-    def _get_nodes_forward_order(self) -> list[int]:
-        """Get nodes in forward topological order (root to leaves) using BFS."""
-        if not hasattr(self, "_forward_order_cache"):
-            visited = set()
-            order = []
-            queue = [self.swing_bus]
-
-            while queue:
-                node = queue.pop(0)
-                if node not in visited:
-                    visited.add(node)
-                    order.append(node)
-
-                    # Add children to queue
-                    if node in self.topology["children"]:
-                        for child in self.topology["children"][node]:
-                            if child not in visited:
-                                queue.append(child)
-
-            self._forward_order_cache = order
-
-        return self._forward_order_cache
-
-    def _check_convergence(
+    def apply_setpoints(
         self,
-        v_old: dict[int, np.ndarray],
-        v_new: dict[int, np.ndarray],
-        tolerance: float,
+        *,
+        p_gens: Optional[pd.DataFrame] = None,
+        q_gens: Optional[pd.DataFrame] = None,
+        p_bats: Optional[pd.DataFrame] = None,
+        q_bats: Optional[pd.DataFrame] = None,
+        p_loads: Optional[pd.DataFrame] = None,
+        q_loads: Optional[pd.DataFrame] = None,
+    ) -> None:
+        """Overwrite per-step injections with saved OPF decisions.
+
+        Frames use the result layout: an ``id`` column, an optional ``t`` column and
+        phase columns ``a, b, c, s1, s2``. Frames without ``t`` apply to every step.
+        NaN entries keep the case/schedule value. Generator setpoints replace the
+        scheduled values, so the generator schedule is not applied on top of them.
+        Loads are applied only at ``OUT`` buses, which are free variables in a
+        decomposed OPF. CVR is disabled at those buses, matching the OPF.
+        Call this before :meth:`solve`.
+        """
+        loads_applied = False
+        for ti, t in enumerate(self.times):
+            self._override_gens(ti, _at_period(p_gens, t), self._gen_p_t, "active")
+            self._override_gens(ti, _at_period(q_gens, t), self._gen_q_t, "reactive")
+            self._override_bats(ti, _at_period(p_bats, t), real=True)
+            self._override_bats(ti, _at_period(q_bats, t), real=False)
+            for frame, prefix in ((p_loads, "pl"), (q_loads, "ql")):
+                applied = self._override_out_loads(ti, _at_period(frame, t), prefix)
+                loads_applied = applied or loads_applied
+        if loads_applied:
+            out = self._out_nodes()
+            self._cvr_p[out] = 0.0
+            self._cvr_q[out] = 0.0
+
+    def _out_nodes(self) -> np.ndarray:
+        bus = self.case.bus_data
+        if "bus_type" not in bus.columns:
+            return np.zeros(len(self.node_ids), dtype=bool)
+        return bus["bus_type"].to_numpy()[self._bus_pos] == "OUT"
+
+    def _override_gens(
+        self, ti: int, frame: Optional[pd.DataFrame], target: np.ndarray, label: str
+    ) -> None:
+        gen = self.case.gen_data
+        if frame is None or gen is None or not len(gen):
+            return
+        if "id" not in frame.columns:
+            raise ValueError(
+                f"Saved {label} power generation setpoints must contain an 'id' column"
+            )
+        saved = frame.drop_duplicates("id", keep="first").set_index("id")
+        gen_ids = gen["id"].to_numpy()
+        missing = sorted(set(gen_ids.tolist()) - set(saved.index.tolist()))
+        if missing:
+            raise ValueError(
+                f"Saved {label} power generation setpoints for t={self.times[ti]} "
+                f"are missing generator id(s): {missing}"
+            )
+        phases = [p for p in _PHASES if p in saved.columns]
+        if not phases:
+            return
+        cols = [_PHASE_IDX[p] for p in phases]
+        values = saved.loc[gen_ids, phases].apply(pd.to_numeric, errors="coerce")
+        values = values.to_numpy(float)
+        step = target[ti]  # view into the per-step array
+        step[:, cols] = np.where(np.isnan(values), step[:, cols], values)
+
+    def _override_bats(
+        self, ti: int, frame: Optional[pd.DataFrame], real: bool
+    ) -> None:
+        if frame is None or not len(frame) or not self._bat_nodes.size:
+            return
+        if "id" not in frame.columns:
+            raise ValueError("Saved battery setpoints must contain an 'id' column")
+        prefix = "p" if real else "q"
+        saved = frame.drop_duplicates("id", keep="first").set_index("id")
+        part = self._bat_t.real if real else self._bat_t.imag  # writable views
+        for j, k in enumerate(self._bat_nodes):
+            bat_id = int(self.node_ids[k])
+            if bat_id not in saved.index:
+                continue
+            row = saved.loc[bat_id]
+            values = np.full(len(_PHASES), np.nan)
+            for phase in _PHASES:
+                for column in (phase, f"{prefix}_{phase}"):
+                    if column in row.index and pd.notna(row[column]):
+                        values[_PHASE_IDX[phase]] = float(row[column])
+                        break
+            legs = self._bat_legs[j]
+            if np.isnan(values[legs]).all():
+                continue
+            part[ti, j, legs] = np.nan_to_num(values[legs])
+
+    def _override_out_loads(
+        self, ti: int, frame: Optional[pd.DataFrame], prefix: str
     ) -> bool:
-        """Check convergence based on voltage changes."""
-        max_error = 0.0
+        bus = self.case.bus_data
+        if frame is None or not len(frame) or "bus_type" not in bus.columns:
+            return False
+        is_out = bus["bus_type"] == "OUT"
+        if not is_out.any():
+            return False
+        if "id" not in frame.columns:
+            raise ValueError("Saved load setpoints must contain an 'id' column")
+        selected = frame[frame["id"].isin(bus.loc[is_out, "id"])]
+        selected = selected.drop_duplicates("id", keep="first")
+        if selected.empty:
+            return True
+        name = f"_{prefix}_fixed"
+        fixed = getattr(self, name)
+        if fixed is None:
+            fixed = np.full((len(self.times), len(bus), len(_LOAD_SLOTS)), np.nan)
+            setattr(self, name, fixed)
+        rows = pd.Index(bus["id"]).get_indexer(selected["id"])
+        for phase in _PHASES:
+            if phase not in selected.columns:
+                continue
+            values = pd.to_numeric(selected[phase], errors="coerce").to_numpy(float)
+            given = ~np.isnan(values)
+            fixed[ti, rows[given], _PHASE_IDX[phase]] = values[given]
+            if phase in ("s1", "s2"):
+                # Result s1/s2 loads already include half of the s1s2 load.
+                fixed[ti, rows[given], 5] = 0.0
+        return True
 
-        for node in v_new:
-            if node in v_old:
-                error = np.max(np.abs(v_new[node] - v_old[node]))
-                max_error = max(max_error, error)
+    # ------------------------------------------------------------------ solve
 
-        return max_error < tolerance
+    def _step(self, ti: int) -> _Step:
+        shape = self._node_shape
+        pl = self._pl_node * self._mp[ti][shape]
+        ql = self._ql_node * self._mq[ti][shape]
+        if self._pl_fixed is not None:
+            fixed = self._pl_fixed[ti][self._bus_pos]
+            pl = np.where(np.isnan(fixed), pl, fixed)
+        if self._ql_fixed is not None:
+            fixed = self._ql_fixed[ti][self._bus_pos]
+            ql = np.where(np.isnan(fixed), ql, fixed)
+        has_load = np.abs(pl.sum(axis=1) + ql.sum(axis=1)) > _EPS
+        pl[~has_load] = 0.0
+        ql[~has_load] = 0.0
+        sec = self._sec_idx
+        rows = self._gen_rows
+        gen = _complex(
+            self._gen_p_t[ti][rows].ravel(),
+            self._gen_q_t[ti][rows].ravel(),
+        ).reshape(-1, 5)
+        return _Step(
+            pl=pl[:, :5],
+            ql=ql[:, :5],
+            sec_load=pl[sec, 3:6] + 1j * ql[sec, 3:6],
+            gen=gen,
+            bat=self._bat_t[ti],
+            v_swing=self._v_swing[ti],
+        )
+
+    def _injection(self, v: np.ndarray, st: _Step) -> np.ndarray:
+        av = np.abs(v)
+        av2 = av * av
+        nz = av > _EPS
+        cn = self._cn
+        with np.errstate(divide="ignore", invalid="ignore"):
+            dv2 = av2 - 1.0
+            p = st.pl + self._cvr_p[:, None] * st.pl / 2 * dv2
+            q = st.ql + self._cvr_q[:, None] * st.ql / 2 * dv2
+            s = p + 1j * q
+            inj = -np.where(cn & nz & (np.abs(s) > _EPS), np.conj(s / v), 0)
+
+            gn = self._gen_nodes
+            if gn.size:
+                ok = cn[gn] & nz[gn] & (np.abs(st.gen) > _EPS)
+                inj[gn] += np.where(ok, np.conj(st.gen / v[gn]), 0)
+            bn = self._bat_nodes
+            if bn.size:
+                ok = cn[bn] & nz[bn] & (np.abs(st.bat) > _EPS)
+                inj[bn] += np.where(ok, np.conj(st.bat / v[bn]), 0)
+            cp = self._cap_nodes
+            if cp.size:
+                ok = cn[cp] & nz[cp] & (np.abs(self._cap) > _EPS)
+                s_cap = -1j * av2[cp] * self._cap
+                inj[cp] -= np.where(ok, np.conj(s_cap / v[cp]), 0)
+
+            si = self._sec_idx
+            if si.size:
+                v3, v4 = v[si, 3], v[si, 4]
+                v_load = np.stack([v3, v4, v3 + v4], axis=1)
+                a3, a4 = av2[si, 3], av2[si, 4]
+                v2 = np.stack([a3, a4, (a3 + a4) / 2], axis=1)
+                pn, qn = st.sec_load.real, st.sec_load.imag
+                p = pn + self._cvr_p[si, None] * pn / 2 * (v2 - 1)
+                q = qn + self._cvr_q[si, None] * qn / 2 * (v2 - 1)
+                ok = (np.abs(v_load) > _EPS).all(axis=1)
+                i_load = np.where(ok[:, None], np.conj((p + 1j * q) / v_load), 0)
+                inj[si, 3] += -(i_load[:, 0] + i_load[:, 2])
+                inj[si, 4] += i_load[:, 1] + i_load[:, 2]
+
+                pos = self._gen_sec
+                if pos.size:
+                    nodes = gn[pos]
+                    vg = v[nodes, 3:5]
+                    ok = (np.abs(vg) > _EPS).all(axis=1)
+                    i_gen = np.where(ok[:, None], np.conj(st.gen[pos, 3:5] / vg), 0)
+                    inj[nodes, 3] += i_gen[:, 0]
+                    inj[nodes, 4] += -i_gen[:, 1]
+        return inj
+
+    def _backward(self, v: np.ndarray, st: _Step) -> np.ndarray:
+        inj = self._injection(v, st)
+        branch = np.zeros_like(v)
+        child_sum = np.zeros_like(v)
+        for lv in reversed(self._levels):
+            cur = child_sum[lv.rows] - inj[lv.rows]
+            branch[lv.rows] = cur
+            send = cur * lv.tap if lv.has_tap else cur
+            if lv.tri.size:
+                diff = cur[lv.tri, 3] - cur[lv.tri, 4]
+                send[lv.tri] = 0
+                send[lv.tri, lv.tri_phase] = diff
+            child_sum[lv.group_parent] += np.add.reduceat(send, lv.starts, axis=0)
+        return branch
+
+    def _forward(self, branch: np.ndarray, v_swing: np.ndarray) -> np.ndarray:
+        v = np.empty_like(branch)
+        v[0] = v_swing
+        for lv in self._levels:
+            vp = v[lv.parent]
+            base = vp * lv.tap if lv.has_tap else vp
+            if lv.tri.size:
+                phase_v = vp[lv.tri, lv.tri_phase]
+                base[lv.tri] = 0
+                base[lv.tri, 3] = phase_v
+                base[lv.tri, 4] = phase_v
+            cur = base - (lv.z @ branch[lv.rows][:, :, None])[:, :, 0]
+            if lv.tri.size:
+                cur[lv.tri, :3] = 0
+            v[lv.rows] = cur
+        return v
 
     def solve(
-        self, max_iterations: int = 100, tolerance: float = 1e-6, verbose: bool = False
+        self,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+        verbose: bool = False,
+        initial_voltages: Optional[dict[int, np.ndarray]] = None,
+        initial_currents: Optional[dict[int, np.ndarray]] = None,
     ) -> PowerFlowResult:
+        """Solve every step in ``self.times``.
+
+        ``initial_voltages`` (``{bus_id: 5-element complex array}``) warm-starts the
+        first step; later steps start from the previous step's solution.
+        ``initial_currents`` is accepted for compatibility with the original
+        ``FBS.solve`` but is not needed, because each sweep starts from voltages.
         """
-        Solve the 3-phase unbalanced power flow using Forward Backward Sweep.
+        del initial_currents
+        if max_iterations < 1:
+            raise ValueError("max_iterations must be at least 1")
+        n_steps, n = len(self.times), len(self.node_ids)
+        volts = np.empty((n_steps, n, 5), dtype=complex)
+        currents = np.empty_like(volts)
+        steps: list[dict] = []
 
-        Parameters
-        ----------
-        max_iterations : int
-            Maximum number of iterations
-        tolerance : float
-            Convergence tolerance (voltage change in pu)
-        verbose : bool
-            Print iteration information
+        v_prev = None
+        if initial_voltages is not None:
+            v_prev = self._v_init.copy()
+            pos = {int(i): k for k, i in enumerate(self.node_ids)}
+            for bus_id, value in initial_voltages.items():
+                k = pos.get(int(bus_id))
+                if k is not None:
+                    v_prev[k] = np.asarray(value, dtype=complex)[:5]
 
-        Returns
-        -------
-        dict
-            Results containing voltages, currents, and convergence info
-        """
-        start_time = time.perf_counter()
-
-        # Initialize
-        v_old = self._initialize_voltages()
-        self.converged = False
-
-        if verbose:
-            print("Starting Forward Backward Sweep Power Flow")
-            print(f"Nodes: {len(self.topology['nodes'])}")
-            print(f"Voltage Regulators: {len(self.reg_data)}")
-            print(f"Swing Bus: {self.swing_bus}")
-
-            if len(self.reg_data) > 0:
-                print("Voltage Regulators:")
-                for idx, row in self.reg_data.iterrows():
-                    print(
-                        f"  Bus {row.fb} -> {row.tb}: Ratios = {row.loc[['ratio_a', 'ratio_b', 'ratio_c']].to_list()}"
-                    )
-
-        for iteration in range(max_iterations):
-            # Backward sweep - calculate currents
-            i_branches = self._backward_sweep(v_old)
-
-            # Forward sweep - calculate voltages
-            v_new = self._forward_sweep(i_branches)
-
-            # Check convergence
-            if self._check_convergence(v_old, v_new, tolerance):
-                self.converged = True
-                self.iterations = iteration + 1
-                if verbose:
-                    print(f"Converged in {self.iterations} iterations")
-                break
-
-            # Update for next iteration
-            v_old = v_new.copy()
-
-            if verbose and (iteration + 1) % 10 == 0:
-                max_error = max(
-                    np.max(np.abs(v_new[node] - v_old[node]))
-                    for node in v_new
-                    if node in v_old
+        for ti, t in enumerate(self.times):
+            st = self._step(ti)
+            start = time.perf_counter()
+            v_old = (self._v_init if v_prev is None else v_prev).copy()
+            v_old[0] = st.v_swing
+            converged = False
+            for iteration in range(max_iterations):
+                branch = self._backward(v_old, st)
+                v_new = self._forward(branch, st.v_swing)
+                if np.max(np.abs(v_new - v_old)) < tolerance:
+                    converged = True
+                    break
+                v_old = v_new
+            elapsed = time.perf_counter() - start
+            volts[ti], currents[ti], v_prev = v_new, branch, v_new
+            steps.append(
+                {
+                    "t": t,
+                    "iterations": iteration + 1 if converged else max_iterations,
+                    "solve_time": elapsed,
+                    "converged": converged,
+                }
+            )
+            if verbose:
+                status = "converged" if converged else "NOT converged"
+                print(
+                    f"t={t}: {status}, iterations={steps[-1]['iterations']} "
+                    f"({elapsed:.4f}s)"
                 )
-                print(f"Iteration {iteration + 1}: Max voltage error = {max_error:.2e}")
 
-        if not self.converged and verbose:
-            print(f"Warning: Did not converge after {max_iterations} iterations")
+        self._volts, self._currents = volts, currents
+        self.result = self._results(volts, currents, steps)
+        return self.result
 
-        # Store results
-        self.voltages = v_new
-        self.currents = i_branches
-        self.solve_time = time.perf_counter() - start_time
+    # ---------------------------------------------------------------- results
 
-        return self.results()
+    def _device_frames(self) -> dict[str, Optional[pd.DataFrame]]:
+        """Per-step generator and load frames in the layout used by fbs.py."""
+        case = self.case
+        times = self.times
+        out: dict[str, Optional[pd.DataFrame]] = {}
 
-    def _calculate_comparison_stats(self, comparison_df):
-        """Calculate statistics for comparison DataFrame."""
-        if len(comparison_df) == 0:
-            return {
-                "max_abs_diff": 0,
-                "mean_abs_diff": 0,
-                "max_rel_diff": 0,
-                "mean_rel_diff": 0,
-            }
+        gen = case.gen_data
+        empty_cols = ["id", "name", "t", "a", "b", "c", "s1", "s2"]
+        for prefix, label, per_step in (
+            ("p", "active_power_generation", self._gen_p_t),
+            ("q", "reactive_power_generation", self._gen_q_t),
+        ):
+            names = [f"{prefix}_{p}" for p in _PHASES]
+            present = [
+                c for c in names if c in (gen.columns if gen is not None else [])
+            ]
+            if gen is None or not len(gen) or not present:
+                out[label] = pd.DataFrame(columns=empty_cols)
+                continue
+            lead = ["id"] + (["name"] if "name" in gen.columns else [])
+            template = gen[lead + present].rename(
+                columns={f"{prefix}_{p}": p for p in _PHASES}
+            )
+            template.insert(2, "t", 0)
+            frames = []
+            for ti, t in enumerate(times):
+                frame = template.copy()
+                frame["t"] = t
+                values = per_step[ti]
+                for name in present:
+                    frame[name[2:]] = values[:, _PHASE_IDX[name[2:]]]
+                frames.append(frame)
+            out[label] = pd.concat(frames, ignore_index=True)
 
+        bus = case.bus_data
+        for prefix, label, array, mult, fixed in (
+            ("pl", "active_power_loads", self._pl_bus, self._mp, self._pl_fixed),
+            ("ql", "reactive_power_loads", self._ql_bus, self._mq, self._ql_fixed),
+        ):
+            present = [p for p in _PHASES if f"{prefix}_{p}" in bus.columns]
+            if not len(bus) or not present:
+                out[label] = None
+                continue
+            split = f"{prefix}_s1s2" in bus.columns
+            lead = ["id"] + (["name"] if "name" in bus.columns else [])
+            template = bus[lead + [f"{prefix}_{p}" for p in present]].rename(
+                columns={f"{prefix}_{p}": p for p in present}
+            )
+            template.insert(2, "t", 0)
+            frames = []
+            for ti, t in enumerate(times):
+                scaled = array * mult[ti][self._shape_idx]
+                if fixed is not None:
+                    scaled = np.where(np.isnan(fixed[ti]), scaled, fixed[ti])
+                frame = template.copy()
+                frame["t"] = t
+                for phase in present:
+                    k = _PHASE_IDX[phase]
+                    values = scaled[:, k]
+                    if phase in ("s1", "s2") and split:
+                        values = (
+                            values
+                            + np.where(np.isnan(scaled[:, 5]), 0.0, scaled[:, 5]) / 2
+                        )
+                    frame[phase] = values
+                frames.append(frame)
+            out[label] = pd.concat(frames, ignore_index=True)
+        return out
+
+    def _branch_nodes(self) -> tuple[np.ndarray, np.ndarray]:
+        nodes = np.arange(1, len(self.node_ids))
+        nodes = nodes[np.argsort(self.node_ids[nodes], kind="stable")]
+        return nodes, self.parent[nodes]
+
+    def _branch_lead(self, nodes: np.ndarray, parents: np.ndarray) -> dict:
+        ids, names, n_steps = self.node_ids, self._names, len(self.times)
         return {
-            "max_abs_diff": comparison_df["abs_diff"].max(),
-            "mean_abs_diff": comparison_df["abs_diff"].mean(),
-            "max_rel_diff": comparison_df["rel_diff_pct"].max(),
-            "mean_rel_diff": comparison_df["rel_diff_pct"].mean(),
+            "fb": np.tile(ids[parents], n_steps),
+            "tb": np.tile(ids[nodes], n_steps),
+            "from_name": np.tile(names[parents], n_steps),
+            "to_name": np.tile(names[nodes], n_steps),
+            "t": np.repeat(np.asarray(self.times, dtype=np.int64), len(nodes)),
         }
 
-    def get_voltages(self) -> pd.DataFrame:
-        """
-        Get voltage magnitudes in the specified format.
-
-        Returns
-        -------
-        pd.DataFrame
-            Voltage magnitudes with columns: id, name, t, a, b, c
-        """
-        if not hasattr(self, "voltages") or len(self.voltages) == 0:
-            raise ValueError("No results available. Run solve() first.")
-
-        voltage_data = []
-        for node, v in self.voltages.items():
-            bus_id = node
-
-            # Get bus name from bus_data
-            bus_row = self.bus_data[self.bus_data.id == bus_id]
-            bus_name = bus_row.iloc[0]["name"] if len(bus_row) > 0 else f"bus_{bus_id}"
-
-            # Get connected phases for this bus
-            connected_phases = self.phase_connections.get(node, [0, 1, 2])
-
-            voltage_data.append(
-                {
-                    "id": bus_id,
-                    "name": bus_name,
-                    "t": 0,  # Time step (assuming single time step)
-                    "a": abs(v[0]) if 0 in connected_phases else np.nan,
-                    "b": abs(v[1]) if 1 in connected_phases else np.nan,
-                    "c": abs(v[2]) if 2 in connected_phases else np.nan,
-                    "s1": abs(v[3]) if 3 in connected_phases else np.nan,
-                    "s2": abs(v[4]) if 4 in connected_phases else np.nan,
-                }
-            )
-
-        return pd.DataFrame(voltage_data).sort_values("id").reset_index(drop=True)
-
-    def get_voltage_angles(self) -> pd.DataFrame:
-        """
-        Get voltage angles in degrees in the specified format.
-
-        Returns
-        -------
-        pd.DataFrame
-            Voltage angles with columns: id, name, t, a, b, c
-        """
-        if not hasattr(self, "voltages") or len(self.voltages) == 0:
-            raise ValueError("No results available. Run solve() first.")
-
-        angle_data = []
-        for node, v in self.voltages.items():
-            bus_id = node
-
-            # Get bus name from bus_data
-            bus_row = self.bus_data[self.bus_data.id == bus_id]
-            bus_name = bus_row.iloc[0]["name"] if len(bus_row) > 0 else f"bus_{bus_id}"
-
-            # Get connected phases for this bus
-            connected_phases = self.phase_connections.get(node, [0, 1, 2])
-
-            angle_data.append(
-                {
-                    "id": bus_id,
-                    "name": bus_name,
-                    "t": 0,  # Time step
-                    "a": np.angle(v[0]) * 180 / np.pi
-                    if 0 in connected_phases
-                    else np.nan,
-                    "b": np.angle(v[1]) * 180 / np.pi
-                    if 1 in connected_phases
-                    else np.nan,
-                    "c": np.angle(v[2]) * 180 / np.pi
-                    if 2 in connected_phases
-                    else np.nan,
-                    "s1": np.angle(v[3]) * 180 / np.pi
-                    if 3 in connected_phases
-                    else np.nan,
-                    "s2": np.angle(v[4]) * 180 / np.pi
-                    if 4 in connected_phases
-                    else np.nan,
-                }
-            )
-
-        return pd.DataFrame(angle_data).sort_values("id").reset_index(drop=True)
-
-    def get_p_flows(self, from_side=True) -> pd.DataFrame:
-        """
-        Get active power flows in the specified format.
-
-        Returns
-        -------
-        pd.DataFrame
-            Active power flows with columns: fb, id, from_name, name, t, a, b, c
-        """
-        if not hasattr(self, "currents") or len(self.currents) == 0:
-            raise ValueError("No results available. Run solve() first.")
-
-        flow_data = []
-        for tb, current in self.currents.items():
-            fb = self.topology["parent"].get(tb)
-            fb_id = fb
-            tb_id = tb
-            # Get connected phases for the branch
-            fb_phases = self.phase_connections.get(fb, [0, 1, 2])
-            tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-
-            # Get bus names from bus_data
-            fb_row = self.bus_data[self.bus_data.id == fb]
-            tb_row = self.bus_data[self.bus_data.id == tb]
-
-            fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb}"
-            tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb}"
-
-            bus = fb
-            a_t = self._get_tap_ratio_matrix(tb)
-            if not from_side:
-                bus = tb
-                a_t = np.eye(5, dtype=complex)
-            voltages = self.voltages[bus].copy()
-
-            branch_phases = list(set(fb_phases) & set(tb_phases))
-            if self._is_triplex_transformer(fb, tb):
-                branch_phases = tb_phases
-                primary_phase = self._get_primary_phase(tb)
-                voltages = np.zeros_like(self.voltages[bus])
-                voltages[3:] = self.voltages[bus][primary_phase]
-
-            a_t[4, 4] = -a_t[
-                4, 4
-            ]  # s2 current is referenced pointing downstream however current on the minus reference for the voltage, so flip the sign to get correct power flow direction
-            s = a_t @ voltages * np.conj(current)
-
-            flow_data.append(
-                {
-                    "fb": fb_id,
-                    "tb": tb_id,
-                    "from_name": fb_name,
-                    "to_name": tb_name,
-                    "t": 0,  # Time step
-                    "a": s[0].real if 0 in branch_phases else np.nan,
-                    "b": s[1].real if 1 in branch_phases else np.nan,
-                    "c": s[2].real if 2 in branch_phases else np.nan,
-                    "s1": s[3].real if 3 in branch_phases else np.nan,
-                    "s2": s[4].real if 4 in branch_phases else np.nan,
-                }
-            )
-
-        return pd.DataFrame(flow_data).sort_values(["tb", "fb"]).reset_index(drop=True)
-
-    def get_q_flows(self, from_side=True) -> pd.DataFrame:
-        """
-        Get reactive power flows in the specified format.
-
-        Returns
-        -------
-        pd.DataFrame
-            Reactive power flows with columns: fb, tb, from_name, name, t, a, b, c
-        """
-        if not hasattr(self, "currents") or len(self.currents) == 0:
-            raise ValueError("No results available. Run solve() first.")
-
-        flow_data = []
-        for tb, current in self.currents.items():
-            fb = self.topology["parent"].get(tb)
-            fb_id = fb
-            tb_id = tb
-            # Get connected phases for the branch
-            fb_phases = self.phase_connections.get(fb, [0, 1, 2])
-            tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-
-            # Get bus names from bus_data
-            fb_row = self.bus_data[self.bus_data.id == fb_id]
-            tb_row = self.bus_data[self.bus_data.id == tb_id]
-
-            fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb_id}"
-            tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
-
-            bus = fb
-            a_t = self._get_tap_ratio_matrix(tb)
-            if not from_side:
-                bus = tb
-                a_t = np.eye(5, dtype=complex)
-            voltages = self.voltages[bus].copy()
-
-            branch_phases = list(set(fb_phases) & set(tb_phases))
-            if self._is_triplex_transformer(fb, tb):
-                branch_phases = tb_phases
-                primary_phase = self._get_primary_phase(tb)
-                voltages = np.zeros_like(self.voltages[bus])
-                voltages[3:] = self.voltages[bus][primary_phase]
-
-            a_t[4, 4] = -a_t[
-                4, 4
-            ]  # s2 current is referenced pointing downstream however current on the minus reference for the voltage, so flip the sign to get correct power flow direction
-            s = a_t @ voltages * np.conj(current)
-
-            # branch_phases = list(set(fb_phases) & set(tb_phases))
-
-            flow_data.append(
-                {
-                    "fb": fb_id,
-                    "tb": tb_id,
-                    "from_name": fb_name,
-                    "to_name": tb_name,
-                    "t": 0,  # Time step
-                    "a": s[0].imag if 0 in branch_phases else np.nan,
-                    "b": s[1].imag if 1 in branch_phases else np.nan,
-                    "c": s[2].imag if 2 in branch_phases else np.nan,
-                    "s1": s[3].imag if 3 in branch_phases else np.nan,
-                    "s2": s[4].imag if 4 in branch_phases else np.nan,
-                }
-            )
-
-        return pd.DataFrame(flow_data).sort_values(["tb", "fb"]).reset_index(drop=True)
-
-    def get_currents(self) -> pd.DataFrame:
-        """
-        Get current magnitudes in the specified format.
-
-        Returns
-        -------
-        pd.DataFrame
-            Current magnitudes with columns: fb, tb, from_name, name, t, a, b, c
-        """
-        if not hasattr(self, "currents") or len(self.currents) == 0:
-            raise ValueError("No results available. Run solve() first.")
-
-        current_data = []
-        for tb, current in self.currents.items():
-            fb = self.topology["parent"].get(tb)
-            fb_id = fb
-            tb_id = tb
-
-            # Get bus names from bus_data
-            fb_row = self.bus_data[self.bus_data.id == fb_id]
-            tb_row = self.bus_data[self.bus_data.id == tb_id]
-
-            fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb_id}"
-            tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
-
-            # Get connected phases for the branch
-            tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-            # branch_phases = list(set(fb_phases) & set(tb_phases))
-            branch_phases = tb_phases
-            current_data.append(
-                {
-                    "fb": fb_id,
-                    "tb": tb_id,
-                    "from_name": fb_name,
-                    "to_name": tb_name,
-                    "t": 0,  # Time step
-                    "a": abs(current[0]) if 0 in branch_phases else np.nan,
-                    "b": abs(current[1]) if 1 in branch_phases else np.nan,
-                    "c": abs(current[2]) if 2 in branch_phases else np.nan,
-                    "s1": abs(current[3]) if 3 in branch_phases else np.nan,
-                    "s2": abs(current[4]) if 4 in branch_phases else np.nan,
-                }
-            )
-
+    def _flow_tables(
+        self, volts: np.ndarray, currents: np.ndarray, from_side: bool = True
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        nodes, parents = self._branch_nodes()
+        conn = self.connected
+        phases = conn[parents] & conn[nodes]
+        tri = np.flatnonzero(self._tri[nodes])
+        phases[tri] = conn[nodes][tri]
+        if from_side:
+            v = volts[:, parents, :].copy()
+            if tri.size:
+                phase_v = v[:, tri, self._primary[nodes][tri]]
+                v[:, tri, :] = 0
+                v[:, tri, 3] = phase_v
+                v[:, tri, 4] = phase_v
+            ratio = self._tap[nodes].copy()
+        else:
+            v = volts[:, nodes, :]
+            ratio = np.ones((len(nodes), 5), dtype=complex)
+        # s2 current points downstream but sits on the minus voltage reference.
+        ratio[:, 4] = -ratio[:, 4]
+        power = ratio[None] * v * np.conj(currents[:, nodes, :])
+        lead = self._branch_lead(nodes, parents)
+        mask = phases[None]
         return (
-            pd.DataFrame(current_data).sort_values(["tb", "fb"]).reset_index(drop=True)
+            _table(lead, np.where(mask, power.real, np.nan)),
+            _table(lead, np.where(mask, power.imag, np.nan)),
         )
 
-    def get_current_angles(self) -> pd.DataFrame:
-        """
-        Get current angles in degrees in the specified format.
+    def _results(
+        self, volts: np.ndarray, currents: np.ndarray, steps: list[dict]
+    ) -> PowerFlowResult:
+        n_steps, n = volts.shape[:2]
+        ids = self.node_ids
+        order = np.argsort(ids, kind="stable")
+        conn = self.connected
 
-        Returns
-        -------
-        pd.DataFrame
-            Current angles with columns: fb, tb, from_name, name, t, a, b, c
-        """
-        if not hasattr(self, "currents") or len(self.currents) == 0:
-            raise ValueError("No results available. Run solve() first.")
+        v_sorted = volts[:, order, :]
+        mask = conn[order][None]
+        lead = {
+            "id": np.tile(ids[order], n_steps),
+            "name": np.tile(self._names[order], n_steps),
+            "t": np.repeat(np.asarray(self.times, dtype=np.int64), n),
+        }
+        voltages = _table(lead, np.where(mask, np.abs(v_sorted), np.nan))
+        angles = _table(lead, np.where(mask, np.angle(v_sorted, deg=True), np.nan))
 
-        angle_data = []
-        for tb, current in self.currents.items():
-            fb = self.topology["parent"].get(tb)
-            fb_id = fb
-            tb_id = tb
+        active, reactive = self._flow_tables(volts, currents, from_side=True)
+        nodes, parents = self._branch_nodes()
+        lead = self._branch_lead(nodes, parents)
+        i_branch = currents[:, nodes, :]
+        mask = conn[nodes][None]
+        mags = _table(lead, np.where(mask, np.abs(i_branch), np.nan))
+        i_ang = np.mod(np.angle(i_branch, deg=True), 360)
+        cur_angles = _table(lead, np.where(mask, i_ang, np.nan))
 
-            # Get bus names from bus_data
-            fb_row = self.bus_data[self.bus_data.id == fb_id]
-            tb_row = self.bus_data[self.bus_data.id == tb_id]
-
-            fb_name = fb_row.iloc[0]["name"] if len(fb_row) > 0 else f"bus_{fb_id}"
-            tb_name = tb_row.iloc[0]["name"] if len(tb_row) > 0 else f"bus_{tb_id}"
-
-            # Get connected phases for the branch
-            tb_phases = self.phase_connections.get(tb, [0, 1, 2])
-            # branch_phases = list(set(fb_phases) & set(tb_phases))
-            branch_phases = tb_phases
-
-            angle_data.append(
-                {
-                    "fb": fb_id,
-                    "tb": tb_id,
-                    "from_name": fb_name,
-                    "to_name": tb_name,
-                    "t": 0,  # Time step
-                    "a": np.angle(current[0]) * 180 / np.pi % 360
-                    if 0 in branch_phases
-                    else np.nan,
-                    "b": np.angle(current[1]) * 180 / np.pi % 360
-                    if 1 in branch_phases
-                    else np.nan,
-                    "c": np.angle(current[2]) * 180 / np.pi % 360
-                    if 2 in branch_phases
-                    else np.nan,
-                    "s1": np.angle(current[3]) * 180 / np.pi % 360
-                    if 3 in branch_phases
-                    else np.nan,
-                    "s2": np.angle(current[4]) * 180 / np.pi % 360
-                    if 4 in branch_phases
-                    else np.nan,
-                }
-            )
-
-        return pd.DataFrame(angle_data).sort_values(["tb", "fb"]).reset_index(drop=True)
-
-    def results(self) -> PowerFlowResult:
-        p_gens_df = None
-        q_gens_df = None
-        if self.gen_data is not None and len(self.gen_data) > 0:
-            gen_df = self.gen_data.copy()
-            # Map pa/pb/pc -> a/b/c and qa/qb/qc -> a/b/c with a time column t=0
-            p_cols = {"p_a": "a", "p_b": "b", "p_c": "c", "p_s1": "s1", "p_s2": "s2"}
-            q_cols = {"q_a": "a", "q_b": "b", "q_c": "c", "q_s1": "s1", "q_s2": "s2"}
-
-            # p_gens
-            p_present = [
-                c for c in ["p_a", "p_b", "p_c", "p_s1", "p_s2"] if c in gen_df.columns
-            ]
-            if p_present:
-                p_gens_df = gen_df[
-                    ["id"] + (["name"] if "name" in gen_df.columns else []) + p_present
-                ].rename(columns=p_cols)
-                # Insert time column at position 2 for single-period compatibility
-                p_gens_df.insert(2, "t", 0)
-            else:
-                # Create empty DataFrame with proper structure
-                p_gens_df = pd.DataFrame(
-                    columns=["id", "name", "t", "a", "b", "c", "s1", "s2"]
-                )
-
-            # q_gens
-            q_present = [
-                c for c in ["q_a", "q_b", "q_c", "q_s1", "q_s2"] if c in gen_df.columns
-            ]
-            if q_present:
-                q_gens_df = gen_df[
-                    ["id"] + (["name"] if "name" in gen_df.columns else []) + q_present
-                ].rename(columns=q_cols)
-                q_gens_df.insert(2, "t", 0)
-            else:
-                # Create empty DataFrame with proper structure
-                q_gens_df = pd.DataFrame(
-                    columns=["id", "name", "t", "a", "b", "c", "s1", "s2"]
-                )
-        else:
-            # Create empty DataFrames with proper structure when no gen_data
-            p_gens_df = pd.DataFrame(
-                columns=["id", "name", "t", "a", "b", "c", "s1", "s2"]
-            )
-            q_gens_df = pd.DataFrame(
-                columns=["id", "name", "t", "a", "b", "c", "s1", "s2"]
-            )
-        p_load_df = None
-        q_load_df = None
-        if self.bus_data is not None and len(self.bus_data) > 0:
-            bus_df = self.bus_data.copy()
-            for phase in ("s1", "s2"):
-                for prefix in ("pl", "ql"):
-                    leg_column = f"{prefix}_{phase}"
-                    split_column = f"{prefix}_s1s2"
-                    if leg_column in bus_df.columns and split_column in bus_df.columns:
-                        bus_df[leg_column] += bus_df[split_column].fillna(0) / 2
-            # Map pa/pb/pc -> a/b/c and qa/qb/qc -> a/b/c with a time column t=0
-            p_cols = {
-                "pl_a": "a",
-                "pl_b": "b",
-                "pl_c": "c",
-                "pl_s1": "s1",
-                "pl_s2": "s2",
-            }
-            q_cols = {
-                "ql_a": "a",
-                "ql_b": "b",
-                "ql_c": "c",
-                "ql_s1": "s1",
-                "ql_s2": "s2",
-            }
-
-            # p_gens
-            p_present = [
-                c
-                for c in ["pl_a", "pl_b", "pl_c", "pl_s1", "pl_s2"]
-                if c in bus_df.columns
-            ]
-            if p_present:
-                p_load_df = bus_df[
-                    ["id"] + (["name"] if "name" in bus_df.columns else []) + p_present
-                ].rename(columns=p_cols)
-                # Insert time column at position 2 for single-period compatibility
-                p_load_df.insert(2, "t", 0)
-
-            # q_gens
-            q_present = [
-                c
-                for c in ["ql_a", "ql_b", "ql_c", "ql_s1", "ql_s2"]
-                if c in bus_df.columns
-            ]
-            if q_present:
-                q_load_df = bus_df[
-                    ["id"] + (["name"] if "name" in bus_df.columns else []) + q_present
-                ].rename(columns=q_cols)
-                q_load_df.insert(2, "t", 0)
-        results = PowerFlowResult(
-            voltages=self.get_voltages(),
-            voltage_angles=self.get_voltage_angles(),
-            active_power_flows=self.get_p_flows(),
-            reactive_power_flows=self.get_q_flows(),
-            currents=self.get_currents(),
-            current_angles=self.get_current_angles(),
-            active_power_generation=p_gens_df,
-            reactive_power_generation=q_gens_df,
-            active_power_loads=p_load_df,
-            reactive_power_loads=q_load_df,
-            converged=self.converged,
-            iterations=self.iterations,
-            solve_time=self.solve_time,
+        frames = self._device_frames()
+        return PowerFlowResult(
+            voltages=voltages,
+            voltage_angles=angles,
+            active_power_flows=active,
+            reactive_power_flows=reactive,
+            currents=mags,
+            current_angles=cur_angles,
+            active_power_generation=frames["active_power_generation"],
+            reactive_power_generation=frames["reactive_power_generation"],
+            active_power_loads=frames["active_power_loads"],
+            reactive_power_loads=frames["reactive_power_loads"],
+            converged=all(s["converged"] for s in steps),
+            iterations=sum(s["iterations"] for s in steps),
+            solve_time=sum(s["solve_time"] for s in steps),
             solver="fbs",
-            result_type="fbs",  # FBS - iteration returns 6 values
-            model=self,  # for plotting helpers expecting result.model
+            result_type="fbs",
+            metadata={"steps": steps},
+            model=self,  # plotting helpers expect result.model
             case=self.case,
         )
-        return results
-        # return dict(
-        #     voltages=self.get_voltages(),
-        #     voltage_angles=self.get_voltage_angles(),
-        #     p_flows=self.get_p_flows(),
-        #     q_flows=self.get_q_flows(),
-        #     currents=self.get_currents(),
-        #     current_angles=self.get_current_angles(),
-        # )
 
+    # ------------------------------------------------- FBS-compatible getters
 
-def compare_with_reference(
-    fbs, model=None, dss_parser=None, verbose: bool = True
-) -> dict:
-    """
-    Compare results with reference solver and/or OpenDSS.
+    def _solved(self) -> PowerFlowResult:
+        if self.result is None:
+            raise ValueError("No results available. Run solve() first.")
+        return self.result
 
-    Parameters
-    ----------
-    model : object, optional
-        Reference solver with get_voltages, get_p_flows, get_q_flows methods
-    dss_parser : DSSToCSVConverter, optional
-        OpenDSS parser with get_v_solved, get_apparent_power_flows methods
-    verbose : bool
-        Print comparison summary
+    def results(self) -> PowerFlowResult:
+        return self._solved()
 
-    Returns
-    -------
-    dict
-        Comparison results
-    """
-    if not hasattr(fbs, "voltages") or len(fbs.voltages) == 0:
-        raise ValueError("No results available. Run solve() first.")
+    def get_voltages(self) -> pd.DataFrame:
+        return self._solved().voltages
 
-    comparisons = {}
+    def get_voltage_angles(self) -> pd.DataFrame:
+        return self._solved().voltage_angles
 
-    # Compare with reference solver if provided
-    if model is not None:
-        from distopf.matrix_models.matrix_bess.solvers import cvxpy_solve
-        from distopf.matrix_models.matrix_bess.objectives import cp_obj_none
+    def get_currents(self) -> pd.DataFrame:
+        return self._solved().currents
 
-        res = cvxpy_solve(model, cp_obj_none)
-        ref_voltages = model.get_voltages(res.x)
-        ref_p_flows = model.get_p_flows(res.x)
-        ref_q_flows = model.get_q_flows(res.x)
+    def get_current_angles(self) -> pd.DataFrame:
+        return self._solved().current_angles
 
-        # Get FBS results
-        fbs_voltages = fbs.get_voltages()
-        fbs_p_flows = fbs.get_p_flows()
-        fbs_q_flows = fbs.get_q_flows()
+    def get_p_flows(self, from_side: bool = True) -> pd.DataFrame:
+        if from_side:
+            return self._solved().active_power_flows
+        self._solved()
+        return self._flow_tables(self._volts, self._currents, from_side=False)[0]
 
-        # Compare voltages with reference solver
-        voltage_comparison_ref = []
-        for idx, fbs_row in fbs_voltages.iterrows():
-            ref_row = ref_voltages[ref_voltages.id == fbs_row.id]
-            if len(ref_row) > 0:
-                ref_row = ref_row.iloc[0]
+    def get_q_flows(self, from_side: bool = True) -> pd.DataFrame:
+        if from_side:
+            return self._solved().reactive_power_flows
+        self._solved()
+        return self._flow_tables(self._volts, self._currents, from_side=False)[1]
 
-                for phase in ["a", "b", "c"]:
-                    if not (pd.isna(fbs_row[phase]) and pd.isna(ref_row[phase])):
-                        fbs_val = fbs_row[phase] if not pd.isna(fbs_row[phase]) else 0
-                        ref_val = ref_row[phase] if not pd.isna(ref_row[phase]) else 0
+    # ---------------------------------- attributes of the original FBS class
+    # These expose the last solved step in the original dict-based layout, for
+    # plotting helpers and other code that reads ``result.model``.
 
-                        if abs(ref_val) > 1e-6:  # Only compare non-zero values
-                            voltage_comparison_ref.append(
-                                {
-                                    "bus_id": fbs_row.id,
-                                    "bus_name": fbs_row["name"],
-                                    "phase": phase,
-                                    "fbs_value": fbs_val,
-                                    "ref_value": ref_val,
-                                    "abs_diff": abs(fbs_val - ref_val),
-                                    "rel_diff_pct": abs(fbs_val - ref_val)
-                                    / max(abs(ref_val), 1e-6)
-                                    * 100,
-                                }
-                            )
+    @property
+    def bus_data(self) -> pd.DataFrame:
+        return self.case.bus_data
 
-        # Compare power flows with reference solver
-        p_flow_comparison_ref = []
-        for idx, fbs_row in fbs_p_flows.iterrows():
-            ref_row = ref_p_flows[
-                (ref_p_flows.fb == fbs_row.fb) & (ref_p_flows.tb == fbs_row.tb)
-            ]
-            if len(ref_row) > 0:
-                ref_row = ref_row.iloc[0]
+    @property
+    def branch_data(self) -> pd.DataFrame:
+        return self.case.branch_data
 
-                for phase in ["a", "b", "c"]:
-                    if not (pd.isna(fbs_row[phase]) and pd.isna(ref_row[phase])):
-                        fbs_val = fbs_row[phase] if not pd.isna(fbs_row[phase]) else 0
-                        ref_val = ref_row[phase] if not pd.isna(ref_row[phase]) else 0
+    @property
+    def gen_data(self):
+        return self.case.gen_data
 
-                        if abs(ref_val) > 1e-6:  # Only compare significant power flows
-                            p_flow_comparison_ref.append(
-                                {
-                                    "from_bus": fbs_row.fb,
-                                    "to_bus": fbs_row.tb,
-                                    "phase": phase,
-                                    "fbs_value": fbs_val,
-                                    "ref_value": ref_val,
-                                    "abs_diff": abs(fbs_val - ref_val),
-                                    "rel_diff_pct": abs(fbs_val - ref_val)
-                                    / max(abs(ref_val), 1e-3)
-                                    * 100,
-                                }
-                            )
-        q_flow_comparison_ref = []
-        for idx, fbs_row in fbs_q_flows.iterrows():
-            ref_row = ref_q_flows[
-                (ref_q_flows.fb == fbs_row.fb) & (ref_q_flows.tb == fbs_row.tb)
-            ]
-            if len(ref_row) > 0:
-                ref_row = ref_row.iloc[0]
+    @property
+    def cap_data(self):
+        return self.case.cap_data
 
-                for phase in ["a", "b", "c"]:
-                    if not (pd.isna(fbs_row[phase]) and pd.isna(ref_row[phase])):
-                        fbs_val = fbs_row[phase] if not pd.isna(fbs_row[phase]) else 0
-                        ref_val = ref_row[phase] if not pd.isna(ref_row[phase]) else 0
+    @property
+    def reg_data(self):
+        return self.case.reg_data
 
-                        if abs(ref_val) > 1e-6:  # Only compare significant power flows
-                            q_flow_comparison_ref.append(
-                                {
-                                    "from_bus": fbs_row.fb,
-                                    "to_bus": fbs_row.tb,
-                                    "phase": phase,
-                                    "fbs_value": fbs_val,
-                                    "ref_value": ref_val,
-                                    "abs_diff": abs(fbs_val - ref_val),
-                                    "rel_diff_pct": abs(fbs_val - ref_val)
-                                    / max(abs(ref_val), 1e-3)
-                                    * 100,
-                                }
-                            )
+    @property
+    def bat_data(self):
+        return self.case.bat_data
 
-        comparisons["reference"] = {
-            "voltage_comparison": pd.DataFrame(voltage_comparison_ref),
-            "p_flow_comparison": pd.DataFrame(p_flow_comparison_ref),
-            "q_flow_comparison": pd.DataFrame(q_flow_comparison_ref),
+    @property
+    def swing_bus(self) -> int:
+        return int(self.node_ids[0])
+
+    @property
+    def topology(self) -> dict:
+        ids = self.node_ids
+        children: dict[int, list[int]] = {}
+        parent: dict[int, int] = {}
+        for k in range(1, len(ids)):
+            fb, tb = int(ids[self.parent[k]]), int(ids[k])
+            children.setdefault(fb, []).append(tb)
+            parent[tb] = fb
+        return {
+            "nodes": sorted(int(i) for i in ids),
+            "children": children,
+            "parent": parent,
         }
 
-    # Compare with OpenDSS if provided
-    if dss_parser is not None:
-        dss_voltages = dss_parser.get_v_solved().reset_index(drop=True)
-        dss_power_flows = dss_parser.get_apparent_power_flows()
-
-        # Get FBS results
-        fbs_voltages = fbs.get_voltages()
-        fbs_p_flows = fbs.get_p_flows()
-        fbs_q_flows = fbs.get_q_flows()
-
-        # Compare voltages with OpenDSS
-        voltage_comparison_dss = []
-        for idx, fbs_row in fbs_voltages.iterrows():
-            # Find corresponding DSS row by name or ID
-            dss_row = None
-
-            # Try to match by name first
-            dss_matches = dss_voltages[dss_voltages["name"] == fbs_row["name"]]
-            if len(dss_matches) > 0:
-                dss_row = dss_matches.iloc[0]
-            else:
-                # Try to match by ID (assuming sequential mapping)
-                if fbs_row.id <= len(dss_voltages):
-                    dss_row = dss_voltages.iloc[fbs_row.id]
-
-            if dss_row is not None:
-                for phase in ["a", "b", "c"]:
-                    fbs_val = fbs_row[phase] if not pd.isna(fbs_row[phase]) else None
-                    dss_val = dss_row[phase] if not pd.isna(dss_row[phase]) else None
-
-                    if (
-                        fbs_val is not None
-                        and dss_val is not None
-                        and abs(dss_val) > 1e-6
-                    ):
-                        voltage_comparison_dss.append(
-                            {
-                                "bus_id": fbs_row.id,
-                                "bus_name": fbs_row["name"],
-                                "phase": phase,
-                                "fbs_value": fbs_val,
-                                "dss_value": dss_val,
-                                "abs_diff": abs(fbs_val - dss_val),
-                                "rel_diff_pct": abs(fbs_val - dss_val)
-                                / max(abs(dss_val), 1e-6)
-                                * 100,
-                            }
-                        )
-
-        # Compare power flows with OpenDSS
-        power_flow_comparison_dss = []
-        for idx, dss_flow in dss_power_flows.iterrows():
-            fb_id = dss_flow["fb"]
-            tb_id = dss_flow["tb"]
-
-            # Find corresponding FBS power flows
-            fbs_p_row = fbs_p_flows[
-                (fbs_p_flows.fb == fb_id) & (fbs_p_flows.tb == tb_id)
-            ]
-            fbs_q_row = fbs_q_flows[
-                (fbs_q_flows.fb == fb_id) & (fbs_q_flows.tb == tb_id)
-            ]
-
-            if len(fbs_p_row) > 0 and len(fbs_q_row) > 0:
-                fbs_p_row = fbs_p_row.iloc[0]
-                fbs_q_row = fbs_q_row.iloc[0]
-
-                for phase in ["a", "b", "c"]:
-                    # Extract P and Q from DSS complex power
-                    dss_complex = dss_flow[phase]
-                    if pd.notna(dss_complex) and isinstance(dss_complex, complex):
-                        dss_p = dss_complex.real
-                        dss_q = dss_complex.imag
-
-                        fbs_p = fbs_p_row[phase] if not pd.isna(fbs_p_row[phase]) else 0
-                        fbs_q = fbs_q_row[phase] if not pd.isna(fbs_q_row[phase]) else 0
-
-                        # Compare P flows
-                        if abs(dss_p) > 1e-6:
-                            power_flow_comparison_dss.append(
-                                {
-                                    "from_bus": fb_id,
-                                    "to_bus": tb_id,
-                                    "phase": phase,
-                                    "type": "P",
-                                    "fbs_value": fbs_p,
-                                    "dss_value": dss_p,
-                                    "abs_diff": abs(fbs_p - dss_p),
-                                    "rel_diff_pct": abs(fbs_p - dss_p)
-                                    / max(abs(dss_p), 1e-3)
-                                    * 100,
-                                }
-                            )
-
-                        # Compare Q flows
-                        if abs(dss_q) > 1e-6:
-                            power_flow_comparison_dss.append(
-                                {
-                                    "from_bus": fb_id,
-                                    "to_bus": tb_id,
-                                    "phase": phase,
-                                    "type": "Q",
-                                    "fbs_value": fbs_q,
-                                    "dss_value": dss_q,
-                                    "abs_diff": abs(fbs_q - dss_q),
-                                    "rel_diff_pct": abs(fbs_q - dss_q)
-                                    / max(abs(dss_q), 1e-3)
-                                    * 100,
-                                }
-                            )
-
-        comparisons["opendss"] = {
-            "voltage_comparison": pd.DataFrame(voltage_comparison_dss),
-            "power_flow_comparison": pd.DataFrame(power_flow_comparison_dss),
+    @property
+    def phase_connections(self) -> dict[int, list[int]]:
+        return {
+            int(i): np.flatnonzero(self.connected[k]).tolist()
+            for k, i in enumerate(self.node_ids)
         }
 
-    # Print comparison results
-    if verbose:
-        print("\n" + "=" * 80)
-        print("COMPREHENSIVE COMPARISON RESULTS")
-        print("=" * 80)
+    @property
+    def voltages(self) -> dict[int, np.ndarray]:
+        if self._volts is None:
+            return {}
+        return {int(i): self._volts[-1, k].copy() for k, i in enumerate(self.node_ids)}
 
-        if "reference" in comparisons:
-            ref_voltage_stats = fbs._calculate_comparison_stats(
-                comparisons["reference"]["voltage_comparison"]
-            )
-            ref_pflow_stats = fbs._calculate_comparison_stats(
-                comparisons["reference"]["p_flow_comparison"]
-            )
-            ref_qflow_stats = fbs._calculate_comparison_stats(
-                comparisons["reference"]["q_flow_comparison"]
-            )
+    @property
+    def currents(self) -> dict[int, np.ndarray]:
+        if self._currents is None:
+            return {}
+        return {
+            int(self.node_ids[k]): self._currents[-1, k].copy()
+            for k in range(1, len(self.node_ids))
+        }
 
-            print("\nCOMPARISON WITH REFERENCE SOLVER:")
-            print(
-                f"  Voltage - Max Abs Diff: {ref_voltage_stats['max_abs_diff']:.6f} pu"
-            )
-            print(
-                f"  Voltage - Mean Abs Diff: {ref_voltage_stats['mean_abs_diff']:.6f} pu"
-            )
-            print(f"  Voltage - Max Rel Diff: {ref_voltage_stats['max_rel_diff']:.3f}%")
-            print(f"  P Flow - Max Abs Diff: {ref_pflow_stats['max_abs_diff']:.6f} MW")
-            print(
-                f"  P Flow - Mean Abs Diff: {ref_pflow_stats['mean_abs_diff']:.6f} MW"
-            )
-            print(
-                f"  Q Flow - Max Abs Diff: {ref_qflow_stats['max_abs_diff']:.6f} MVar"
-            )
-            print(
-                f"  Q Flow - Mean Abs Diff: {ref_qflow_stats['mean_abs_diff']:.6f} MVar"
-            )
+    @property
+    def converged(self) -> bool:
+        return bool(self.result.converged) if self.result is not None else False
 
-        if "opendss" in comparisons:
-            dss_voltage_stats = fbs._calculate_comparison_stats(
-                comparisons["opendss"]["voltage_comparison"]
-            )
-            dss_pflow_df = comparisons["opendss"]["power_flow_comparison"]
-            dss_p_stats = fbs._calculate_comparison_stats(
-                dss_pflow_df[dss_pflow_df["type"] == "P"]
-            )
-            dss_q_stats = fbs._calculate_comparison_stats(
-                dss_pflow_df[dss_pflow_df["type"] == "Q"]
-            )
+    @property
+    def iterations(self) -> int:
+        return int(self.result.iterations or 0) if self.result is not None else 0
 
-            print("\nCOMPARISON WITH OPENDSS:")
-            print(
-                f"  Voltage - Max Abs Diff: {dss_voltage_stats['max_abs_diff']:.6f} pu"
-            )
-            print(
-                f"  Voltage - Mean Abs Diff: {dss_voltage_stats['mean_abs_diff']:.6f} pu"
-            )
-            print(f"  Voltage - Max Rel Diff: {dss_voltage_stats['max_rel_diff']:.3f}%")
-            print(f"  P Flow - Max Abs Diff: {dss_p_stats['max_abs_diff']:.6f} MW")
-            print(f"  P Flow - Mean Abs Diff: {dss_p_stats['mean_abs_diff']:.6f} MW")
-            print(f"  Q Flow - Max Abs Diff: {dss_q_stats['max_abs_diff']:.6f} MVAr")
-            print(f"  Q Flow - Mean Abs Diff: {dss_q_stats['mean_abs_diff']:.6f} MVAr")
-
-            # Show worst differences
-            if len(comparisons["opendss"]["voltage_comparison"]) > 0:
-                worst_voltage = comparisons["opendss"]["voltage_comparison"].nlargest(
-                    3, "abs_diff"
-                )
-                print("\n  Largest voltage differences vs OpenDSS:")
-                for _, row in worst_voltage.iterrows():
-                    print(
-                        f"    Bus {row['bus_id']} ({row['bus_name']}) Phase {row['phase'].upper()}: "
-                        f"FBS={row['fbs_value']:.6f}, DSS={row['dss_value']:.6f}, "
-                        f"Diff={row['abs_diff']:.6f} ({row['rel_diff_pct']:.2f}%)"
-                    )
-
-            if len(dss_pflow_df) > 0:
-                worst_p_flow = dss_pflow_df[dss_pflow_df["type"] == "P"].nlargest(
-                    3, "abs_diff"
-                )
-                print("\n  Largest P flow differences vs OpenDSS:")
-                for _, row in worst_p_flow.iterrows():
-                    print(
-                        f"    Branch {row['from_bus']}->{row['to_bus']} Phase {row['phase'].upper()}: "
-                        f"FBS={row['fbs_value']:.6f}, DSS={row['dss_value']:.6f}, "
-                        f"Diff={row['abs_diff']:.6f} ({row['rel_diff_pct']:.2f}%)"
-                    )
-
-    return comparisons
+    @property
+    def solve_time(self) -> Optional[float]:
+        return self.result.solve_time if self.result is not None else None
 
 
 def fbs_solve(
@@ -1479,112 +1011,258 @@ def fbs_solve(
     tolerance: float = 1e-6,
     verbose: bool = False,
 ) -> PowerFlowResult:
-    """
-    Convenience function to solve power flow for a Case object.
-
-    Parameters
-    ----------
-    case : Case
-        Case object with network data
-    max_iterations : int
-        Maximum iterations for convergence
-    tolerance : float
-        Convergence tolerance
-    verbose : bool
-        Print progress information
-
-    Returns
-    -------
-    dict
-        Power flow results
-    """
-    pf = FBS(case)
-    return pf.solve(max_iterations=max_iterations, tolerance=tolerance, verbose=verbose)
+    """Solve every step of ``case`` and return one result with ``t``-labelled frames."""
+    return FBS(case).solve(
+        max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+    )
 
 
 # -------------------------------------------------------------------------
-# Utility: run FBS using OPF setpoints
+# Exact power-flow replay of OPF setpoints
 # -------------------------------------------------------------------------
+
+_SETPOINT_FIELDS = (
+    "active_power_generation",
+    "reactive_power_generation",
+    "battery_active_power",
+    "battery_reactive_power",
+    "active_power_loads",
+    "reactive_power_loads",
+)
+
+
+def _replay_times(case: Case, frames: Iterable[Optional[pd.DataFrame]]) -> list[int]:
+    """Periods labelled in the setpoint frames, else the case's configured horizon."""
+    labelled = {
+        int(value)
+        for frame in frames
+        if frame is not None and len(frame) and "t" in frame.columns
+        for value in frame["t"].dropna()
+    }
+    if labelled:
+        return sorted(labelled)
+    start = int(getattr(case, "start_step", 0) or 0)
+    n_steps = int(getattr(case, "n_steps", 1) or 1)
+    return list(range(start, start + max(n_steps, 1)))
+
+
+def _label_periods(frame: pd.DataFrame, times: list[int]) -> pd.DataFrame:
+    if "t" in frame.columns:
+        return frame[frame["t"].isin(times)].reset_index(drop=True)
+    return pd.concat([frame.assign(t=t) for t in times], ignore_index=True)
+
+
+def _solve_with_setpoints(
+    case: Case,
+    frames: dict[str, Optional[pd.DataFrame]],
+    *,
+    max_iterations: int,
+    tolerance: float,
+    verbose: bool,
+) -> PowerFlowResult:
+    times = _replay_times(case, frames.values())
+    solver = FBS(case, times=times)
+    solver.apply_setpoints(
+        p_gens=frames.get("active_power_generation"),
+        q_gens=frames.get("reactive_power_generation"),
+        p_bats=frames.get("battery_active_power"),
+        q_bats=frames.get("battery_reactive_power"),
+        p_loads=frames.get("active_power_loads"),
+        q_loads=frames.get("reactive_power_loads"),
+    )
+    result = solver.solve(
+        max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+    )
+    for name in ("battery_active_power", "battery_reactive_power"):
+        frame = frames.get(name)
+        if frame is not None and len(frame):
+            setattr(result, name, _label_periods(frame.copy(), times))
+    return result
+
+
+def _tag_exact(result: PowerFlowResult, **extra) -> PowerFlowResult:
+    result.metadata = {
+        **(result.metadata or {}),
+        "analysis": "exact_power_flow_replay",
+        **extra,
+        "reference_solver": "fbs",
+    }
+    return result
 
 
 def run_fbs_with_opf_setpoints(
     case: Case,
-    opf_result=None,
+    opf_result: Optional[PowerFlowResult] = None,
     *,
-    p_gens=None,
-    q_gens=None,
+    p_gens: Optional[pd.DataFrame] = None,
+    q_gens: Optional[pd.DataFrame] = None,
     max_iterations: int = 100,
     tolerance: float = 1e-6,
     verbose: bool = False,
-) -> "PowerFlowResult":
+) -> PowerFlowResult:
     """Replay OPF generator, battery and boundary-load setpoints through FBS.
 
-    Ordinary loads, generator ``p`` and the swing voltage come from the case and
-    its schedules (FBS does not read schedules itself, so they are baked in per
-    period).  Saved generator and battery values then overwrite the case values.
+    Ordinary loads, generator ``p`` and the swing voltage come from ``case`` and its
+    schedules. Saved generator and battery values then replace the case values.
     Saved loads are applied only at ``OUT`` boundary buses, where they are free
-    variables in decomposed OPF.  A supplied generator frame must cover every
-    generator.
+    variables in a decomposed OPF. A supplied generator frame must cover every
+    generator. Explicit ``p_gens`` / ``q_gens`` take precedence over ``opf_result``.
     """
-    if opf_result is not None:
-        p_gens = (
-            p_gens
-            if p_gens is not None
-            else getattr(opf_result, "active_power_generation", None)
-        )
-        q_gens = (
-            q_gens
-            if q_gens is not None
-            else getattr(opf_result, "reactive_power_generation", None)
-        )
-    loads = (
-        (
-            getattr(opf_result, "active_power_loads", None),
-            getattr(opf_result, "reactive_power_loads", None),
-        )
-        if opf_result is not None
-        else (None, None)
+    frames = {name: getattr(opf_result, name, None) for name in _SETPOINT_FIELDS}
+    if p_gens is not None:
+        frames["active_power_generation"] = p_gens
+    if q_gens is not None:
+        frames["reactive_power_generation"] = q_gens
+    return _solve_with_setpoints(
+        case,
+        frames,
+        max_iterations=max_iterations,
+        tolerance=tolerance,
+        verbose=verbose,
     )
-    bats = (
-        (
-            getattr(opf_result, "battery_active_power", None),
-            getattr(opf_result, "battery_reactive_power", None),
-        )
-        if opf_result is not None
-        else (None, None)
+
+
+def replay_exact_power_flow_from_opf_result(
+    case: Case,
+    opf_result: PowerFlowResult,
+    *,
+    output_dir: Optional[Path | str] = None,
+    max_iterations: int = 100,
+    tolerance: float = 1e-6,
+    verbose: bool = False,
+) -> PowerFlowResult:
+    """Run exact FBS using an in-memory OPF result's setpoints.
+
+    The optimization is not run again. Every period labelled in the OPF result is
+    solved in one :class:`FBS` instance, and each period is warm-started from
+    the previous one. When ``output_dir`` is given, the result is saved there.
+    """
+    result = run_fbs_with_opf_setpoints(
+        case,
+        opf_result,
+        max_iterations=max_iterations,
+        tolerance=tolerance,
+        verbose=verbose,
     )
-    frames = [*loads, p_gens, q_gens, *bats]
-    periods = _replay_periods(case, frames)
-    results = []
-    for t in periods:
-        current = case.copy()
-        if current.schedules is not None and len(current.schedules):
-            _apply_schedule_to_case(current, t)
-            current.ignore_schedule = (
-                True  # snapshot loads already include the schedule
-            )
-        _apply_boundary_load_setpoints(
-            current, _at_period(loads[0], t), _at_period(loads[1], t)
+    _tag_exact(result)
+    if output_dir is not None:
+        result.save(output_dir)
+    return result
+
+
+# ------------------------------------------------------- saved-result replay
+
+_GEN_FILES = ("active_power_generation", "reactive_power_generation")
+_LOAD_FILES = ("active_power_loads", "reactive_power_loads")
+_BAT_FILES = ("battery_active_power", "battery_reactive_power")
+_CASE_KWARGS = {
+    "start_step",
+    "n_steps",
+    "delta_t",
+    "ignore_schedule",
+    "ignore_gen",
+    "ignore_bat",
+    "ignore_cap",
+    "ignore_reg",
+}
+
+
+def _read_frame(results_path: Path, name: str) -> Optional[pd.DataFrame]:
+    frame = pd.read_csv(results_path / f"{name}.csv")
+    if frame.empty:
+        return None
+    if "id" not in frame.columns:
+        raise ValueError(f"Saved setpoint file {name}.csv must contain an 'id' column")
+    return frame
+
+
+def _validate_ids(name, frame, target, target_label) -> None:
+    if frame is None or frame.empty:
+        return
+    if target is None or len(target) == 0:
+        raise ValueError(
+            f"Saved {name} setpoints contain IDs, but the selected case has no "
+            f"{target_label}"
         )
-        _apply_gen_setpoints_to_case(
-            current, _at_period(p_gens, t), _at_period(q_gens, t)
-        ) if p_gens is not None or q_gens is not None else None
-        _apply_battery_setpoints_to_case(
-            current, _at_period(bats[0], t), _at_period(bats[1], t)
+    unknown = set(frame["id"].dropna()) - set(target["id"].dropna())
+    if unknown:
+        raise ValueError(
+            f"Saved {name} IDs are incompatible with the selected case; "
+            f"unknown IDs: {sorted(unknown)}"
         )
-        current.start_step, current.n_steps = 0, 1
-        result = current.run_fbs(
-            max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+
+
+def _case_from_snapshot(results_path: Path) -> Case:
+    input_path = results_path / "input"
+    if not input_path.is_dir():
+        raise FileNotFoundError(
+            f"No case supplied and saved input snapshot is missing: {input_path}"
         )
-        _set_result_period(result, t)
-        for name, frame in zip(
-            ("battery_active_power", "battery_reactive_power"), bats
-        ):
-            selected = _at_period(frame, t)
-            if selected is not None and len(selected):
-                setattr(result, name, selected)
-        results.append(result)
-    return results[0] if len(results) == 1 else _aggregate_fbs_results(results, case)
+    run_config = {}
+    config_path = results_path / "run_config.json"
+    if config_path.is_file():
+        try:
+            run_config = json.loads(config_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Could not read {config_path}: {exc}") from exc
+    from distopf.api import create_case
+
+    case_info = run_config.get("case", {})
+    kwargs = case_info.get("kwargs", {}) if isinstance(case_info, dict) else {}
+    kwargs = {key: value for key, value in kwargs.items() if key in _CASE_KWARGS}
+    return create_case(input_path, model_type="csv", **kwargs)
+
+
+def _read_saved_setpoints(
+    results_path: Path, case: Optional[Case]
+) -> tuple[Case, dict[str, Optional[pd.DataFrame]]]:
+    if not results_path.is_dir():
+        raise FileNotFoundError(f"Results directory does not exist: {results_path}")
+
+    # Generator files are always written by OPF results; load files are optional
+    # but must come as a pair; battery files are optional.
+    missing = [
+        f"{n}.csv" for n in _GEN_FILES if not (results_path / f"{n}.csv").is_file()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            "Saved results are missing required setpoint file(s): " + ", ".join(missing)
+        )
+    present_loads = [n for n in _LOAD_FILES if (results_path / f"{n}.csv").is_file()]
+    if present_loads and len(present_loads) != len(_LOAD_FILES):
+        missing = [f"{n}.csv" for n in _LOAD_FILES if n not in present_loads]
+        raise FileNotFoundError(
+            "Saved load setpoints are incomplete; missing: " + ", ".join(missing)
+        )
+
+    if case is None:
+        case = _case_from_snapshot(results_path)
+
+    frames: dict[str, Optional[pd.DataFrame]] = {
+        n: _read_frame(results_path, n) for n in _GEN_FILES
+    }
+    for n in _LOAD_FILES:
+        frames[n] = _read_frame(results_path, n) if present_loads else None
+
+    if case.gen_data is not None and len(case.gen_data):
+        for n in _GEN_FILES:
+            if frames[n] is None:
+                raise ValueError(
+                    f"Saved {n}.csv is empty but the selected case has generators"
+                )
+    for n in _LOAD_FILES:
+        _validate_ids(n, frames[n], case.bus_data, "buses")
+    for n in _GEN_FILES:
+        _validate_ids(n, frames[n], case.gen_data, "generators")
+
+    # Battery setpoints are only consumed when the case has batteries.
+    has_bats = case.bat_data is not None and len(case.bat_data) > 0
+    for n in _BAT_FILES:
+        frames[n] = None
+        if has_bats and (results_path / f"{n}.csv").is_file():
+            frames[n] = _read_frame(results_path, n)
+            _validate_ids(n, frames[n], case.bat_data, "batteries")
+    return case, frames
 
 
 def run_fbs_from_saved_results(
@@ -1597,184 +1275,21 @@ def run_fbs_from_saved_results(
 ) -> PowerFlowResult:
     """Run FBS using setpoints saved by :meth:`PowerFlowResult.save`.
 
-    This helper reads the saved result CSVs and replays those setpoints through
-    :func:`run_fbs_with_opf_setpoints`; it never re-executes the recorded OPF
-    call.  When ``case`` is omitted, the materialized ``input`` snapshot is
-    reconstructed with :func:`distopf.api.create_case`.
-
-    Parameters
-    ----------
-    results_dir : Path or str
-        Directory containing result CSVs written by ``PowerFlowResult.save``.
-    case : Case, optional
-        Explicit case to use instead of reconstructing ``results_dir/input``.
-    max_iterations, tolerance, verbose
-        FBS solver options.
+    The recorded OPF is never re-executed. When ``case`` is omitted, the saved
+    ``input`` snapshot is rebuilt with :func:`distopf.api.create_case`.
 
     Raises
     ------
     FileNotFoundError
-        If the result directory, input snapshot, or required setpoint CSV is
+        If the result directory, input snapshot or a required setpoint CSV is
         missing.
     ValueError
-        If saved setpoints cannot be applied to the selected case.
+        If the saved setpoints cannot be applied to the selected case.
     """
-    results_path = Path(results_dir)
-    if not results_path.exists() or not results_path.is_dir():
-        raise FileNotFoundError(f"Results directory does not exist: {results_path}")
-
-    # ``PowerFlowResult.save`` omits fields whose value is ``None``.  Generator
-    # setpoint files are emitted by OPF results even when empty, while load
-    # files may be absent (in which case the centralized replay path uses the
-    # reconstructed case schedules).  Require the generator pair and reject a
-    # partially written pair of files; battery files remain optional below.
-    required = ("active_power_generation.csv", "reactive_power_generation.csv")
-    missing = [name for name in required if not (results_path / name).is_file()]
-    if missing:
-        raise FileNotFoundError(
-            "Saved results are missing required setpoint file(s): " + ", ".join(missing)
-        )
-    load_files = ("active_power_loads", "reactive_power_loads")
-    present_load_files = [
-        name for name in load_files if (results_path / f"{name}.csv").is_file()
-    ]
-    if present_load_files and len(present_load_files) != len(load_files):
-        missing_load = [
-            f"{name}.csv" for name in load_files if name not in present_load_files
-        ]
-        raise FileNotFoundError(
-            "Saved load setpoints are incomplete; missing: " + ", ".join(missing_load)
-        )
-
-    run_config = {}
-    config_path = results_path / "run_config.json"
-    if config_path.is_file():
-        try:
-            with config_path.open() as stream:
-                run_config = json.load(stream)
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Could not read {config_path}: {exc}") from exc
-
-    if case is None:
-        input_path = results_path / "input"
-        if not input_path.is_dir():
-            raise FileNotFoundError(
-                f"No case supplied and saved input snapshot is missing: {input_path}"
-            )
-        from distopf.api import create_case
-
-        case_info = run_config.get("case", {})
-        kwargs = case_info.get("kwargs", {}) if isinstance(case_info, dict) else {}
-        allowed = {
-            "start_step",
-            "n_steps",
-            "delta_t",
-            "ignore_schedule",
-            "ignore_gen",
-            "ignore_bat",
-            "ignore_cap",
-            "ignore_reg",
-        }
-        kwargs = {key: value for key, value in kwargs.items() if key in allowed}
-        case = create_case(input_path, model_type="csv", **kwargs)
-
-    frames = {
-        name: pd.read_csv(results_path / f"{name}.csv")
-        for name in (
-            "active_power_generation",
-            "reactive_power_generation",
-        )
-    }
-    if present_load_files:
-        frames.update(
-            {name: pd.read_csv(results_path / f"{name}.csv") for name in load_files}
-        )
-    else:
-        frames.update({name: None for name in load_files})
-    for name, frame in frames.items():
-        if frame is not None and frame.empty:
-            frames[name] = None
-        elif frame is not None and "id" not in frame.columns:
-            raise ValueError(
-                f"Saved setpoint file {name}.csv must contain an 'id' column"
-            )
-
-    if case.gen_data is not None and len(case.gen_data):
-        for name in ("active_power_generation", "reactive_power_generation"):
-            if frames[name] is None:
-                raise ValueError(
-                    f"Saved {name}.csv is empty but the selected case has generators"
-                )
-
-    def _validate_ids(name, frame, target, target_label):
-        if frame is None or frame.empty or target is None or len(target) == 0:
-            if (
-                frame is not None
-                and not frame.empty
-                and (target is None or len(target) == 0)
-            ):
-                raise ValueError(
-                    f"Saved {name} setpoints contain IDs, but the selected case has no {target_label}"
-                )
-            return
-        saved_ids = set(frame["id"].dropna())
-        case_ids = set(target["id"].dropna())
-        if not saved_ids.issubset(case_ids):
-            raise ValueError(
-                f"Saved {name} IDs are incompatible with the selected case; "
-                f"unknown IDs: {sorted(saved_ids - case_ids)}"
-            )
-
-    _validate_ids(
-        "active_power_loads", frames.get("active_power_loads"), case.bus_data, "buses"
-    )
-    _validate_ids(
-        "reactive_power_loads",
-        frames.get("reactive_power_loads"),
-        case.bus_data,
-        "buses",
-    )
-    _validate_ids(
-        "active_power_generation",
-        frames["active_power_generation"],
-        case.gen_data,
-        "generators",
-    )
-    _validate_ids(
-        "reactive_power_generation",
-        frames["reactive_power_generation"],
-        case.gen_data,
-        "generators",
-    )
-
-    # Battery setpoints are optional: OPF results without batteries do not
-    # write meaningful battery files, and cases without batteries should not
-    # require or attempt to consume them.
-    battery_frames = {}
-    if case.bat_data is not None and len(case.bat_data):
-        for name in ("battery_active_power", "battery_reactive_power"):
-            path = results_path / f"{name}.csv"
-            if path.is_file():
-                frame = pd.read_csv(path)
-                if "id" not in frame.columns:
-                    raise ValueError(
-                        f"Saved setpoint file {name}.csv must contain an 'id' column"
-                    )
-                _validate_ids(name, frame, case.bat_data, "batteries")
-                battery_frames[name] = frame
-
-    replay_result = PowerFlowResult(
-        active_power_loads=frames.get("active_power_loads"),
-        reactive_power_loads=frames.get("reactive_power_loads"),
-        active_power_generation=frames["active_power_generation"],
-        reactive_power_generation=frames["reactive_power_generation"],
-        battery_active_power=battery_frames.get("battery_active_power"),
-        battery_reactive_power=battery_frames.get("battery_reactive_power"),
-        case=case,
-    )
-    return run_fbs_with_opf_setpoints(
+    case, frames = _read_saved_setpoints(Path(results_dir), case)
+    return _solve_with_setpoints(
         case,
-        replay_result,
+        frames,
         max_iterations=max_iterations,
         tolerance=tolerance,
         verbose=verbose,
@@ -1795,18 +1310,17 @@ def replay_exact_power_flow(
     """Replay a saved OPF operating point through the exact FBS power flow.
 
     The saved OPF result is treated as a set of operating-point decisions; the
-    recorded optimization is not run again. By default, the exact result is
-    saved in an ``exact`` subdirectory of ``results_dir``.
+    recorded optimization is not run again. By default, the result is saved in an
+    ``exact`` subdirectory of ``results_dir``.
     """
     results_path = Path(results_dir)
     exact_path = Path(output_dir) if output_dir is not None else results_path / "exact"
-
-    if save and exact_path.exists() and not overwrite:
-        raise FileExistsError(
-            f"Exact power-flow result directory already exists: {exact_path}. "
-            "Pass overwrite=True to replace it."
-        )
-    if save and overwrite and exact_path.exists():
+    if save and exact_path.exists():
+        if not overwrite:
+            raise FileExistsError(
+                f"Exact power-flow result directory already exists: {exact_path}. "
+                "Pass overwrite=True to replace it."
+            )
         import shutil
 
         shutil.rmtree(exact_path)
@@ -1818,327 +1332,261 @@ def replay_exact_power_flow(
         tolerance=tolerance,
         verbose=verbose,
     )
-    result.metadata = {
-        **(result.metadata or {}),
-        "analysis": "exact_power_flow_replay",
-        "source_results_dir": str(results_path),
-        "reference_solver": "fbs",
-    }
+    _tag_exact(result, source_results_dir=str(results_path))
     if save:
         result.save(exact_path)
     return result
 
 
-def _at_period(frame, t):
-    if frame is None:
-        return None
-    if "t" not in frame.columns:
-        return frame.copy()
-    return frame[frame["t"] == t].copy()
+# -------------------------------------------------------------------------
+# Comparison with a reference solver and/or OpenDSS
+# -------------------------------------------------------------------------
 
 
-def _replay_periods(case, frames):
-    """Return replay labels, falling back to the case's configured horizon."""
-    labelled = [
-        value
-        for frame in frames
-        if frame is not None and len(frame) and "t" in frame.columns
-        for value in frame["t"].dropna()
-    ]
-    if labelled:
-        return list(dict.fromkeys(labelled))
-    start = int(getattr(case, "start_step", 0) or 0)
-    n_steps = int(getattr(case, "n_steps", 1) or 1)
-    return list(range(start, start + n_steps)) if n_steps > 1 else [start]
-
-
-def _apply_frame_setpoints(target, frame, prefixes):
-    """Apply phase-column result data to native ``prefix_phase`` columns."""
-    if frame is None or len(frame) == 0 or target is None or len(target) == 0:
-        return target
-    indexed = target.set_index("id").copy()
-    for prefix in prefixes:
-        phase_columns = {
-            phase: f"{prefix}_{phase}"
-            for phase in PHASE_IDX_MAP
-            if phase in frame.columns and f"{prefix}_{phase}" in indexed.columns
+def _comparison_stats(comparison_df: pd.DataFrame) -> dict:
+    if len(comparison_df) == 0:
+        return {
+            "max_abs_diff": 0,
+            "mean_abs_diff": 0,
+            "max_rel_diff": 0,
+            "mean_rel_diff": 0,
         }
-        if not phase_columns:
-            continue
-        update = (
-            frame[["id"] + list(phase_columns)]
-            .rename(columns={phase: column for phase, column in phase_columns.items()})
-            .set_index("id")
-        )
-        indexed.update(update)
-    return indexed.reset_index()
+    return {
+        "max_abs_diff": comparison_df["abs_diff"].max(),
+        "mean_abs_diff": comparison_df["abs_diff"].mean(),
+        "max_rel_diff": comparison_df["rel_diff_pct"].max(),
+        "mean_rel_diff": comparison_df["rel_diff_pct"].mean(),
+    }
 
 
-def _apply_boundary_load_setpoints(case, p_loads, q_loads):
-    """Apply saved loads at ``OUT`` buses, which are free variables in the OPF."""
-    bus = case.bus_data
-    if bus is None or "bus_type" not in bus.columns:
-        return
-    is_out = bus["bus_type"] == "OUT"
-    if not is_out.any():
-        return
-    out_ids = bus.loc[is_out, "id"]
-    applied = False
-    for frame, prefix in ((p_loads, "pl"), (q_loads, "ql")):
-        if frame is None or len(frame) == 0:
-            continue
-        case.bus_data = _apply_frame_setpoints(
-            case.bus_data, frame[frame["id"].isin(out_ids)], [prefix]
-        )
-        applied = True
-    if applied:
-        # The OPF does not apply CVR to free boundary loads.
-        out_rows = case.bus_data["bus_type"] == "OUT"
-        case.bus_data.loc[out_rows, ["cvr_p", "cvr_q"]] = 0.0
+def _compare_with_ref_frame(
+    fbs_df: pd.DataFrame,
+    ref_df: pd.DataFrame,
+    keys: list[str],
+    labels: dict[str, str],
+    rel_floor: float,
+) -> pd.DataFrame:
+    """Phase-by-phase comparison of an FBS frame with a reference frame.
 
-
-def _apply_battery_setpoints_to_case(case, p_bats, q_bats):
-    if case.bat_data is None or len(case.bat_data) == 0:
-        return
-    for frame, column in ((p_bats, "p"), (q_bats, "q")):
-        if frame is None or len(frame) == 0:
-            continue
-        indexed = frame.set_index("id")
-        for i, row in case.bat_data.iterrows():
-            if row["id"] not in indexed.index:
-                continue
-            source = indexed.loc[row["id"]]
-            if isinstance(source, pd.DataFrame):
-                source = source.iloc[0]
-            phases = _parse_phases(str(row.get("phases", "abc")).lower())
-            values = [source[p] for p in phases if p in source.index] or [
-                source[f"{column}_{p}"]
-                for p in phases
-                if f"{column}_{p}" in source.index
-            ]
-            if values:
-                case.bat_data.at[i, column] = float(np.nansum(values))
-
-
-def _load_multiplier(schedules, t, shape, phase, kind):
-    if phase == "s1s2":
-        # The OPF splits s1s2 over both legs, so the mean keeps total power equal.
-        legs = [
-            _load_multiplier(schedules, t, shape, leg, kind) for leg in ("s1", "s2")
-        ]
-        return sum(legs) / 2
-    phase_column = f"{shape}.{phase}.{kind}"
-    if phase_column in schedules.columns:
-        return schedules.at[t, phase_column]
-    if shape in schedules.columns:
-        return schedules.at[t, shape]
-    return 1.0
-
-
-def _apply_schedule_to_case(case, t):
-    """Bake the schedule row for ``t`` into loads, generator p and swing voltage.
-
-    FBS does not read schedules.  Phase-specific p/q columns take precedence
-    over the plain shape column.
+    Rows are matched on ``keys``; the first matching reference row is used.
+    ``labels`` maps output column names to FBS column names.
     """
-    if case.schedules is None or t not in case.schedules.index:
-        return
-    schedules = case.schedules
-    bus = case.bus_data.copy()
-    for i, row in bus.iterrows():
-        shape = str(row.get("load_shape", "default"))
-        for phase in (*PHASE_IDX_MAP, "s1s2"):
-            for prefix, kind in (("pl", "p"), ("ql", "q")):
-                column = f"{prefix}_{phase}"
-                if column not in bus.columns:
-                    continue
-                multiplier = _load_multiplier(schedules, t, shape, phase, kind)
-                bus.at[i, column] = row.get(column, 0) * multiplier
-    if "bus_type" in bus.columns:
-        swing = bus["bus_type"].isin(["SWING", "SWING_FREE", "IN"])
-        for phase in "abc":
-            column = f"v_{phase}"
-            if column in schedules.columns and column in bus.columns:
-                value = schedules.at[t, column]
-                if pd.notna(value):
-                    bus.loc[swing, column] = float(value)
-    case.bus_data = bus
-
-    gen = getattr(case, "gen_data", None)
-    if gen is not None and len(gen) and "gen_shape" in gen.columns:
-        gen = gen.copy()
-        for i, row in gen.iterrows():
-            shape = row["gen_shape"]
-            if not isinstance(shape, str) or shape not in schedules.columns:
-                continue
-            for phase in PHASE_IDX_MAP:
-                column = f"p_{phase}"
-                if column in gen.columns:
-                    gen.at[i, column] = row[column] * schedules.at[t, shape]
-        case.gen_data = gen
-
-
-def _set_result_period(result, t):
-    for name in (
-        "voltages",
-        "voltage_angles",
-        "active_power_flows",
-        "reactive_power_flows",
-        "active_power_generation",
-        "reactive_power_generation",
-        "active_power_loads",
-        "reactive_power_loads",
-        "battery_active_power",
-        "battery_reactive_power",
-        "currents",
-        "current_angles",
-    ):
-        frame = getattr(result, name, None)
-        if frame is not None:
-            frame = frame.copy()
-            frame["t"] = t
-            setattr(result, name, frame)
-
-
-def _aggregate_fbs_results(results, case):
-    from distopf.results import PowerFlowResult
-
-    names = (
-        "voltages",
-        "voltage_angles",
-        "active_power_flows",
-        "reactive_power_flows",
-        "active_power_generation",
-        "reactive_power_generation",
-        "active_power_loads",
-        "reactive_power_loads",
-        "battery_active_power",
-        "battery_reactive_power",
-        "currents",
-        "current_angles",
-    )
-    values = {
-        name: pd.concat(
-            [getattr(r, name) for r in results if getattr(r, name, None) is not None],
-            ignore_index=True,
-        )
-        if any(getattr(r, name, None) is not None for r in results)
-        else None
-        for name in names
-    }
-    return PowerFlowResult(
-        **values,
-        converged=all(r.converged for r in results),
-        iterations=sum(r.iterations or 0 for r in results),
-        solve_time=sum(r.solve_time or 0 for r in results),
-        solver="fbs",
-        result_type="fbs",
-        case=case.copy(),
-    )
-
-
-def replay_exact_power_flow_from_opf_result(
-    case: Case,
-    opf_result: PowerFlowResult,
-    *,
-    output_dir: Optional[Path | str] = None,
-    max_iterations: int = 100,
-    tolerance: float = 1e-6,
-    verbose: bool = False,
-) -> PowerFlowResult:
-    """Run exact FBS using an in-memory OPF result's setpoints."""
-    result = run_fbs_with_opf_setpoints(
-        case,
-        opf_result,
-        max_iterations=max_iterations,
-        tolerance=tolerance,
-        verbose=verbose,
-    )
-    result.metadata = {
-        **(result.metadata or {}),
-        "analysis": "exact_power_flow_replay",
-        "reference_solver": "fbs",
-    }
-    if output_dir is not None:
-        result.save(output_dir)
-    return result
-
-
-def _apply_gen_setpoints_to_case(
-    case: Case, p_gens: Optional[pd.DataFrame], q_gens: Optional[pd.DataFrame]
-) -> None:
-    """Apply OPF p/q setpoints to `case.gen_data` (vectorized updates)."""
-    if case.gen_data is None or len(case.gen_data) == 0:
-        return
-    gen_ids = set(case.gen_data["id"])
-    for label, frame in (("active", p_gens), ("reactive", q_gens)):
-        if frame is None:
+    rows = []
+    if ref_df is None or len(ref_df) == 0:
+        return pd.DataFrame(rows)
+    ref = ref_df.drop_duplicates(keys, keep="first").set_index(keys)
+    for _, row in fbs_df.iterrows():
+        key = tuple(row[k] for k in keys) if len(keys) > 1 else row[keys[0]]
+        if key not in ref.index:
             continue
-        saved_ids = set(frame["id"]) if "id" in frame.columns else set()
-        if gen_ids - saved_ids:
-            raise ValueError(
-                f"Saved {label} power generation setpoints are missing generator "
-                f"id(s): {sorted(gen_ids - saved_ids)}"
+        ref_row = ref.loc[key]
+        for phase in "abc":
+            fbs_val = row.get(phase, np.nan)
+            ref_val = ref_row.get(phase, np.nan)
+            if pd.isna(fbs_val) and pd.isna(ref_val):
+                continue
+            fbs_val = 0.0 if pd.isna(fbs_val) else float(fbs_val)
+            ref_val = 0.0 if pd.isna(ref_val) else float(ref_val)
+            if abs(ref_val) <= 1e-6:  # only compare significant values
+                continue
+            diff = abs(fbs_val - ref_val)
+            rows.append(
+                {
+                    **{out: row[src] for out, src in labels.items()},
+                    "phase": phase,
+                    "fbs_value": fbs_val,
+                    "ref_value": ref_val,
+                    "abs_diff": diff,
+                    "rel_diff_pct": diff / max(abs(ref_val), rel_floor) * 100,
+                }
             )
-    if p_gens is None and q_gens is None:
-        return
-    gen_indexed = case.gen_data.set_index("id")
-
-    # p_gens
-    if p_gens is not None:
-        if "t" in p_gens.columns:
-            p_gens = p_gens[p_gens["t"] == p_gens["t"].min()]
-        p_col_map = {"a": "p_a", "b": "p_b", "c": "p_c", "s1": "p_s1", "s2": "p_s2"}
-        p_phases = [c for c in ["a", "b", "c", "s1", "s2"] if c in p_gens.columns]
-        if p_phases:
-            p_update = (
-                p_gens[["id"] + p_phases].rename(columns=p_col_map).set_index("id")
-            )
-            gen_indexed.update(p_update)
-
-    # q_gens
-    if q_gens is not None:
-        if "t" in q_gens.columns:
-            q_gens = q_gens[q_gens["t"] == q_gens["t"].min()]
-        q_col_map = {"a": "q_a", "b": "q_b", "c": "q_c", "s1": "q_s1", "s2": "q_s2"}
-        q_phases = [c for c in ["a", "b", "c", "s1", "s2"] if c in q_gens.columns]
-        if q_phases:
-            q_update = (
-                q_gens[["id"] + q_phases].rename(columns=q_col_map).set_index("id")
-            )
-            gen_indexed.update(q_update)
-
-    case.gen_data = gen_indexed.reset_index()
+    return pd.DataFrame(rows)
 
 
-if __name__ == "__main__":
-    from distopf.api import create_case
-    from distopf import CASES_DIR
-    from distopf.matrix_models.matrix_bess.lindist_mp import LinDistMP
-    from distopf.dss_importer import DSSToCSVConverter
+def compare_with_reference(
+    fbs: FBS,
+    model=None,
+    dss_parser=None,
+    verbose: bool = True,
+    t: Optional[int] = None,
+) -> dict:
+    """Compare one period of an FBS solution with a reference solver and/or OpenDSS.
 
-    # Load case from CSV files
-    case_path = CASES_DIR / "dss" / "ieee13_dss" / "IEEE13Nodeckt.dss"
-    dss_parser = DSSToCSVConverter(case_path)
-    dss_parser.dss.Text.Command("Set Controlmode=OFF")
-    dss_parser.update()
-    case = create_case(case_path, n_steps=1)
-    case.gen_data.control_variable = ""
+    Parameters
+    ----------
+    fbs : FBS
+        A solved FBS instance.
+    model : object, optional
+        Reference solver with get_voltages, get_p_flows, get_q_flows methods.
+    dss_parser : DSSToCSVConverter, optional
+        OpenDSS parser with get_v_solved, get_apparent_power_flows methods.
+    verbose : bool
+        Print a comparison summary.
+    t : int, optional
+        Period of the FBS solution to compare. Defaults to the first solved step.
+    """
+    fbs.results()  # raises if solve() has not been run
+    t = fbs.times[0] if t is None else t
+    fbs_voltages = _at_period(fbs.get_voltages(), t).reset_index(drop=True)
+    fbs_p_flows = _at_period(fbs.get_p_flows(), t).reset_index(drop=True)
+    fbs_q_flows = _at_period(fbs.get_q_flows(), t).reset_index(drop=True)
+    comparisons: dict = {}
 
-    # Create and solve power flow
-    upf = FBS(case)
-    results = upf.solve(verbose=True, tolerance=1e-10)
+    if model is not None:
+        from distopf.matrix_models.matrix_bess.objectives import cp_obj_none
+        from distopf.matrix_models.matrix_bess.solvers import cvxpy_solve
 
-    print("FBS Voltage Results:")
-    print(upf.get_voltages())
+        res = cvxpy_solve(model, cp_obj_none)
+        bus_labels = {"bus_id": "id", "bus_name": "name"}
+        flow_labels = {"from_bus": "fb", "to_bus": "tb"}
+        comparisons["reference"] = {
+            "voltage_comparison": _compare_with_ref_frame(
+                fbs_voltages, model.get_voltages(res.x), ["id"], bus_labels, 1e-6
+            ),
+            "p_flow_comparison": _compare_with_ref_frame(
+                fbs_p_flows, model.get_p_flows(res.x), ["fb", "tb"], flow_labels, 1e-3
+            ),
+            "q_flow_comparison": _compare_with_ref_frame(
+                fbs_q_flows, model.get_q_flows(res.x), ["fb", "tb"], flow_labels, 1e-3
+            ),
+        }
 
-    # Reference solver
-    m = LinDistMP(case=case)
+    if dss_parser is not None:
+        dss_voltages = dss_parser.get_v_solved().reset_index(drop=True)
+        dss_power_flows = dss_parser.get_apparent_power_flows()
 
-    print("\nOpenDSS voltage:")
-    print(dss_parser.get_v_solved())
+        voltage_comparison_dss = []
+        for _, fbs_row in fbs_voltages.iterrows():
+            # Match by name first, then fall back to positional ID.
+            dss_row = None
+            matches = dss_voltages[dss_voltages["name"] == fbs_row["name"]]
+            if len(matches) > 0:
+                dss_row = matches.iloc[0]
+            elif int(fbs_row["id"]) < len(dss_voltages):
+                dss_row = dss_voltages.iloc[int(fbs_row["id"])]
+            if dss_row is None:
+                continue
+            for phase in "abc":
+                fbs_val = fbs_row[phase]
+                dss_val = dss_row[phase] if phase in dss_row.index else np.nan
+                if pd.isna(fbs_val) or pd.isna(dss_val) or abs(dss_val) <= 1e-6:
+                    continue
+                diff = abs(fbs_val - dss_val)
+                voltage_comparison_dss.append(
+                    {
+                        "bus_id": fbs_row["id"],
+                        "bus_name": fbs_row["name"],
+                        "phase": phase,
+                        "fbs_value": fbs_val,
+                        "dss_value": dss_val,
+                        "abs_diff": diff,
+                        "rel_diff_pct": diff / max(abs(dss_val), 1e-6) * 100,
+                    }
+                )
 
-    # Compare results with both reference solver and OpenDSS
-    # comparison = compare_with_reference(
-    #     upf, model=m, dss_parser=dss_parser, verbose=True
-    # )
+        p_index = fbs_p_flows.drop_duplicates(["fb", "tb"]).set_index(["fb", "tb"])
+        q_index = fbs_q_flows.drop_duplicates(["fb", "tb"]).set_index(["fb", "tb"])
+        power_flow_comparison_dss = []
+        for _, dss_flow in dss_power_flows.iterrows():
+            key = (dss_flow["fb"], dss_flow["tb"])
+            if key not in p_index.index or key not in q_index.index:
+                continue
+            fbs_p_row, fbs_q_row = p_index.loc[key], q_index.loc[key]
+            for phase in "abc":
+                dss_complex = dss_flow[phase]
+                if not (pd.notna(dss_complex) and isinstance(dss_complex, complex)):
+                    continue
+                for kind, dss_val, fbs_val in (
+                    ("P", dss_complex.real, fbs_p_row[phase]),
+                    ("Q", dss_complex.imag, fbs_q_row[phase]),
+                ):
+                    if abs(dss_val) <= 1e-6:
+                        continue
+                    fbs_val = 0.0 if pd.isna(fbs_val) else fbs_val
+                    diff = abs(fbs_val - dss_val)
+                    power_flow_comparison_dss.append(
+                        {
+                            "from_bus": key[0],
+                            "to_bus": key[1],
+                            "phase": phase,
+                            "type": kind,
+                            "fbs_value": fbs_val,
+                            "dss_value": dss_val,
+                            "abs_diff": diff,
+                            "rel_diff_pct": diff / max(abs(dss_val), 1e-3) * 100,
+                        }
+                    )
+
+        comparisons["opendss"] = {
+            "voltage_comparison": pd.DataFrame(voltage_comparison_dss),
+            "power_flow_comparison": pd.DataFrame(
+                power_flow_comparison_dss,
+                columns=[
+                    "from_bus",
+                    "to_bus",
+                    "phase",
+                    "type",
+                    "fbs_value",
+                    "dss_value",
+                    "abs_diff",
+                    "rel_diff_pct",
+                ],
+            ),
+        }
+
+    if verbose:
+        print("\n" + "=" * 80)
+        print(f"COMPREHENSIVE COMPARISON RESULTS (t={t})")
+        print("=" * 80)
+
+        if "reference" in comparisons:
+            ref = comparisons["reference"]
+            v_stats = _comparison_stats(ref["voltage_comparison"])
+            p_stats = _comparison_stats(ref["p_flow_comparison"])
+            q_stats = _comparison_stats(ref["q_flow_comparison"])
+            print("\nCOMPARISON WITH REFERENCE SOLVER:")
+            print(f"  Voltage - Max Abs Diff: {v_stats['max_abs_diff']:.6f} pu")
+            print(f"  Voltage - Mean Abs Diff: {v_stats['mean_abs_diff']:.6f} pu")
+            print(f"  Voltage - Max Rel Diff: {v_stats['max_rel_diff']:.3f}%")
+            print(f"  P Flow - Max Abs Diff: {p_stats['max_abs_diff']:.6f} MW")
+            print(f"  P Flow - Mean Abs Diff: {p_stats['mean_abs_diff']:.6f} MW")
+            print(f"  Q Flow - Max Abs Diff: {q_stats['max_abs_diff']:.6f} MVar")
+            print(f"  Q Flow - Mean Abs Diff: {q_stats['mean_abs_diff']:.6f} MVar")
+
+        if "opendss" in comparisons:
+            dss = comparisons["opendss"]
+            flows = dss["power_flow_comparison"]
+            v_stats = _comparison_stats(dss["voltage_comparison"])
+            p_stats = _comparison_stats(flows[flows["type"] == "P"])
+            q_stats = _comparison_stats(flows[flows["type"] == "Q"])
+            print("\nCOMPARISON WITH OPENDSS:")
+            print(f"  Voltage - Max Abs Diff: {v_stats['max_abs_diff']:.6f} pu")
+            print(f"  Voltage - Mean Abs Diff: {v_stats['mean_abs_diff']:.6f} pu")
+            print(f"  Voltage - Max Rel Diff: {v_stats['max_rel_diff']:.3f}%")
+            print(f"  P Flow - Max Abs Diff: {p_stats['max_abs_diff']:.6f} MW")
+            print(f"  P Flow - Mean Abs Diff: {p_stats['mean_abs_diff']:.6f} MW")
+            print(f"  Q Flow - Max Abs Diff: {q_stats['max_abs_diff']:.6f} MVAr")
+            print(f"  Q Flow - Mean Abs Diff: {q_stats['mean_abs_diff']:.6f} MVAr")
+
+            if len(dss["voltage_comparison"]) > 0:
+                print("\n  Largest voltage differences vs OpenDSS:")
+                worst = dss["voltage_comparison"].nlargest(3, "abs_diff")
+                for _, row in worst.iterrows():
+                    print(
+                        f"    Bus {row['bus_id']} ({row['bus_name']}) "
+                        f"Phase {row['phase'].upper()}: "
+                        f"FBS={row['fbs_value']:.6f}, DSS={row['dss_value']:.6f}, "
+                        f"Diff={row['abs_diff']:.6f} ({row['rel_diff_pct']:.2f}%)"
+                    )
+            if len(flows) > 0:
+                print("\n  Largest P flow differences vs OpenDSS:")
+                worst = flows[flows["type"] == "P"].nlargest(3, "abs_diff")
+                for _, row in worst.iterrows():
+                    print(
+                        f"    Branch {row['from_bus']}->{row['to_bus']} "
+                        f"Phase {row['phase'].upper()}: "
+                        f"FBS={row['fbs_value']:.6f}, DSS={row['dss_value']:.6f}, "
+                        f"Diff={row['abs_diff']:.6f} ({row['rel_diff_pct']:.2f}%)"
+                    )
+
+    return comparisons

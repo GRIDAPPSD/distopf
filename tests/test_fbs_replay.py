@@ -208,6 +208,33 @@ def test_replay_ignores_saved_loads_on_triplex_buses():
     )
 
 
+def test_multistep_fbs_replay_warm_starts_from_previous_state(monkeypatch):
+    case = opf.create_case(opf.CASES_DIR / "csv" / "ieee13")
+    case.n_steps = 2
+    original_run_fbs = opf.Case.run_fbs
+    initial_states = []
+    solved_states = []
+
+    def capture_run_fbs(self, **kwargs):
+        initial_states.append(
+            (kwargs.get("initial_voltages"), kwargs.get("initial_currents"))
+        )
+        result = original_run_fbs(self, **kwargs)
+        solved_states.append((result.model.voltages, result.model.currents))
+        return result
+
+    monkeypatch.setattr(opf.Case, "run_fbs", capture_run_fbs)
+
+    replay = opf.run_fbs_with_opf_setpoints(case)
+
+    assert replay.converged
+    assert initial_states[0] == (None, None)
+    for actual, expected in zip(initial_states[1], solved_states[0]):
+        assert actual.keys() == expected.keys()
+        for key in actual:
+            np.testing.assert_array_equal(actual[key], expected[key])
+
+
 def test_fbs_load_results_split_s1s2_between_reported_legs():
     case = opf.create_case(opf.CASES_DIR / "csv" / "triplex_pv")
     raw_loads = case.bus_data.set_index("id")
