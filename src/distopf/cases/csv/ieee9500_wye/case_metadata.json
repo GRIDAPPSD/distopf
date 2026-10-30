@@ -1,0 +1,23 @@
+{
+  "buses": 5294,
+  "branches": 5293,
+  "generators": 187,
+  "capacitors": 4,
+  "regulators": 6,
+  "batteries": 0,
+  "start_step": 0,
+  "n_steps": 1,
+  "delta_t": 1,
+  "ignore_schedule": true,
+  "ignore_gen": false,
+  "ignore_bat": true,
+  "ignore_cap": false,
+  "ignore_reg": false,
+  "generator_controls": {
+    "": 187
+  },
+  "schedule_columns": [
+    "M"
+  ],
+  "schedule_summary": {}
+}
