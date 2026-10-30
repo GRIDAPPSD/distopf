@@ -354,3 +354,21 @@ def test_matrix_result_reports_capacitor_reactive_power():
     result = _case().run_opf(objective=None, wrapper="matrix", control_variable="")
     assert result.capacitor_reactive_power is not None
     assert len(result.capacitor_reactive_power) > 0
+
+
+def test_cvxpy_result_decisions_replay_through_fbs():
+    case = _case(n_steps=2)
+    result = case.run_opf(
+        objective=None,
+        wrapper="cvxpy",
+        solver="highs",
+        control_variable="",
+        control_regulators=True,
+        control_capacitors=True,
+    )
+    assert result.reg_taps is not None and "t" in result.reg_taps.columns
+    assert result.u_caps is not None and "t" in result.u_caps.columns
+    assert result.tap_ratios is not None
+    replay = opf.run_fbs_with_opf_setpoints(case, result, tolerance=1e-10)
+    assert replay.converged
+    assert set(replay.voltages["t"]) == {0, 1}
