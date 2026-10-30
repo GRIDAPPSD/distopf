@@ -106,12 +106,21 @@ class MatrixBessWrapper(Wrapper):
         if raw_result:
             return self.result
 
+        u_caps = (
+            self.model.get_uc(self.result.x) if hasattr(self.model, "get_uc") else None
+        )
+        z_caps = (
+            self.model.get_zc(self.result.x) if hasattr(self.model, "get_zc") else None
+        )
         return PowerFlowResult(
             voltages=self.get_voltages(),
             active_power_flows=self.get_p_flows(),
             reactive_power_flows=self.get_q_flows(),
             active_power_generation=self.get_p_gens(),
             reactive_power_generation=self.get_q_gens(),
+            capacitor_reactive_power=self.get_q_caps(),
+            u_caps=u_caps,
+            z_caps=z_caps,
             battery_active_power=self.get_p_batt(),
             battery_reactive_power=self.get_q_batt(),
             p_charge=self.get_p_charge(),

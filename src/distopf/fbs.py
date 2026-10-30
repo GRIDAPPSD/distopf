@@ -4,7 +4,8 @@ Static network data is prepared once, sweeps run level by level on arrays, and e
 time step only refreshes the schedule-dependent injections. Each step starts from the
 previous step's converged voltages. Schedules follow the Pyomo OPF conventions.
 
-Saved OPF decisions (generator, battery and ``OUT`` boundary-load setpoints) can be
+Saved OPF decisions (generator, battery, ``OUT`` boundary-load setpoints, regulator
+taps and capacitor switch states) can be
 replayed through the exact power flow with :func:`run_fbs_with_opf_setpoints`,
 :func:`replay_exact_power_flow_from_opf_result`, :func:`run_fbs_from_saved_results`
 and :func:`replay_exact_power_flow`.
@@ -26,6 +27,7 @@ from distopf.results import PowerFlowResult
 if TYPE_CHECKING:
     from distopf.api import Case
 
+_TAP_STEP = 0.00625
 _PHASES = ("a", "b", "c", "s1", "s2")
 _PHASE_IDX = {phase: i for i, phase in enumerate(_PHASES)}
 _LOAD_SLOTS = (*_PHASES, "s1s2")
@@ -78,8 +80,6 @@ class _Level(NamedTuple):
     parent: np.ndarray
     starts: np.ndarray
     group_parent: np.ndarray
-    tap: np.ndarray
-    has_tap: bool
     tri: np.ndarray
     tri_phase: np.ndarray
     z: np.ndarray
@@ -92,6 +92,9 @@ class _Step(NamedTuple):
     gen: np.ndarray
     bat: np.ndarray
     v_swing: np.ndarray
+    tap: np.ndarray
+    has_tap: bool
+    cap: np.ndarray
 
 
 class FBS:
@@ -197,6 +200,8 @@ class FBS:
         self._v_init = v_init
 
         tap = np.ones((n, 5), dtype=complex)
+        reg_tb: list[int] = []
+        reg_masks: list[list[bool]] = []
         reg = case.reg_data
         if reg is not None and len(reg):
             node_pos = {int(i): k for k, i in enumerate(self.node_ids)}
@@ -206,9 +211,19 @@ class FBS:
                 k = node_pos.get(int(rec["tb"]))
                 if k is None:
                     continue
-                for phase in str(rec["phases"]).lower():
+                phases = str(rec["phases"]).lower()
+                for phase in phases:
                     tap[k, "abc".index(phase)] = rec[f"ratio_{phase}"]
-        self._tap = tap
+                reg_tb.append(int(rec["tb"]))
+                reg_masks.append([p in phases for p in "abc"])
+        self._reg_tb = reg_tb
+        self._reg_nodes = (
+            np.array([node_pos[t] for t in reg_tb], dtype=np.int64)
+            if reg_tb
+            else np.zeros(0, dtype=np.int64)
+        )
+        self._reg_phase_mask = np.array(reg_masks, dtype=bool).reshape(-1, 3)
+        self._tap_t = np.repeat(tap[None], len(self.times), axis=0)
 
         z = np.zeros((n, 5, 5), dtype=complex)
         tb_pos = pd.Index(self.node_ids).get_indexer(branch["tb"].to_numpy(np.int64))
@@ -243,8 +258,6 @@ class FBS:
                     parent=par,
                     starts=starts,
                     group_parent=par[starts],
-                    tap=tap[start:end],
-                    has_tap=bool(np.any(tap[start:end] != 1)),
                     tri=tri_loc,
                     tri_phase=primary[start:end][tri_loc],
                     z=z[start:end],
@@ -315,6 +328,7 @@ class FBS:
                     cap_nodes[int(k)] = q
         self._cap_nodes = np.array(list(cap_nodes), dtype=np.int64)
         self._cap = np.array(list(cap_nodes.values()), dtype=float).reshape(-1, n_phase)
+        self._cap_t = np.repeat(self._cap[None], len(self.times), axis=0)
 
     def _schedule_column(self, column: str) -> np.ndarray:
         sched = self._sched
@@ -456,6 +470,137 @@ class FBS:
             self._cvr_p[out] = 0.0
             self._cvr_q[out] = 0.0
 
+    def apply_device_states(
+        self,
+        *,
+        reg_taps: Optional[pd.DataFrame] = None,
+        u_caps: Optional[pd.DataFrame] = None,
+        q_caps: Optional[pd.DataFrame] = None,
+        voltages: Optional[pd.DataFrame] = None,
+    ) -> None:
+        """Overwrite per-step regulator taps and capacitor switch states.
+
+        ``reg_taps`` holds integer tap steps per phase, either as ``a, b, c`` columns
+        (Pyomo results) or ``tap_a, tap_b, tap_c`` columns (matrix results), matched to
+        regulators by ``tb``. Capacitors are on or off per phase. ``u_caps`` gives the
+        switch state directly. Without it, the state is inferred from the OPF's
+        ``q_caps``: a capacitor is on when its reactive power is at least half of the
+        nominal value scaled by the OPF voltage squared (``voltages``, or ``v_min``
+        when voltages are not given). Only the on/off state is used; FBS recomputes the
+        reactive power from its own voltages. Untimed frames apply to every step, and
+        anything missing keeps the case value. Call this before :meth:`solve`.
+        """
+        self._validate_regulators(reg_taps)
+        self._validate_capacitors(u_caps)
+        self._validate_capacitors(q_caps)
+        for ti, t in enumerate(self.times):
+            self._apply_taps(ti, _at_period(reg_taps, t))
+            self._apply_cap_states(
+                ti,
+                _at_period(u_caps, t),
+                _at_period(q_caps, t),
+                _at_period(voltages, t),
+            )
+
+    def _validate_regulators(self, frame: Optional[pd.DataFrame]) -> None:
+        if frame is None or not len(frame):
+            return
+        if "tb" not in frame.columns:
+            raise ValueError("Regulator tap setpoints must contain a 'tb' column")
+        unknown = set(frame["tb"].dropna().astype(int)) - set(self._reg_tb)
+        if unknown:
+            raise ValueError(
+                "Regulator tap setpoints are incompatible with the selected case; "
+                f"unknown regulator tb values: {sorted(unknown)}"
+            )
+
+    def _validate_capacitors(self, frame: Optional[pd.DataFrame]) -> None:
+        if frame is None or not len(frame):
+            return
+        if "id" not in frame.columns:
+            raise ValueError("Capacitor setpoints must contain an 'id' column")
+        unknown = set(frame["id"].dropna().astype(int)) - set(self._cap_ids())
+        if unknown:
+            raise ValueError(
+                "Capacitor setpoints are incompatible with the selected case; "
+                f"unknown capacitor IDs: {sorted(unknown)}"
+            )
+
+    def _cap_ids(self) -> np.ndarray:
+        return self.node_ids[self._cap_nodes]
+
+    def _apply_taps(self, ti: int, frame: Optional[pd.DataFrame]) -> None:
+        if frame is None or not len(frame) or not self._reg_nodes.size:
+            return
+        saved = frame.drop_duplicates("tb", keep="first").set_index("tb")
+        for node, tb, legs in zip(self._reg_nodes, self._reg_tb, self._reg_phase_mask):
+            if tb not in saved.index:
+                continue
+            for k, phase in enumerate("abc"):
+                column = f"tap_{phase}" if f"tap_{phase}" in saved.columns else phase
+                if not legs[k] or column not in saved.columns:
+                    continue
+                value = pd.to_numeric(saved.at[tb, column], errors="coerce")
+                if pd.notna(value):
+                    self._tap_t[ti, node, k] = 1 + _TAP_STEP * float(value)
+
+    def _cap_states(
+        self,
+        u_caps: Optional[pd.DataFrame],
+        q_caps: Optional[pd.DataFrame],
+        voltages: Optional[pd.DataFrame],
+    ) -> np.ndarray:
+        """(n_cap, 3) array: 1 on, 0 off, NaN not specified."""
+        ids = self._cap_ids()
+        state = np.full((len(ids), 3), np.nan)
+        if u_caps is not None and len(u_caps):
+            saved = u_caps.drop_duplicates("id", keep="first").set_index("id")
+            for k, phase in enumerate("abc"):
+                if phase in saved.columns:
+                    values = pd.to_numeric(saved[phase].reindex(ids), errors="coerce")
+                    values = values.to_numpy(float)
+                    state[:, k] = np.where(np.isnan(values), np.nan, values > 0.5)
+            return state
+        if q_caps is None or not len(q_caps):
+            return state
+        saved = q_caps.drop_duplicates("id", keep="first").set_index("id")
+        v_opf = None
+        if voltages is not None and len(voltages):
+            v_opf = voltages.drop_duplicates("id", keep="first").set_index("id")
+        v_min = self.case.bus_data.set_index("id")["v_min"].reindex(ids)
+        v_min = v_min.to_numpy(float)
+        for k, phase in enumerate("abc"):
+            if phase not in saved.columns:
+                continue
+            q = pd.to_numeric(saved[phase].reindex(ids), errors="coerce").to_numpy(
+                float
+            )
+            v = v_min
+            if v_opf is not None and phase in v_opf.columns:
+                v = v_opf[phase].reindex(ids).to_numpy(float)
+                v = np.where(np.isnan(v), v_min, v)
+            nominal = self._cap[:, k]
+            known = (nominal != 0) & ~np.isnan(q)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                on = q / nominal > 0.5 * v**2
+            state[known, k] = on[known]
+        return state
+
+    def _apply_cap_states(
+        self,
+        ti: int,
+        u_caps: Optional[pd.DataFrame],
+        q_caps: Optional[pd.DataFrame],
+        voltages: Optional[pd.DataFrame],
+    ) -> None:
+        if not self._cap_nodes.size:
+            return
+        state = self._cap_states(u_caps, q_caps, voltages)
+        step = self._cap_t[ti]  # view into the per-step array
+        for k in range(3):
+            known = ~np.isnan(state[:, k])
+            step[known, k] = self._cap[known, k] * state[known, k]
+
     def _out_nodes(self) -> np.ndarray:
         bus = self.case.bus_data
         if "bus_type" not in bus.columns:
@@ -575,6 +720,9 @@ class FBS:
             gen=gen,
             bat=self._bat_t[ti],
             v_swing=self._v_swing[ti],
+            tap=self._tap_t[ti],
+            has_tap=bool(np.any(self._tap_t[ti] != 1)),
+            cap=self._cap_t[ti],
         )
 
     def _injection(self, v: np.ndarray, st: _Step) -> np.ndarray:
@@ -599,8 +747,8 @@ class FBS:
                 inj[bn] += np.where(ok, np.conj(st.bat / v[bn]), 0)
             cp = self._cap_nodes
             if cp.size:
-                ok = cn[cp] & nz[cp] & (np.abs(self._cap) > _EPS)
-                s_cap = -1j * av2[cp] * self._cap
+                ok = cn[cp] & nz[cp] & (np.abs(st.cap) > _EPS)
+                s_cap = -1j * av2[cp] * st.cap
                 inj[cp] -= np.where(ok, np.conj(s_cap / v[cp]), 0)
 
             si = self._sec_idx
@@ -634,7 +782,7 @@ class FBS:
         for lv in reversed(self._levels):
             cur = child_sum[lv.rows] - inj[lv.rows]
             branch[lv.rows] = cur
-            send = cur * lv.tap if lv.has_tap else cur
+            send = cur * st.tap[lv.rows] if st.has_tap else cur
             if lv.tri.size:
                 diff = cur[lv.tri, 3] - cur[lv.tri, 4]
                 send[lv.tri] = 0
@@ -642,12 +790,12 @@ class FBS:
             child_sum[lv.group_parent] += np.add.reduceat(send, lv.starts, axis=0)
         return branch
 
-    def _forward(self, branch: np.ndarray, v_swing: np.ndarray) -> np.ndarray:
+    def _forward(self, branch: np.ndarray, st: _Step) -> np.ndarray:
         v = np.empty_like(branch)
-        v[0] = v_swing
+        v[0] = st.v_swing
         for lv in self._levels:
             vp = v[lv.parent]
-            base = vp * lv.tap if lv.has_tap else vp
+            base = vp * st.tap[lv.rows] if st.has_tap else vp
             if lv.tri.size:
                 phase_v = vp[lv.tri, lv.tri_phase]
                 base[lv.tri] = 0
@@ -699,7 +847,7 @@ class FBS:
             converged = False
             for iteration in range(max_iterations):
                 branch = self._backward(v_old, st)
-                v_new = self._forward(branch, st.v_swing)
+                v_new = self._forward(branch, st)
                 if np.max(np.abs(v_new - v_old)) < tolerance:
                     converged = True
                     break
@@ -826,13 +974,13 @@ class FBS:
                 v[:, tri, :] = 0
                 v[:, tri, 3] = phase_v
                 v[:, tri, 4] = phase_v
-            ratio = self._tap[nodes].copy()
+            ratio = self._tap_t[:, nodes].copy()
         else:
             v = volts[:, nodes, :]
-            ratio = np.ones((len(nodes), 5), dtype=complex)
+            ratio = np.ones((len(volts), len(nodes), 5), dtype=complex)
         # s2 current points downstream but sits on the minus voltage reference.
-        ratio[:, 4] = -ratio[:, 4]
-        power = ratio[None] * v * np.conj(currents[:, nodes, :])
+        ratio[:, :, 4] = -ratio[:, :, 4]
+        power = ratio * v * np.conj(currents[:, nodes, :])
         lead = self._branch_lead(nodes, parents)
         mask = phases[None]
         return (
@@ -1029,6 +1177,7 @@ _SETPOINT_FIELDS = (
     "active_power_loads",
     "reactive_power_loads",
 )
+_DEVICE_STATE_FIELDS = ("reg_taps", "u_caps", "capacitor_reactive_power", "voltages")
 
 
 def _replay_times(case: Case, frames: Iterable[Optional[pd.DataFrame]]) -> list[int]:
@@ -1060,8 +1209,16 @@ def _solve_with_setpoints(
     tolerance: float,
     verbose: bool,
 ) -> PowerFlowResult:
-    times = _replay_times(case, frames.values())
+    times = _replay_times(
+        case, [frame for name, frame in frames.items() if name != "voltages"]
+    )
     solver = FBS(case, times=times)
+    solver.apply_device_states(
+        reg_taps=frames.get("reg_taps"),
+        u_caps=frames.get("u_caps"),
+        q_caps=frames.get("capacitor_reactive_power"),
+        voltages=frames.get("voltages"),
+    )
     solver.apply_setpoints(
         p_gens=frames.get("active_power_generation"),
         q_gens=frames.get("reactive_power_generation"),
@@ -1100,15 +1257,19 @@ def run_fbs_with_opf_setpoints(
     tolerance: float = 1e-6,
     verbose: bool = False,
 ) -> PowerFlowResult:
-    """Replay OPF generator, battery and boundary-load setpoints through FBS.
+    """Replay OPF generator, battery, boundary-load, regulator and capacitor decisions.
 
     Ordinary loads, generator ``p`` and the swing voltage come from ``case`` and its
     schedules. Saved generator and battery values then replace the case values.
+    Regulator taps (``reg_taps``) and capacitor on/off states (``u_caps``, else
+    inferred from ``capacitor_reactive_power``) are applied per period; capacitor
+    reactive power and voltages are recomputed by FBS, not replayed.
     Saved loads are applied only at ``OUT`` boundary buses, where they are free
     variables in a decomposed OPF. A supplied generator frame must cover every
     generator. Explicit ``p_gens`` / ``q_gens`` take precedence over ``opf_result``.
     """
-    frames = {name: getattr(opf_result, name, None) for name in _SETPOINT_FIELDS}
+    fields = _SETPOINT_FIELDS + _DEVICE_STATE_FIELDS
+    frames = {name: getattr(opf_result, name, None) for name in fields}
     if p_gens is not None:
         frames["active_power_generation"] = p_gens
     if q_gens is not None:
@@ -1167,11 +1328,13 @@ _CASE_KWARGS = {
 }
 
 
-def _read_frame(results_path: Path, name: str) -> Optional[pd.DataFrame]:
+def _read_frame(
+    results_path: Path, name: str, require_id: bool = True
+) -> Optional[pd.DataFrame]:
     frame = pd.read_csv(results_path / f"{name}.csv")
     if frame.empty:
         return None
-    if "id" not in frame.columns:
+    if require_id and "id" not in frame.columns:
         raise ValueError(f"Saved setpoint file {name}.csv must contain an 'id' column")
     return frame
 
@@ -1262,7 +1425,30 @@ def _read_saved_setpoints(
         if has_bats and (results_path / f"{n}.csv").is_file():
             frames[n] = _read_frame(results_path, n)
             _validate_ids(n, frames[n], case.bat_data, "batteries")
+    frames.update(_read_saved_device_states(results_path, case))
     return case, frames
+
+
+def _read_saved_device_states(
+    results_path: Path, case: Case
+) -> dict[str, Optional[pd.DataFrame]]:
+    """Optional saved regulator taps, capacitor states and the OPF voltages."""
+    frames: dict[str, Optional[pd.DataFrame]] = {}
+    for name in _DEVICE_STATE_FIELDS:
+        frames[name] = None
+        if (results_path / f"{name}.csv").is_file():
+            frames[name] = _read_frame(
+                results_path, name, require_id=name != "reg_taps"
+            )
+    has_caps = case.cap_data is not None and len(case.cap_data) > 0
+    for name in ("u_caps", "capacitor_reactive_power"):
+        if not has_caps:
+            frames[name] = None
+        else:
+            _validate_ids(name, frames[name], case.cap_data, "capacitors")
+    if case.reg_data is None or not len(case.reg_data):
+        frames["reg_taps"] = None
+    return frames
 
 
 def run_fbs_from_saved_results(
