@@ -200,7 +200,9 @@ class FBS:
         reg = case.reg_data
         if reg is not None and len(reg):
             node_pos = {int(i): k for k, i in enumerate(self.node_ids)}
-            for rec in reg.drop_duplicates(subset="tb", keep="first").to_dict("records"):
+            for rec in reg.drop_duplicates(subset="tb", keep="first").to_dict(
+                "records"
+            ):
                 k = node_pos.get(int(rec["tb"]))
                 if k is None:
                     continue
@@ -295,8 +297,12 @@ class FBS:
                     bat_nodes[int(k)] = values
                     bat_legs[int(k)] = mask
         self._bat_nodes = np.array(list(bat_nodes), dtype=np.int64)
-        self._bat = np.array(list(bat_nodes.values()), dtype=complex).reshape(-1, n_phase)
-        self._bat_legs = np.array(list(bat_legs.values()), dtype=bool).reshape(-1, n_phase)
+        self._bat = np.array(list(bat_nodes.values()), dtype=complex).reshape(
+            -1, n_phase
+        )
+        self._bat_legs = np.array(list(bat_legs.values()), dtype=bool).reshape(
+            -1, n_phase
+        )
 
         cap = case.cap_data
         cap_nodes: dict[int, np.ndarray] = {}
@@ -349,7 +355,9 @@ class FBS:
             for si, shape in enumerate(uniq):
                 for slot, phase in enumerate(_PHASES):
                     for kind, out in (("p", self._mp), ("q", self._mq)):
-                        column = shape if shape in columns else f"{shape}.{phase}.{kind}"
+                        column = (
+                            shape if shape in columns else f"{shape}.{phase}.{kind}"
+                        )
                         if column not in columns:
                             continue
                         values = self._schedule_column(column)
@@ -395,9 +403,7 @@ class FBS:
         self._pl_fixed: Optional[np.ndarray] = None
         self._ql_fixed: Optional[np.ndarray] = None
 
-        base = np.array(
-            [float(bus[f"v_{p}"].iloc[self._swing_row()]) for p in "abc"]
-        )
+        base = np.array([float(bus[f"v_{p}"].iloc[self._swing_row()]) for p in "abc"])
         swing = np.tile(base, (n_steps, 1))
         for k, phase in enumerate("abc"):
             column = f"v_{phase}"
@@ -734,7 +740,9 @@ class FBS:
             ("q", "reactive_power_generation", self._gen_q_t),
         ):
             names = [f"{prefix}_{p}" for p in _PHASES]
-            present = [c for c in names if c in (gen.columns if gen is not None else [])]
+            present = [
+                c for c in names if c in (gen.columns if gen is not None else [])
+            ]
             if gen is None or not len(gen) or not present:
                 out[label] = pd.DataFrame(columns=empty_cols)
                 continue
@@ -779,9 +787,10 @@ class FBS:
                     k = _PHASE_IDX[phase]
                     values = scaled[:, k]
                     if phase in ("s1", "s2") and split:
-                        values = values + np.where(
-                            np.isnan(scaled[:, 5]), 0.0, scaled[:, 5]
-                        ) / 2
+                        values = (
+                            values
+                            + np.where(np.isnan(scaled[:, 5]), 0.0, scaled[:, 5]) / 2
+                        )
                     frame[phase] = values
                 frames.append(frame)
             out[label] = pd.concat(frames, ignore_index=True)
@@ -955,7 +964,11 @@ class FBS:
             fb, tb = int(ids[self.parent[k]]), int(ids[k])
             children.setdefault(fb, []).append(tb)
             parent[tb] = fb
-        return {"nodes": sorted(int(i) for i in ids), "children": children, "parent": parent}
+        return {
+            "nodes": sorted(int(i) for i in ids),
+            "children": children,
+            "parent": parent,
+        }
 
     @property
     def phase_connections(self) -> dict[int, list[int]]:
@@ -1002,7 +1015,6 @@ def fbs_solve(
     return FBS(case).solve(
         max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
     )
-
 
 
 # -------------------------------------------------------------------------
@@ -1510,8 +1522,14 @@ def compare_with_reference(
             "power_flow_comparison": pd.DataFrame(
                 power_flow_comparison_dss,
                 columns=[
-                    "from_bus", "to_bus", "phase", "type", "fbs_value",
-                    "dss_value", "abs_diff", "rel_diff_pct",
+                    "from_bus",
+                    "to_bus",
+                    "phase",
+                    "type",
+                    "fbs_value",
+                    "dss_value",
+                    "abs_diff",
+                    "rel_diff_pct",
                 ],
             ),
         }

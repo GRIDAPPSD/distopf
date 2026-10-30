@@ -40,10 +40,19 @@ _Z_COLUMNS = [
     for suffix, _, _ in entries
 ]
 _BRANCH_COLUMNS = [
-    "fb", "tb", "from_name", "to_name",
+    "fb",
+    "tb",
+    "from_name",
+    "to_name",
     *_Z_COLUMNS,
-    "primary_phase", "type", "name", "status",
-    "s_base", "v_ln_base", "z_base", "phases",
+    "primary_phase",
+    "type",
+    "name",
+    "status",
+    "s_base",
+    "v_ln_base",
+    "z_base",
+    "phases",
 ]
 _GEN_FIRST_COLUMNS = ("id", "name", "primary_phase", "control_variable", "gen_shape")
 _GEN_COLUMNS = [
@@ -657,7 +666,9 @@ class DSSToCSVConverter:
     def _get_line_zmatrix(self) -> tuple[np.ndarray, np.ndarray]:
         """3x3 (R, X) matrices in ohms for the active line, embedded by phase."""
         _, nodes = self._split_bus_spec(self.dss.Lines.Bus1())
-        nodes = [n for n in nodes if n != 0] or list(range(1, self.dss.Lines.Phases() + 1))
+        nodes = [n for n in nodes if n != 0] or list(
+            range(1, self.dss.Lines.Phases() + 1)
+        )
         n = len(nodes)
         z = (
             np.array(self.dss.Lines.RMatrix()) + 1j * np.array(self.dss.Lines.XMatrix())
@@ -1026,7 +1037,7 @@ class DSSToCSVConverter:
         bus_df = bus_df.fillna(0)
         first = ["id", "name"]
         return bus_df[first + [c for c in bus_df.columns if c not in first]]
-    
+
     def get_v_solved(self) -> pd.DataFrame:
         """DSS voltage magnitudes in pu on the exported nominal bus bases.
 

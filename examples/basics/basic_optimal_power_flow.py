@@ -24,6 +24,10 @@ result = case.run_opf("loss_min", control_variable="PQ", circular_constraints=Tr
 # Plot results
 result.plot_voltages().show(renderer="browser")
 result.plot_power_flows().show(renderer="browser")
-plot_gens(result.active_power_generation, result.reactive_power_generation).show(renderer="browser")
-plot_polar(result.active_power_generation, result.reactive_power_generation).show(renderer="browser")
+plot_gens(result.active_power_generation, result.reactive_power_generation).show(
+    renderer="browser"
+)
+plot_polar(result.active_power_generation, result.reactive_power_generation).show(
+    renderer="browser"
+)
 result.plot_network(show_reactive_power=True).show(renderer="browser")

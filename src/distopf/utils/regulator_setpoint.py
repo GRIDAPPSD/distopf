@@ -69,10 +69,16 @@ def fix_regulator_branches(case: Case) -> Case:
 
 def _two_period_case(case: Case) -> Case:
     """Same network as a 2-step case: step 0 generation off, step 1 generation at full."""
-    load_shapes = set(case.bus_data["load_shape"].dropna()) if "load_shape" in case.bus_data else {"default"}
+    load_shapes = (
+        set(case.bus_data["load_shape"].dropna())
+        if "load_shape" in case.bus_data
+        else {"default"}
+    )
     gen_shapes = (
         set(case.gen_data["gen_shape"].dropna())
-        if case.gen_data is not None and len(case.gen_data) and "gen_shape" in case.gen_data
+        if case.gen_data is not None
+        and len(case.gen_data)
+        and "gen_shape" in case.gen_data
         else set()
     )
     schedules = pd.DataFrame({"time": [0, 1]})
@@ -170,4 +176,6 @@ if __name__ == "__main__":
     base = create_case(Path("released/modified/partition_47/04_der"))
     tuned, margin = default_regulator_setpoint(base)
     print("margin", margin)
-    print(tuned.reg_data[["fb", "tb", "tap_a", "tap_b", "tap_c"]].to_string(index=False))
+    print(
+        tuned.reg_data[["fb", "tb", "tap_a", "tap_b", "tap_c"]].to_string(index=False)
+    )
