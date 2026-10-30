@@ -276,6 +276,7 @@ class MatrixWrapper(Wrapper):
         u_caps = None
         if hasattr(self.model, "get_uc"):
             u_caps = self.model.get_uc(self.result.x)
+        q_caps = self.get_q_caps()
 
         # Normalize: add time column to single-period results
         voltages_with_time = self._add_time_column(voltages_df, position=2)
@@ -302,6 +303,7 @@ class MatrixWrapper(Wrapper):
             reactive_power_flows=q_flows_df,
             active_power_generation=p_gens,
             reactive_power_generation=q_gens,
+            capacitor_reactive_power=q_caps,
             reg_taps=reg_taps,
             z_caps=z_caps,
             u_caps=u_caps,
