@@ -298,8 +298,13 @@ class PyomoWrapper(Wrapper):
         from distopf.results import PowerFlowResult
 
         q_caps = getattr(self.result, "q_cap", None)
-        tap_ratios = getattr(self.result, "reg_ratio", None)
         reg_taps = getattr(self.result, "reg_taps", None)
+        tap_ratios = None
+        if reg_taps is not None:
+            tap_ratios = reg_taps.copy()
+            tap_ratios[["a", "b", "c"]] = 1 + 0.00625 * reg_taps[["a", "b", "c"]]
+        u_caps = getattr(self.result, "u_cap", None)
+        z_caps = getattr(self.result, "z_cap", None)
         p_loads = getattr(self.result, "p_load", None)
         q_loads = getattr(self.result, "q_load", None)
         p_bats = getattr(self.result, "p_bat", None)
@@ -333,6 +338,8 @@ class PyomoWrapper(Wrapper):
             capacitor_reactive_power=q_caps,
             tap_ratios=tap_ratios,
             reg_taps=reg_taps,
+            u_caps=u_caps,
+            z_caps=z_caps,
             battery_active_power=p_bats,
             battery_reactive_power=q_bats,
             p_charge=p_charge,
