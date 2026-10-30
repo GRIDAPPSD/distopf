@@ -17,8 +17,10 @@ from distopf.cvxpy_models_performance.common.model import (
     CvxModel,
     IndexSet,
     add_constraint,
+    add_constraint_on_rows,
     add_ranged_constraint,
     column,
+    select_rows,
     sparse,
 )
 from distopf.cvxpy_models_performance.common.registry import port_to_bus_matrix
@@ -94,9 +96,9 @@ class MpssdProvider:
                 p_setpoint.append(cell_num(row, f"p_{phase}", 0.0))
                 q_setpoint.append(cell_num(row, f"q_{phase}", 0.0))
 
-        model.mpssd_device_set = IndexSet(devices, dimen=1)
-        model.mpssd_device_phase_set = IndexSet(ports, dimen=2)
-        model.mpssd_dc_bus_set = IndexSet(sorted(ports_by_dc_bus), dimen=1)
+        model.mpssd_device_set = IndexSet(devices)
+        model.mpssd_device_phase_set = IndexSet(ports)
+        model.mpssd_dc_bus_set = IndexSet(sorted(ports_by_dc_bus))
 
         model.mpssd_phases_by_device = phases_by_device
         model.mpssd_bus_by_device = bus_by_device
@@ -134,13 +136,11 @@ class MpssdProvider:
     def add_constraints(self, model: Any, config: Any) -> None:
         if len(model.mpssd_device_phase_set) == 0:
             return
-        circular = getattr(config, "circular_constraints", True) if config else True
-        equality_only = getattr(config, "equality_only", False) if config else False
         add_mpssd_constant_p_constraints_q_control(model)
         add_mpssd_constant_q_constraints_p_control(model)
-        if not equality_only:
+        if not config.equality_only:
             add_mpssd_limits(model)
-            if circular:
+            if config.circular_constraints:
                 add_circular_mpssd_constraints(model)
             else:
                 add_ngon_constraints(model)
@@ -148,33 +148,28 @@ class MpssdProvider:
         add_phase_balance_constraints(model)
 
 
-def _rows(m: CvxModel, predicate) -> np.ndarray:
-    return np.array(
-        [i for i, ctrl in enumerate(m.mpssd_control) if predicate(ctrl)], dtype=int
+def _ports(m: CvxModel, predicate) -> tuple[np.ndarray, list]:
+    """Rows (and keys) of MPSSD ports whose control mode satisfies ``predicate``."""
+    return select_rows(
+        m.mpssd_device_phase_set, (predicate(c) for c in m.mpssd_control)
     )
 
 
-def _keys(m: CvxModel, rows) -> list:
-    return [m.mpssd_device_phase_set[i] for i in rows]
-
-
 def add_mpssd_constant_p_constraints_q_control(m: CvxModel) -> None:
-    rows = _rows(m, lambda c: c in (ControlVariable.NONE, ControlVariable.Q))
-    add_constraint(
+    add_constraint_on_rows(
         m,
         "mpssd_constant_p",
-        m.p_mpssd[rows, :] == m.mpssd_p_setpoint[rows, :] if len(rows) else [],
-        _keys(m, rows),
+        _ports(m, lambda c: c in (ControlVariable.NONE, ControlVariable.Q)),
+        lambda r: m.p_mpssd[r, :] == m.mpssd_p_setpoint[r, :],
     )
 
 
 def add_mpssd_constant_q_constraints_p_control(m: CvxModel) -> None:
-    rows = _rows(m, lambda c: c in (ControlVariable.NONE, ControlVariable.P))
-    add_constraint(
+    add_constraint_on_rows(
         m,
         "mpssd_constant_q",
-        m.q_mpssd[rows, :] == m.mpssd_q_setpoint[rows, :] if len(rows) else [],
-        _keys(m, rows),
+        _ports(m, lambda c: c in (ControlVariable.NONE, ControlVariable.P)),
+        lambda r: m.q_mpssd[r, :] == m.mpssd_q_setpoint[r, :],
     )
 
 
@@ -194,30 +189,26 @@ def add_mpssd_limits(m: CvxModel) -> None:
 
 
 def add_circular_mpssd_constraints(m: CvxModel) -> None:
-    rows = _rows(m, lambda c: c == ControlVariable.PQ)
-    add_constraint(
+    add_constraint_on_rows(
         m,
         "mpssd_circle",
-        cp.norm(cp.stack([m.p_mpssd[rows, :], m.q_mpssd[rows, :]]), 2, axis=0)
-        <= column(m.mpssd_s_max[rows])
-        if len(rows)
-        else [],
-        _keys(m, rows),
+        _ports(m, lambda c: c == ControlVariable.PQ),
+        lambda r: cp.norm(cp.stack([m.p_mpssd[r, :], m.q_mpssd[r, :]]), 2, axis=0)
+        <= column(m.mpssd_s_max[r]),
     )
 
 
 def add_ngon_constraints(m: CvxModel, n: int = 8) -> None:
-    rows = _rows(m, lambda c: c == ControlVariable.PQ)
-    keys = _keys(m, rows)
+    selection = _ports(m, lambda c: c == ControlVariable.PQ)
+
+    def half_plane(a: float, b: float):
+        return lambda r: a * m.p_mpssd[r, :] + b * m.q_mpssd[r, :] <= column(
+            m.mpssd_s_max[r]
+        )
+
     for i, (a, b) in enumerate(ngon_line_equations(n), start=1):
-        add_constraint(
-            m,
-            f"mpssd_ngon_limit_{i}",
-            float(a) * m.p_mpssd[rows, :] + float(b) * m.q_mpssd[rows, :]
-            <= column(m.mpssd_s_max[rows])
-            if len(rows)
-            else [],
-            keys,
+        add_constraint_on_rows(
+            m, f"mpssd_ngon_limit_{i}", selection, half_plane(float(a), float(b))
         )
 
 

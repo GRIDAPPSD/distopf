@@ -19,8 +19,10 @@ from distopf.cvxpy_models_performance.common.model import (
     CvxModel,
     IndexSet,
     add_constraint,
+    add_constraint_on_rows,
     add_ranged_constraint,
     column,
+    select_rows,
 )
 from distopf.cvxpy_models_performance.common.registry import port_to_bus_matrix
 from distopf.pyomo_models.common.data import parse_phases
@@ -36,7 +38,6 @@ from distopf.pyomo_models.devices.generator import (
     _P_FIXED,
     _Q_FIXED,
     _ShapeCache,
-    _cfg,
     _q_bounds,
     _q_mode_range,
     _resolve_shape,
@@ -63,7 +64,7 @@ class GeneratorProvider:
             data,
             ctx,
             schedules,
-            limits_enforced=not _cfg(config, "equality_only", False),
+            limits_enforced=not config.equality_only,
         )
         shapes = _ShapeCache(schedules, ctx.times)
         times = list(ctx.times)
@@ -120,9 +121,9 @@ class GeneratorProvider:
                 (device, left, right) for left, right in zip(abc, abc[1:])
             )
 
-        model.gen_device_set = IndexSet(devices, dimen=1)
-        model.gen_device_phase_set = IndexSet(ports, dimen=2)
-        model.gen_phase_pair_set = IndexSet(phase_pairs, dimen=3)
+        model.gen_device_set = IndexSet(devices)
+        model.gen_device_phase_set = IndexSet(ports)
+        model.gen_phase_pair_set = IndexSet(phase_pairs)
 
         model.gen_phases_by_device = phases_by_device
         model.gen_bus_by_device = bus_by_device
@@ -159,55 +160,47 @@ class GeneratorProvider:
             return
         add_gen_constant_p_constraints(model)
         add_gen_constant_q_constraints(model)
-        if _cfg(config, "equality_only", False):
+        if config.equality_only:
             return
         add_gen_limits(model)
-        if _cfg(config, "circular_constraints", True):
+        if config.circular_constraints:
             add_gen_circle_constraints(model)
         else:
             add_gen_octagon_constraints(model)
 
 
-def _ports_where(m: CvxModel, predicate) -> np.ndarray:
-    return np.array(
-        [i for i, ctrl in enumerate(m.gen_control) if predicate(ctrl)], dtype=int
-    )
-
-
-def _port_keys(m: CvxModel, rows: np.ndarray) -> list:
-    return [m.gen_device_phase_set[i] for i in rows]
+def _ports(m: CvxModel, predicate) -> tuple[np.ndarray, list]:
+    """Rows (and keys) of generator ports whose control mode satisfies ``predicate``."""
+    return select_rows(m.gen_device_phase_set, (predicate(c) for c in m.gen_control))
 
 
 def add_gen_constant_p_constraints(m: CvxModel) -> None:
     """Fix P to available power for generators in control modes NONE and Q."""
-    rows = _ports_where(m, lambda ctrl: ctrl in _P_FIXED)
-    add_constraint(
+    add_constraint_on_rows(
         m,
         "gen_constant_p",
-        m.p_gen[rows, :] == m.gen_p_available[rows, :] if len(rows) else [],
-        _port_keys(m, rows),
+        _ports(m, lambda ctrl: ctrl in _P_FIXED),
+        lambda r: m.p_gen[r, :] == m.gen_p_available[r, :],
     )
 
 
 def add_gen_constant_q_constraints(m: CvxModel) -> None:
     """Fix Q to its setpoint for generators in control modes NONE and P."""
-    rows = _ports_where(m, lambda ctrl: ctrl in _Q_FIXED)
-    add_constraint(
+    add_constraint_on_rows(
         m,
         "gen_constant_q",
-        m.q_gen[rows, :] == m.gen_q_setpoint[rows, :] if len(rows) else [],
-        _port_keys(m, rows),
+        _ports(m, lambda ctrl: ctrl in _Q_FIXED),
+        lambda r: m.q_gen[r, :] == m.gen_q_setpoint[r, :],
     )
 
 
 def add_gen_limits(m: CvxModel) -> None:
     """P and Q bounds for every controlled generator (all modes except NONE)."""
-    rows = _ports_where(m, lambda ctrl: ctrl != ControlVariable.NONE)
+    rows, keys = _ports(m, lambda ctrl: ctrl != ControlVariable.NONE)
     if len(rows) == 0:
         add_constraint(m, "gen_p_limits", [], [])
         add_constraint(m, "gen_q_limits", [], [])
         return
-    keys = _port_keys(m, rows)
     upper = np.minimum(m.gen_p_available[rows, :], column(m.gen_s_max[rows]))
     add_ranged_constraint(m, "gen_p_limits", 0, m.p_gen[rows, :], upper, keys)
 
@@ -218,41 +211,31 @@ def add_gen_limits(m: CvxModel) -> None:
         if m.gen_control[port] == ControlVariable.Q:
             for j in range(n_t):
                 lo[k, j], hi[k, j] = _q_mode_range(
-                    m.gen_s_max[port],
-                    m.gen_p_available[port, j],
-                    lo[k, j],
-                    hi[k, j],
+                    m.gen_s_max[port], m.gen_p_available[port, j], lo[k, j], hi[k, j]
                 )
     add_ranged_constraint(m, "gen_q_limits", lo, m.q_gen[rows, :], hi, keys)
 
 
 def add_gen_circle_constraints(m: CvxModel) -> None:
     """Exact apparent-power limit p^2 + q^2 <= s_max^2 for PQ-controlled generators."""
-    rows = _ports_where(m, lambda ctrl: ctrl == ControlVariable.PQ)
-    add_constraint(
+    add_constraint_on_rows(
         m,
         "gen_circle",
-        cp.norm(cp.stack([m.p_gen[rows, :], m.q_gen[rows, :]]), 2, axis=0)
-        <= column(m.gen_s_max[rows])
-        if len(rows)
-        else [],
-        _port_keys(m, rows),
+        _ports(m, lambda ctrl: ctrl == ControlVariable.PQ),
+        lambda r: cp.norm(cp.stack([m.p_gen[r, :], m.q_gen[r, :]]), 2, axis=0)
+        <= column(m.gen_s_max[r]),
     )
 
 
 def add_gen_octagon_constraints(m: CvxModel) -> None:
     """Inscribed-octagon approximation of the rating for PQ-controlled generators."""
-    rows = _ports_where(m, lambda ctrl: ctrl == ControlVariable.PQ)
-    keys = _port_keys(m, rows)
+    selection = _ports(m, lambda ctrl: ctrl == ControlVariable.PQ)
+
+    def half_plane(a: float, b: float):
+        return lambda r: a * m.p_gen[r, :] + b * m.q_gen[r, :] <= column(m.gen_s_max[r])
+
     for i, (a, b) in enumerate(_OCTAGON_HALF, start=1):
-        add_constraint(
-            m,
-            f"gen_octagon_{i}",
-            a * m.p_gen[rows, :] + b * m.q_gen[rows, :] <= column(m.gen_s_max[rows])
-            if len(rows)
-            else [],
-            keys,
-        )
+        add_constraint_on_rows(m, f"gen_octagon_{i}", selection, half_plane(a, b))
 
 
 __all__ = ["GeneratorProvider", "validate_gen_data"]

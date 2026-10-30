@@ -1,11 +1,9 @@
 from distopf.api import Case
 from distopf.cvxpy_models_performance.common.factory import (
-    _standard_devices,
-    create_model,
+    create_extended_lindist_model,
 )
 from distopf.cvxpy_models_performance.common.model import CvxModel
 from distopf.cvxpy_models_performance.extensions.mpssd.mpssd import MpssdProvider
-from distopf.cvxpy_models_performance.network.bfm import BFMProvider
 
 
 def create_mpssd_lindist_model(
@@ -14,13 +12,11 @@ def create_mpssd_lindist_model(
     control_regulators: bool = False,
     **kwargs,
 ) -> CvxModel:
-    return create_model(
-        case=case,
-        core=BFMProvider(),
-        devices=[*_standard_devices(), MpssdProvider()],
+    return create_extended_lindist_model(
+        case,
+        MpssdProvider(),
         control_capacitors=control_capacitors,
         control_regulators=control_regulators,
-        linear=True,
         mpssd=True,
         **kwargs,
     )

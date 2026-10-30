@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from distopf.api import Case
+from distopf.cvxpy_models_performance.common.config import ModelConfig
 from distopf.cvxpy_models_performance.common.model import CvxModel
 from distopf.cvxpy_models_performance.common.registry import DeviceRegistry
 from distopf.cvxpy_models_performance.devices.battery import BatteryProvider
@@ -23,19 +22,23 @@ def create_model(
     control_regulators: bool = False,
     **kwargs,
 ) -> CvxModel:
-    """Build a vectorized CVXPY model from network and device modules."""
-    model = CvxModel()
-    model.cap_mi_enabled = control_capacitors
-    model.reg_mi_enabled = control_regulators
-    for key, value in kwargs.items():
-        setattr(model, key, value)
-    config = SimpleNamespace(
+    """Build a vectorized CVXPY model from a network provider and device providers.
+
+    ``kwargs`` are the build options in :class:`ModelConfig` plus any extension
+    options. All of them are also set as attributes on the model.
+    """
+    config = ModelConfig.from_kwargs(
         control_capacitors=control_capacitors,
         control_regulators=control_regulators,
         **kwargs,
     )
-    core.create_components(model, case, config=config)
+    model = CvxModel()
+    model.cap_mi_enabled = config.control_capacitors
+    model.reg_mi_enabled = config.control_regulators
+    for key, value in kwargs.items():
+        setattr(model, key, value)
 
+    core.create_components(model, case, config=config)
     registry = DeviceRegistry(devices)
     registry.create_components(model, case, config=config)
     model._device_registry = registry
@@ -52,6 +55,25 @@ def _standard_devices() -> list:
         BatteryProvider(),
         RegulatorProvider(),
     ]
+
+
+def create_extended_lindist_model(
+    case: Case,
+    extension,
+    control_capacitors: bool = False,
+    control_regulators: bool = False,
+    **kwargs,
+) -> CvxModel:
+    """LinDistFlow model with the standard devices plus one extension provider."""
+    return create_model(
+        case=case,
+        core=BFMProvider(),
+        devices=[*_standard_devices(), extension],
+        control_capacitors=control_capacitors,
+        control_regulators=control_regulators,
+        linear=True,
+        **kwargs,
+    )
 
 
 def create_lindist_model(

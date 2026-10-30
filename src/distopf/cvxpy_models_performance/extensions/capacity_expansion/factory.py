@@ -1,13 +1,11 @@
 from distopf.api import Case
 from distopf.cvxpy_models_performance.common.factory import (
-    _standard_devices,
-    create_model,
+    create_extended_lindist_model,
 )
 from distopf.cvxpy_models_performance.common.model import CvxModel
 from distopf.cvxpy_models_performance.extensions.capacity_expansion.capacity_expansion import (
     CapacityExpansionProvider,
 )
-from distopf.cvxpy_models_performance.network.bfm import BFMProvider
 
 
 def create_capacity_expansion_lindist_model(
@@ -28,13 +26,11 @@ def create_capacity_expansion_lindist_model(
     bess_charge_derate: float = 1.0,
     **kwargs,
 ) -> CvxModel:
-    return create_model(
-        case=case,
-        core=BFMProvider(),
-        devices=[*_standard_devices(), CapacityExpansionProvider()],
+    return create_extended_lindist_model(
+        case,
+        CapacityExpansionProvider(),
         control_capacitors=control_capacitors,
         control_regulators=control_regulators,
-        linear=True,
         voltage_slacks=voltage_slacks,
         thermal_slacks=thermal_slacks,
         zone_edges=zone_edges,

@@ -54,7 +54,6 @@ class RegulatorProvider:
                 for _, row in data.iterrows()
                 for phase in parse_phases(str(row.phases).strip())
             ],
-            dimen=3,
         )
         if data.empty:
             model.reg_ratio = np.array([], dtype=float)
@@ -63,7 +62,7 @@ class RegulatorProvider:
 
         model.add_var("v2_reg", model.reg_phase_set, nonneg=True, value=1.0)
         if getattr(model, "reg_mi_enabled", False):
-            model.tap_set = IndexSet(range(0, 33), dimen=1)
+            model.tap_set = IndexSet(range(0, 33))
             model.tap_ratio = np.array([0.9 + k * 0.00625 for k in range(33)])
             model.tap_ratio_squared = model.tap_ratio**2
             model.reg_big_m = 1e6
@@ -86,9 +85,7 @@ class RegulatorProvider:
         control = getattr(model, "reg_mi_enabled", False)
         if control:
             add_regulator_tap_sos1_constraints(model)
-            tap_limit = (
-                getattr(config, "reg_tap_change_limit", None) if config else None
-            )
+            tap_limit = config.reg_tap_change_limit
             if tap_limit is not None:
                 if (
                     isinstance(tap_limit, bool)

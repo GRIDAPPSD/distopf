@@ -36,12 +36,6 @@ _DEVICE_BUS_MAP = {
 _ZONE_VARS = {"p_max": ["zone", "resource"], "p_zr": ["zone", "resource", "t"]}
 
 
-def _flat_keys(spec: VarSpec) -> list[tuple]:
-    """Row keys of a single-axis variable as tuples."""
-    axis = spec.axes[0]
-    return [k if isinstance(k, tuple) else (k,) for k in axis]
-
-
 def _values_2d(spec: VarSpec) -> np.ndarray:
     value = spec.variable.value
     if value is None:
@@ -49,111 +43,99 @@ def _values_2d(spec: VarSpec) -> np.ndarray:
     return np.asarray(value, dtype=float)
 
 
-def _repeat_keys(keys: list[tuple], times: list) -> tuple[list[tuple], list]:
-    """Row-major expansion of keys over time (key-major, matching scalar order)."""
+def _long_table(
+    model: CvxModel,
+    keys: list,
+    values: np.ndarray,
+    device_buses: dict | None = None,
+    value_name: str = "value",
+    device_columns: bool = False,
+) -> pd.DataFrame:
+    """Tidy table with one row per (key, time), key-major, from a ``(n_key, T)`` array.
+
+    Key columns depend on the key width: ``(id,)`` and ``(id, phase)`` give
+    ``id, name, t, phase``; ``(fb, tb, phase)`` gives ``fb, tb, from_name,
+    to_name, t, phase``. Device-owned quantities (``device_buses`` given) use
+    ``(device, phase)`` keys and give ``device_name, id, name, t, phase``.
+    ``device_columns`` gives ``device_name, t, phase`` without bus information.
+    """
+    times = list(model.time_set)
+    name_map = model.name_map
+    keys = [k if isinstance(k, tuple) else (k,) for k in keys]
     n_t = len(times)
-    return (
-        [key for key in keys for _ in range(n_t)],
-        times * len(keys),
-    )
+    width = len(keys[0]) if keys else 0
+    key_cols: list[Any] = [
+        list(np.repeat(np.array([k[i] for k in keys], dtype=object), n_t))
+        for i in range(width)
+    ]
+    frame = {"t": times * len(keys)}
+    flat = values.reshape(-1)
+
+    out: dict[str, Any]
+    if device_buses is not None:
+        devices = list(key_cols[0]) if key_cols else []
+        buses = [device_buses[d] for d in devices]
+        out = {
+            "device_name": devices,
+            "id": buses,
+            "name": [name_map[b] for b in buses],
+            **frame,
+            "phase": list(key_cols[1]) if width > 1 else ["value"] * len(flat),
+        }
+    elif device_columns:
+        out = {
+            "device_name": list(key_cols[0]) if key_cols else [],
+            **frame,
+            "phase": list(key_cols[1]) if key_cols else [],
+        }
+    elif width == 3:
+        out = {
+            "fb": list(key_cols[0]),
+            "tb": list(key_cols[1]),
+            "from_name": [name_map.get(i, i) for i in key_cols[0]],
+            "to_name": [name_map.get(i, i) for i in key_cols[1]],
+            **frame,
+            "phase": list(key_cols[2]),
+        }
+    elif width in (1, 2):
+        out = {
+            "id": list(key_cols[0]),
+            "name": [name_map.get(i, i) for i in key_cols[0]],
+            **frame,
+            "phase": list(key_cols[1]) if width == 2 else ["value"] * len(flat),
+        }
+    else:
+        return pd.DataFrame(columns=["id", "name", "t", "phase", value_name])
+    out[value_name] = flat
+    return pd.DataFrame(out)
 
 
 def _tidy(model: CvxModel, spec: VarSpec) -> pd.DataFrame:
     """Tidy frame for a variable, mirroring ``pyomo_models`` ``get_values_tidy``."""
     name = spec.name
-    times = list(model.time_set)
-    name_map = model.name_map
     values = _values_2d(spec)
     if name == "u_reg":
-        reg_keys = list(spec.axes[0])
+        times = list(model.time_set)
+        name_map = model.name_map
         taps = list(spec.axes[1])
         rows = [
             (fb, tb, name_map[fb], name_map[tb], t, ph, tap, values[i, k, j])
-            for i, (fb, tb, ph) in enumerate(reg_keys)
+            for i, (fb, tb, ph) in enumerate(spec.axes[0])
             for k, tap in enumerate(taps)
             for j, t in enumerate(times)
         ]
-        return pd.DataFrame(
-            rows,
-            columns=[
-                "fb",
-                "tb",
-                "from_name",
-                "to_name",
-                "t",
-                "phase",
-                "tap",
-                "value",
-            ],
-        )
-    keys = _flat_keys(spec)
-    key_rows, time_rows = _repeat_keys(keys, times)
-    flat = values.reshape(-1)
+        columns = ["fb", "tb", "from_name", "to_name", "t", "phase", "tap", "value"]
+        return pd.DataFrame(rows, columns=columns)
+
+    keys = list(spec.axes[0])
     bus_map_name = _DEVICE_BUS_MAP.get(name)
-    bus_by_device = getattr(model, bus_map_name, None) if bus_map_name else None
-    n = len(key_rows)
-    cols: list[Any] = list(zip(*key_rows)) if key_rows else []
-    if bus_by_device is not None:
-        devices = list(cols[0]) if cols else []
-        buses = [bus_by_device[d] for d in devices]
-        phases = list(cols[1]) if len(cols) > 1 else ["value"] * n
-        return pd.DataFrame(
-            {
-                "device_name": devices,
-                "id": buses,
-                "name": [name_map[b] for b in buses],
-                "t": time_rows,
-                "phase": phases,
-                "value": flat,
-            }
-        )
-    if name in ("p_mpssd", "q_mpssd"):
-        return pd.DataFrame(
-            {
-                "device_name": list(cols[0]) if cols else [],
-                "t": time_rows,
-                "phase": list(cols[1]) if cols else [],
-                "value": flat,
-            }
-        )
-    width = len(keys[0]) if keys else 0
-    if width == 1:
-        ids = list(cols[0]) if cols else []
-        return pd.DataFrame(
-            {
-                "id": ids,
-                "name": [name_map[i] for i in ids],
-                "t": time_rows,
-                "phase": ["value"] * n,
-                "value": flat,
-            }
-        )
-    if width == 2:
-        ids = list(cols[0]) if cols else []
-        return pd.DataFrame(
-            {
-                "id": ids,
-                "name": [name_map[i] for i in ids],
-                "t": time_rows,
-                "phase": list(cols[1]) if cols else [],
-                "value": flat,
-            }
-        )
-    if width == 3:
-        fbs = list(cols[0]) if cols else []
-        tbs = list(cols[1]) if cols else []
-        return pd.DataFrame(
-            {
-                "fb": fbs,
-                "tb": tbs,
-                "from_name": [name_map[i] for i in fbs],
-                "to_name": [name_map[i] for i in tbs],
-                "t": time_rows,
-                "phase": list(cols[2]) if cols else [],
-                "value": flat,
-            }
-        )
-    return pd.DataFrame(columns=["id", "name", "t", "phase", "value"])
+    return _long_table(
+        model,
+        keys,
+        values,
+        device_buses=getattr(model, bus_map_name, None) if bus_map_name else None,
+        device_columns=name in ("p_mpssd", "q_mpssd"),
+    )
 
 
 def get_values(model: CvxModel, name: str) -> pd.DataFrame:
@@ -289,7 +271,7 @@ class CvxResult:
         if constraint_name not in model.constraint_names:
             return pd.DataFrame()
         record: ConstraintRecord = getattr(model, constraint_name)
-        if len(record) == 0 or not record.pieces:
+        if not record.rows or not record.pieces:
             return pd.DataFrame()
         n_t = len(model.time_set)
         dual = _piece_dual(record.pieces, (len(record.rows), n_t))
@@ -321,62 +303,17 @@ def _dual_device_map(model: CvxModel, name: str) -> dict | None:
 def _dual_frame(
     model: CvxModel, name: str, rows: list, dual: np.ndarray
 ) -> pd.DataFrame:
-    times = list(model.time_set)
-    name_map = model.name_map
+    """Tidy dual table. Device constraints also report device, bus id and bus name."""
     keys = [r if isinstance(r, tuple) else (r,) for r in rows]
-    key_rows, time_rows = _repeat_keys(keys, times)
-    flat = dual.reshape(-1)
-    cols = list(zip(*key_rows))
     width = len(keys[0])
     bus_by_device = _dual_device_map(model, name)
     if bus_by_device is not None and width in (1, 2):
-        devices = list(cols[0])
-        buses = [bus_by_device[d] for d in devices]
-        data = {
-            "device_name": devices,
-            "id": buses,
-            "name": [name_map[b] for b in buses],
-            "t": time_rows,
-        }
-        if width == 2:
-            data["phase"] = list(cols[1])
-        data["dual"] = list(flat)
-        return pd.DataFrame(data)
-    if width == 1:
-        ids = list(cols[0])
-        return pd.DataFrame(
-            {
-                "id": ids,
-                "name": [name_map.get(i, i) for i in ids],
-                "t": time_rows,
-                "dual": flat,
-            }
-        )
-    if width == 2:
-        ids = list(cols[0])
-        return pd.DataFrame(
-            {
-                "id": ids,
-                "name": [name_map.get(i, i) for i in ids],
-                "t": time_rows,
-                "phase": list(cols[1]),
-                "dual": flat,
-            }
-        )
-    if width == 3:
-        fbs, tbs = list(cols[0]), list(cols[1])
-        return pd.DataFrame(
-            {
-                "fb": fbs,
-                "tb": tbs,
-                "from_name": [name_map.get(i, i) for i in fbs],
-                "to_name": [name_map.get(i, i) for i in tbs],
-                "t": time_rows,
-                "phase": list(cols[2]),
-                "dual": flat,
-            }
-        )
-    return pd.DataFrame()
+        return _long_table(
+            model, keys, dual, device_buses=bus_by_device, value_name="dual"
+        ).drop(columns=[] if width == 2 else ["phase"])
+    if width > 3:
+        return pd.DataFrame()
+    return _long_table(model, keys, dual, value_name="dual")
 
 
 __all__ = ["CvxResult", "get_values", "get_voltages"]

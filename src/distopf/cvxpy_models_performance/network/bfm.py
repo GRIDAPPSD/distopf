@@ -7,6 +7,7 @@ variables are arrays of shape ``(n_index, n_steps)``.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from itertools import combinations_with_replacement, product
 from typing import Any
 
@@ -18,7 +19,6 @@ from distopf.api import Case
 from distopf.cvxpy_models_performance.common.model import (
     CvxModel,
     IndexSet,
-    ParamDict,
 )
 from distopf.cvxpy_models_performance.network import bfm_constraints
 from distopf.pyomo_models.common.data import parse_phases
@@ -32,42 +32,33 @@ def create_network_sets(model: CvxModel, case: Case) -> None:
     model.delta_t = case.delta_t
     model.start_step = case.start_step
     model.n_steps = case.n_steps
-    model.time_set = IndexSet(
-        range(case.start_step, case.start_step + case.n_steps), dimen=1
-    )
+    model.time_set = IndexSet(range(case.start_step, case.start_step + case.n_steps))
     bus_data = case.bus_data
     branch_data = case.branch_data
-    model.bus_set = IndexSet(bus_data.id.tolist(), dimen=1)
+    model.bus_set = IndexSet(bus_data.id.tolist())
     swing_mask = bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
     boundary_in_mask = bus_data.bus_type.isin(["SWING_FREE", "IN"])
     boundary_out_mask = bus_data.bus_type.isin(["OUT"])
-    model.swing_bus_set = IndexSet(bus_data.loc[swing_mask, "id"].tolist(), dimen=1)
+    model.swing_bus_set = IndexSet(bus_data.loc[swing_mask, "id"].tolist())
     model.swing_phase_set = IndexSet(
         [
             (row.id, phase)
             for row in bus_data.loc[swing_mask].itertuples()
             for phase in parse_phases(str(row.phases))
         ],
-        dimen=2,
     )
-    model.boundary_in_set = IndexSet(
-        bus_data.loc[boundary_in_mask, "id"].tolist(), dimen=1
-    )
-    model.boundary_out_set = IndexSet(
-        bus_data.loc[boundary_out_mask, "id"].tolist(), dimen=1
-    )
+    model.boundary_in_set = IndexSet(bus_data.loc[boundary_in_mask, "id"].tolist())
+    model.boundary_out_set = IndexSet(bus_data.loc[boundary_out_mask, "id"].tolist())
     model.branch_set = IndexSet(
         [(int(fb), int(tb)) for fb, tb in zip(branch_data.fb, branch_data.tb)],
-        dimen=2,
     )
-    model.phase_pair_set = IndexSet(PHASE_PAIR_LABELS, dimen=1)
+    model.phase_pair_set = IndexSet(PHASE_PAIR_LABELS)
     model.bus_phase_set = IndexSet(
         [
             (row.id, phase)
             for row in bus_data.itertuples()
             for phase in parse_phases(str(row.phases))
         ],
-        dimen=2,
     )
     model.branch_phase_set = IndexSet(
         [
@@ -75,19 +66,18 @@ def create_network_sets(model: CvxModel, case: Case) -> None:
             for row in branch_data.itertuples()
             for phase in parse_phases(str(row.phases))
         ],
-        dimen=3,
     )
 
 
 def create_network_rx_parameters(model: CvxModel, case: Case) -> None:
     """Create impedance parameters shared by LinDistFlow and BranchFlow.
 
-    ``model.r`` and ``model.x`` are dictionaries keyed by ``(fb, tb, pair)``
-    (default 0). ``model.r_diag`` and ``model.x_diag`` are arrays aligned with
+    ``model.r`` and ``model.x`` are ``defaultdict(float)`` keyed by ``(fb, tb, pair)``
+    (missing pairs read as 0). ``model.r_diag`` and ``model.x_diag`` are arrays aligned with
     ``branch_phase_set`` holding the self impedance ``r_{aa}``, ``x_{aa}``.
     """
-    resistance = {}
-    reactance = {}
+    resistance: dict[tuple, float] = defaultdict(float)
+    reactance: dict[tuple, float] = defaultdict(float)
     branch_data = case.branch_data
     pairs = [
         pair
@@ -99,8 +89,8 @@ def create_network_rx_parameters(model: CvxModel, case: Case) -> None:
         for pair in pairs:
             resistance[(*branch, pair)] = row[f"r_{pair}"]
             reactance[(*branch, pair)] = row[f"x_{pair}"]
-    model.r = ParamDict(resistance, default=0.0)
-    model.x = ParamDict(reactance, default=0.0)
+    model.r = resistance
+    model.x = reactance
     model.r_diag = np.array(
         [model.r[fb, tb, ph + ph] for fb, tb, ph in model.branch_phase_set],
         dtype=float,
@@ -205,11 +195,9 @@ def create_network_components(model: CvxModel, case: Case) -> None:
                 and "s2" not in from_phases
             ):
                 model.primary_phase_map[(int(row.fb), int(row.tb))] = str(primary)  # type: ignore[arg-type]
-    children: dict[int, list[tuple[int, int]]] = {
-        int(bus): [] for bus in case.bus_data.id
-    }
+    children: dict[int, list[tuple[int, int]]] = defaultdict(list)
     for fb, tb in zip(case.branch_data.fb, case.branch_data.tb):
-        children.setdefault(int(fb), []).append((int(fb), int(tb)))
+        children[int(fb)].append((int(fb), int(tb)))
     model.to_bus_map = children
     bus_names = case.bus_data["name"].map(lambda value: str(value).strip())
     dupes = sorted(set(bus_names[bus_names.duplicated()]))
@@ -249,8 +237,8 @@ def create_branchflow_components(model: Any, case: Case) -> None:
                 for phase_1, phase_2 in product(phases, repeat=2)
             )
 
-    model.branch_phase_pair_set = IndexSet(branch_phase_pairs, dimen=3)
-    model.branch_angle_phase_pair_set = IndexSet(branch_angle_phase_pairs, dimen=3)
+    model.branch_phase_pair_set = IndexSet(branch_phase_pairs)
+    model.branch_angle_phase_pair_set = IndexSet(branch_angle_phase_pairs)
     model.add_var("l_flow", model.branch_phase_pair_set)
     n_angles = len(model.branch_angle_phase_pair_set)
     model.d = np.zeros(n_angles)
@@ -273,28 +261,26 @@ class BFMProvider:
     name = "bfm"
 
     def create_components(self, model: Any, case: Any, config: Any) -> None:
-        model.cap_mi_enabled = getattr(config, "control_capacitors", False)
-        model.reg_mi_enabled = getattr(config, "control_regulators", False)
         create_network_components(model, case)
         model.add_var("v2", model.bus_phase_set, nonneg=True, value=1.0)
         model.add_var("p_flow", model.branch_phase_set)
         model.add_var("q_flow", model.branch_phase_set, value=0.0)
-        if not getattr(config, "linear", True):
+        if not config.linear:
             create_branchflow_components(model, case)
 
     def add_constraints(self, model: Any, config: Any) -> None:
         bfm_constraints.add_constraints(
             model,
-            circular_constraints=getattr(config, "circular_constraints", True),
-            thermal_constraints=getattr(config, "thermal_constraints", True),
-            equality_only=getattr(config, "equality_only", False),
-            free_swing_voltage=getattr(config, "free_swing_voltage", False),
-            linear=getattr(config, "linear", True),
-            socp_relaxation=getattr(config, "socp_relaxation", False),
-            voltage_slacks=getattr(config, "voltage_slacks", False),
-            thermal_slacks=getattr(config, "thermal_slacks", False),
-            sdp_relaxation=getattr(config, "sdp_relaxation", False),
-            sdp_diagonal_relaxation=getattr(config, "sdp_diagonal_relaxation", False),
+            circular_constraints=config.circular_constraints,
+            thermal_constraints=config.thermal_constraints,
+            equality_only=config.equality_only,
+            free_swing_voltage=config.free_swing_voltage,
+            linear=config.linear,
+            socp_relaxation=config.socp_relaxation,
+            voltage_slacks=config.voltage_slacks,
+            thermal_slacks=config.thermal_slacks,
+            sdp_relaxation=config.sdp_relaxation,
+            sdp_diagonal_relaxation=config.sdp_diagonal_relaxation,
         )
 
 

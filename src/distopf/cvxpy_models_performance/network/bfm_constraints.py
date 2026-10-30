@@ -28,6 +28,7 @@ import numpy as np
 from distopf.cvxpy_models_performance.common import common_constraints as const
 from distopf.cvxpy_models_performance.common.model import (
     CvxModel,
+    IndexSet,
     add_constraint,
     sparse,
 )
@@ -35,6 +36,14 @@ from distopf.pyomo_models.common.data import parse_phases
 
 sqrt2 = sqrt(2)
 sqrt3 = sqrt(3)
+
+
+def _flat(expression):
+    return cp.vec(expression, order="C")
+
+
+def _is_zero(value) -> bool:
+    return isinstance(value, (int, float)) and value == 0
 
 
 def _registry(m: CvxModel):
@@ -245,7 +254,7 @@ def _voltage_drop_term2(m: CvxModel):
     return sparse(rows, cols, vals, shape) @ m.l_flow
 
 
-def add_p_flow_constraints(m: CvxModel, linear=True) -> None:
+def add_p_flow_constraints(m: CvxModel, linear: bool = True) -> None:
     """Add active-power balance from the signed injection registry."""
     registry = _registry(m)
     injection = registry.active_power_injection(m)
@@ -261,7 +270,7 @@ def add_p_flow_constraints(m: CvxModel, linear=True) -> None:
     add_constraint(m, "power_balance_p", lhs == rhs, _bp_keys(m))
 
 
-def add_q_flow_constraints(m: CvxModel, linear=True) -> None:
+def add_q_flow_constraints(m: CvxModel, linear: bool = True) -> None:
     """Add reactive-power balance from the signed injection registry."""
     registry = _registry(m)
     injection = registry.reactive_power_injection(m)
@@ -277,15 +286,7 @@ def add_q_flow_constraints(m: CvxModel, linear=True) -> None:
     add_constraint(m, "power_balance_q", lhs == rhs, _bp_keys(m))
 
 
-def _flat(expression):
-    return cp.vec(expression, order="C")
-
-
-def _is_zero(value) -> bool:
-    return isinstance(value, (int, float)) and value == 0
-
-
-def add_voltage_drop_constraints(m: CvxModel, linear=True) -> None:
+def add_voltage_drop_constraints(m: CvxModel, linear: bool = True) -> None:
     """Add voltage drop constraints.
 
     Regulator branches use ``v2_reg`` in place of the from-bus ``v2``.
@@ -399,202 +400,126 @@ def add_current_constraint2_relaxed(m: CvxModel) -> None:
     )
 
 
+# ============ SDP relaxation ==========================================================
+#
+# For each branch (fb, tb) with n phases and each time step, the 4n x 4n matrix
+#
+#     full:   [[ Vr,  P, -Vi, -Q],        test1:  [[ Vr,  P,  0, -Q],
+#              [ P.T, L,  Q.T, 0],                 [ P.T, L,  Q.T, 0],
+#              [ Vi,  Q,  Vr,  P],                 [ 0,   Q,  Vr,  P],
+#              [-Q.T, 0,  P.T, L]]                 [-Q.T, 0,  P.T, L]]
+#
+# must be positive semidefinite. Diagonals of Vr, P, Q, L reuse the (from-side)
+# v2, p_flow, q_flow and l_flow variables. L's off-diagonals are l_flow entries.
+# The off-diagonals of Vr, Vi, P and Q are the auxiliary variables psd_v_re,
+# psd_v_im, psd_p_off and psd_q_off, unless ``diagonal_only`` fixes them to zero.
+#
+#   add_psd_constraints(m)                       full layout, auxiliary off-diagonals
+#   add_psd_constraints(m, diagonal_only=True)   full layout, zero off-diagonals
+#   add_psd_diagonal_constraints(m)              same as the line above
+#   add_psd_test1_constraints(m)                 test1 layout, zero off-diagonals
+#   add_psd_test1_constraints(m, False)          test1 layout, auxiliary off-diagonals
+#
+# All variants register the constraint ``psd_constraint`` (one piece per branch
+# and time step, keyed by (fb, tb)).
+
+
+def _ensure_psd_aux_vars(m: CvxModel) -> None:
+    """Create the off-diagonal auxiliary variables once per model."""
+    if hasattr(m, "psd_v_re"):
+        return
+    bp_pos = m.branch_phase_set.pos
+    v_keys: list[tuple] = []
+    pq_keys: list[tuple] = []
+    for fb, tb in m.branch_set:
+        phases = [ph for ph in "abc" if (fb, tb, ph) in bp_pos]
+        v_keys.extend((fb, tb, p1 + p2) for p1, p2 in combinations(phases, 2))
+        pq_keys.extend((fb, tb, p1 + p2) for p1 in phases for p2 in phases if p1 != p2)
+    m.psd_v_key_set = IndexSet(v_keys)
+    m.psd_pq_key_set = IndexSet(pq_keys)
+    m.add_var("psd_v_re", m.psd_v_key_set)
+    m.add_var("psd_v_im", m.psd_v_key_set)
+    m.add_var("psd_p_off", m.psd_pq_key_set)
+    m.add_var("psd_q_off", m.psd_pq_key_set)
+
+
+def _to_block(entries):
+    """Block matrix from a list of rows whose entries are scalars or expressions."""
+    return cp.bmat(
+        [
+            [
+                cp.reshape(
+                    cp.Constant(e) if isinstance(e, (int, float)) else e,
+                    (1, 1),
+                    order="C",
+                )
+                for e in row
+            ]
+            for row in entries
+        ]
+    )
+
+
+def _psd_branch_matrix(m, fb, tb, phases, t, source, layout, diagonal_only):
+    """The 4n x 4n matrix for one branch at time index ``t`` (see layouts above)."""
+    bp_pos = m.branch_phase_set.pos
+    pair_pos = m.branch_phase_pair_set.pos
+    n = len(phases)
+    vr, vi, pm, qm, lm = ([[0] * n for _ in range(n)] for _ in range(5))
+    for i, a in enumerate(phases):
+        for j, b in enumerate(phases):
+            if i == j:
+                row = bp_pos[(fb, tb, a)]
+                vr[i][i] = source[row, t]
+                pm[i][i] = m.p_flow[row, t]
+                qm[i][i] = m.q_flow[row, t]
+                lm[i][i] = m.l_flow[pair_pos[(fb, tb, a + a)], t]
+                continue
+            pair = a + b if i < j else b + a
+            lm[i][j] = m.l_flow[pair_pos[(fb, tb, pair)], t]
+            if diagonal_only:
+                continue
+            v_row = m.psd_v_key_set.pos[(fb, tb, pair)]
+            pq_row = m.psd_pq_key_set.pos[(fb, tb, a + b)]
+            vr[i][j] = m.psd_v_re[v_row, t]
+            vi_var = m.psd_v_im[v_row, t]
+            vi[i][j] = vi_var if i < j else -vi_var
+            pm[i][j] = m.psd_p_off[pq_row, t]
+            qm[i][j] = m.psd_q_off[pq_row, t]
+
+    vr_m, vi_m, p_m, q_m, l_m = (_to_block(x) for x in (vr, vi, pm, qm, lm))
+    zero = cp.Constant(np.zeros((n, n)))
+    return cp.bmat(
+        [
+            [vr_m, p_m, -vi_m, -q_m],
+            [p_m.T, l_m, q_m.T, zero],
+            [vi_m, q_m, vr_m, p_m],
+            [-q_m.T, zero, p_m.T, l_m],
+        ]
+    )
+
+
+def _add_psd(m: CvxModel, layout: str, diagonal_only: bool) -> None:
+    if not diagonal_only:
+        _ensure_psd_aux_vars(m)
+    bp_pos = m.branch_phase_set.pos
+    source = _source_voltage(m, for_current=True)
+    record = add_constraint(m, "psd_constraint", [], [])
+    for fb, tb in m.branch_set:
+        phases = [ph for ph in "abc" if (fb, tb, ph) in bp_pos]
+        if not phases:
+            continue
+        for t in range(len(m.time_set)):
+            matrix = _psd_branch_matrix(
+                m, fb, tb, phases, t, source, layout, diagonal_only
+            )
+            record.pieces.append(matrix >> 0)
+            record.rows.append((fb, tb))
+
+
 def add_psd_constraints(m: CvxModel, diagonal_only: bool = False) -> None:
-    """Add the PSD constraint ``M_ij >= 0`` on each branch and time step.
-
-    ``M_ij`` is the 4n x 4n real matrix of voltage, power flow and current
-    terms (n = number of phases). Diagonal entries reuse ``v2``, ``p_flow``,
-    ``q_flow`` and ``l_flow``; off-diagonal entries use auxiliary variables
-    ``psd_v_re``, ``psd_v_im`` (keyed ``(fb, tb, pair)``) and ``psd_p_off``,
-    ``psd_q_off`` (keyed ``(fb, tb, ordered pair)``), each of shape
-    ``(n_keys, n_steps)``.
-
-    With ``diagonal_only=True`` (testing variant) the off-diagonal entries of
-    the voltage, active power and reactive power sub-matrices are fixed to
-    zero, so no auxiliary variables are created. The current sub-matrix keeps
-    its off-diagonal ``l_flow`` entries. The constraint name is unchanged.
-    """
-    from distopf.cvxpy_models_performance.common.model import IndexSet
-
-    bp_pos = m.branch_phase_set.pos
-    pair_pos = m.branch_phase_pair_set.pos
-    if not diagonal_only and not hasattr(m, "psd_v_re"):
-        v_keys, pq_keys = [], []
-        for fb, tb in m.branch_set:
-            phases = [ph for ph in "abc" if (fb, tb, ph) in bp_pos]
-            for p1, p2 in combinations(phases, 2):
-                v_keys.append((fb, tb, p1 + p2))
-            for p1 in phases:
-                for p2 in phases:
-                    if p1 != p2:
-                        pq_keys.append((fb, tb, p1 + p2))
-        m.psd_v_key_set = IndexSet(v_keys, dimen=3)
-        m.psd_pq_key_set = IndexSet(pq_keys, dimen=3)
-        m.add_var("psd_v_re", m.psd_v_key_set)
-        m.add_var("psd_v_im", m.psd_v_key_set)
-        m.add_var("psd_p_off", m.psd_pq_key_set)
-        m.add_var("psd_q_off", m.psd_pq_key_set)
-
-    source = _source_voltage(m, for_current=True)
-    v_pos = {} if diagonal_only else m.psd_v_key_set.pos
-    pq_pos = {} if diagonal_only else m.psd_pq_key_set.pos
-    record = add_constraint(m, "psd_constraint", [], [])
-    for fb, tb in m.branch_set:
-        phases = [ph for ph in "abc" if (fb, tb, ph) in bp_pos]
-        if not phases:
-            continue
-        n = len(phases)
-        for t in range(len(m.time_set)):
-            vr = [[0] * n for _ in range(n)]
-            vi = [[0] * n for _ in range(n)]
-            pm = [[0] * n for _ in range(n)]
-            qm = [[0] * n for _ in range(n)]
-            lm = [[0] * n for _ in range(n)]
-            for i, a in enumerate(phases):
-                for j, b in enumerate(phases):
-                    if i == j:
-                        row = bp_pos[(fb, tb, a)]
-                        vr[i][i] = source[row, t]
-                        pm[i][i] = m.p_flow[row, t]
-                        qm[i][i] = m.q_flow[row, t]
-                        lm[i][i] = m.l_flow[pair_pos[(fb, tb, a + a)], t]
-                        continue
-                    pair = a + b if i < j else b + a
-                    lm[i][j] = m.l_flow[pair_pos[(fb, tb, pair)], t]
-                    if diagonal_only:
-                        continue
-                    vr[i][j] = m.psd_v_re[v_pos[(fb, tb, pair)], t]
-                    vi_var = m.psd_v_im[v_pos[(fb, tb, pair)], t]
-                    vi[i][j] = vi_var if i < j else -vi_var
-                    pm[i][j] = m.psd_p_off[pq_pos[(fb, tb, a + b)], t]
-                    qm[i][j] = m.psd_q_off[pq_pos[(fb, tb, a + b)], t]
-
-            def block(rows):
-                return cp.bmat(
-                    [
-                        [
-                            cp.reshape(
-                                cp.Constant(e) if isinstance(e, (int, float)) else e,
-                                (1, 1),
-                                order="C",
-                            )
-                            for e in row
-                        ]
-                        for row in rows
-                    ]
-                )
-
-            vr_m, vi_m, p_m, q_m, l_m = (block(x) for x in (vr, vi, pm, qm, lm))
-            zero = cp.Constant(np.zeros((n, n)))
-            big_m = cp.bmat(
-                [
-                    [vr_m, p_m, -vi_m, -q_m],
-                    [p_m.T, l_m, q_m.T, zero],
-                    [vi_m, q_m, vr_m, p_m],
-                    [-q_m.T, zero, p_m.T, l_m],
-                ]
-            )
-            record.pieces.append(big_m >> 0)
-            record.rows.append((fb, tb))
-
-
-def add_psd_test1_constraints(m: CvxModel, diagonal_only: bool = True) -> None:
-    """Add the PSD constraint ``M_ij >= 0`` on each branch and time step.
-
-    ``M_ij`` is the 4n x 4n real matrix of voltage, power flow and current
-    terms (n = number of phases). Diagonal entries reuse ``v2``, ``p_flow``,
-    ``q_flow`` and ``l_flow``; off-diagonal entries use auxiliary variables
-    ``psd_v_re``, ``psd_v_im`` (keyed ``(fb, tb, pair)``) and ``psd_p_off``,
-    ``psd_q_off`` (keyed ``(fb, tb, ordered pair)``), each of shape
-    ``(n_keys, n_steps)``.
-
-    With ``diagonal_only=True`` (testing variant) the off-diagonal entries of
-    the voltage, active power and reactive power sub-matrices are fixed to
-    zero, so no auxiliary variables are created. The current sub-matrix keeps
-    its off-diagonal ``l_flow`` entries. The constraint name is unchanged.
-    """
-    from distopf.cvxpy_models_performance.common.model import IndexSet
-
-    bp_pos = m.branch_phase_set.pos
-    pair_pos = m.branch_phase_pair_set.pos
-    if not diagonal_only and not hasattr(m, "psd_v_re"):
-        v_keys, pq_keys = [], []
-        for fb, tb in m.branch_set:
-            phases = [ph for ph in "abc" if (fb, tb, ph) in bp_pos]
-            for p1, p2 in combinations(phases, 2):
-                v_keys.append((fb, tb, p1 + p2))
-            for p1 in phases:
-                for p2 in phases:
-                    if p1 != p2:
-                        pq_keys.append((fb, tb, p1 + p2))
-        m.psd_v_key_set = IndexSet(v_keys, dimen=3)
-        m.psd_pq_key_set = IndexSet(pq_keys, dimen=3)
-        m.add_var("psd_v_re", m.psd_v_key_set)
-        m.add_var("psd_v_im", m.psd_v_key_set)
-        m.add_var("psd_p_off", m.psd_pq_key_set)
-        m.add_var("psd_q_off", m.psd_pq_key_set)
-
-    source = _source_voltage(m, for_current=True)
-    v_pos = {} if diagonal_only else m.psd_v_key_set.pos
-    pq_pos = {} if diagonal_only else m.psd_pq_key_set.pos
-    record = add_constraint(m, "psd_constraint", [], [])
-    for fb, tb in m.branch_set:
-        phases = [ph for ph in "abc" if (fb, tb, ph) in bp_pos]
-        if not phases:
-            continue
-        n = len(phases)
-        for t in range(len(m.time_set)):
-            vr = [[0] * n for _ in range(n)]
-            vi = [[0] * n for _ in range(n)]
-            pm = [[0] * n for _ in range(n)]
-            qm = [[0] * n for _ in range(n)]
-            lm = [[0] * n for _ in range(n)]
-            for i, a in enumerate(phases):
-                for j, b in enumerate(phases):
-                    if i == j:
-                        row = bp_pos[(fb, tb, a)]
-                        vr[i][i] = source[row, t]
-                        pm[i][i] = m.p_flow[row, t]
-                        qm[i][i] = m.q_flow[row, t]
-                        lm[i][i] = m.l_flow[pair_pos[(fb, tb, a + a)], t]
-                        continue
-                    pair = a + b if i < j else b + a
-                    lm[i][j] = m.l_flow[pair_pos[(fb, tb, pair)], t]
-                    if diagonal_only:
-                        continue
-                    vr[i][j] = m.psd_v_re[v_pos[(fb, tb, pair)], t]
-                    vi_var = m.psd_v_im[v_pos[(fb, tb, pair)], t]
-                    vi[i][j] = vi_var if i < j else -vi_var
-                    pm[i][j] = m.psd_p_off[pq_pos[(fb, tb, a + b)], t]
-                    qm[i][j] = m.psd_q_off[pq_pos[(fb, tb, a + b)], t]
-
-            def block(rows):
-                return cp.bmat(
-                    [
-                        [
-                            cp.reshape(
-                                cp.Constant(e) if isinstance(e, (int, float)) else e,
-                                (1, 1),
-                                order="C",
-                            )
-                            for e in row
-                        ]
-                        for row in rows
-                    ]
-                )
-
-            vr_m, vi_m, p_m, q_m, l_m = (block(x) for x in (vr, vi, pm, qm, lm))
-            zero = cp.Constant(np.zeros((n, n)))
-            big_m = cp.bmat(
-                [
-                    [vr_m, p_m, zero, -q_m],
-                    [p_m.T, l_m, q_m.T, zero],
-                    [zero, q_m, vr_m, p_m],
-                    [-q_m.T, zero, p_m.T, l_m],
-                ]
-            )
-            record.pieces.append(big_m >> 0)
-            record.rows.append((fb, tb))
+    """PSD relaxation, full layout. ``diagonal_only`` zeroes the v, p, q off-diagonals."""
+    _add_psd(m, "full", diagonal_only)
 
 
 def add_psd_diagonal_constraints(m: CvxModel) -> None:
@@ -608,22 +533,41 @@ def add_constraints(
     thermal_constraints: bool = True,
     equality_only: bool = False,
     free_swing_voltage: bool = False,
-    linear: bool = False,
+    linear: bool = True,
     socp_relaxation: bool = False,
     voltage_slacks: bool = False,
     thermal_slacks: bool = False,
     sdp_relaxation: bool = False,
     sdp_diagonal_relaxation: bool = False,
-    sdp_test1: bool = False,
 ) -> None:
+    """Add the network constraints selected by the option flags.
+
+    Always added: ``power_balance_p``, ``power_balance_q``, ``voltage_drop``.
+
+    Current relaxation (only when ``linear=False``; first flag set wins):
+
+    - ``sdp_test1``: ``psd_constraint`` (test1 layout, zero off-diagonals)
+    - ``sdp_diagonal_relaxation``: ``psd_constraint`` (full layout, zero off-diagonals)
+    - ``sdp_relaxation``: ``psd_constraint`` (full layout)
+    - ``socp_relaxation``: convex ``current_constraint``, ``current_sqr_constraint``
+    - none: exact (non-convex) ``current_constraint``, ``current_sqr_constraint``
+
+    Swing bus: ``swing_voltage``, or ``swing_voltage_slack_*`` if ``free_swing_voltage``.
+
+    Skipped entirely if ``equality_only``; otherwise:
+
+    - thermal (if ``thermal_constraints``): ``thermal_slack_constraint`` if
+      ``thermal_slacks``, else ``thermal_limit_circle`` if ``circular_constraints``,
+      else ``thermal_limit_1..8``
+    - ``voltage_slack_*`` if ``voltage_slacks``
+    - ``voltage_limits``
+    """
     add_p_flow_constraints(model, linear=linear)
     add_q_flow_constraints(model, linear=linear)
     add_voltage_drop_constraints(model, linear=linear)
 
     if not linear:
-        if sdp_test1:
-            add_psd_test1_constraints(model)
-        elif sdp_diagonal_relaxation:
+        if sdp_diagonal_relaxation:
             add_psd_diagonal_constraints(model)
         elif sdp_relaxation:
             add_psd_constraints(model)
@@ -640,14 +584,14 @@ def add_constraints(
         const.add_swing_bus_constraints(model)
     if equality_only:
         return
-    if thermal_constraints and not equality_only:
+
+    if thermal_constraints:
         if thermal_slacks:
             const.add_thermal_slack_constraints(model)
         elif circular_constraints:
             const.add_circular_thermal_constraints(model)
         else:
             const.add_octagonal_thermal_constraints(model)
-
     if voltage_slacks:
         const.add_voltage_slack_constraints(model)
     const.add_voltage_limits(model)

@@ -25,8 +25,10 @@ from distopf.cvxpy_models_performance.common.model import (
     CvxModel,
     IndexSet,
     add_constraint,
+    add_constraint_on_rows,
     add_ranged_constraint,
     column,
+    select_rows,
 )
 from distopf.cvxpy_models_performance.common.registry import port_to_bus_matrix
 from distopf.pyomo_models.common.data import parse_phases
@@ -102,8 +104,8 @@ class BatteryProvider:
             for phase in phases_by_device[device]:
                 ports.append((device, phase))
                 devices_by_bus_phase.setdefault((bus, phase), []).append(device)
-        model.bat_set = IndexSet(list(bus_by_device), dimen=1)
-        model.bat_phase_set = IndexSet(ports, dimen=2)
+        model.bat_set = IndexSet(list(bus_by_device))
+        model.bat_phase_set = IndexSet(ports)
         model.bat_bus_by_device = bus_by_device
         model.bat_devices_by_bus_phase = devices_by_bus_phase
         model.bat_phases_by_device = phases_by_device
@@ -135,29 +137,19 @@ class BatteryProvider:
         add_battery_net_p_bat_equal_phase_constraints(model)
         add_battery_constant_p_constraints(model)
 
-        equality_only = getattr(config, "equality_only", False) if config else False
-        if equality_only:
+        if config.equality_only:
             return
         add_battery_power_limits(model)
         add_battery_soc_limits(model)
-        circular = getattr(config, "circular_constraints", True) if config else True
-        if circular:
+        if config.circular_constraints:
             add_circular_battery_constraints_pq_control(model)
 
 
-def _port_rows(m: CvxModel, predicate) -> np.ndarray:
-    return np.array(
-        [
-            i
-            for i, device_row in enumerate(m.bat_port_device)
-            if predicate(m.bat_control_type[device_row])
-        ],
-        dtype=int,
+def _ports(m: CvxModel, predicate) -> tuple[np.ndarray, list]:
+    """Rows (and keys) of battery ports whose device control mode satisfies ``predicate``."""
+    return select_rows(
+        m.bat_phase_set, (predicate(m.bat_control_type[d]) for d in m.bat_port_device)
     )
-
-
-def _port_keys(m: CvxModel, rows: np.ndarray) -> list:
-    return [m.bat_phase_set[i] for i in rows]
 
 
 def add_battery_power_limits(m: CvxModel) -> None:
@@ -227,52 +219,33 @@ def add_battery_energy_constraints(m: CvxModel) -> None:
 
 
 def add_battery_constant_q_constraints_p_control(m: CvxModel) -> None:
-    rows = _port_rows(m, lambda ctrl: ctrl in (ControlVariable.NONE, ControlVariable.P))
-    add_constraint(
+    add_constraint_on_rows(
         m,
         "battery_constant_q_bat",
-        m.q_bat[rows, :] == m.q_bat_nom[rows, :] if len(rows) else [],
-        _port_keys(m, rows),
+        _ports(m, lambda ctrl: ctrl in (ControlVariable.NONE, ControlVariable.P)),
+        lambda r: m.q_bat[r, :] == m.q_bat_nom[r, :],
     )
 
 
-def add_battery_constant_p_constraints(model: CvxModel) -> None:
+def add_battery_constant_p_constraints(m: CvxModel) -> None:
     """Fix P for NONE and Q modes, retaining storage and balanced-phase equalities."""
-    rows = _port_rows(
-        model, lambda ctrl: ctrl in (ControlVariable.NONE, ControlVariable.Q)
-    )
-    add_constraint(
-        model,
-        "battery_constant_p_bat",
-        model.p_bat[rows, :] == model.p_bat_nom[rows, :] if len(rows) else [],
-        _port_keys(model, rows),
-    )
-
-
-def _circle(m: CvxModel, name: str, rows: np.ndarray) -> None:
-    add_constraint(
+    add_constraint_on_rows(
         m,
-        name,
-        cp.norm(cp.stack([m.p_bat[rows, :], m.q_bat[rows, :]]), 2, axis=0)
-        <= column(m.s_bat_rated[rows])
-        if len(rows)
-        else [],
-        _port_keys(m, rows),
+        "battery_constant_p_bat",
+        _ports(m, lambda ctrl: ctrl in (ControlVariable.NONE, ControlVariable.Q)),
+        lambda r: m.p_bat[r, :] == m.p_bat_nom[r, :],
     )
 
 
 def add_circular_battery_constraints_pq_control(m: CvxModel) -> None:
     """``P_bat^2 + Q_bat^2 <= S_rated^2`` for PQ-controlled batteries."""
-    _circle(
+    add_constraint_on_rows(
         m,
         "bat_circle_constraint",
-        _port_rows(m, lambda ctrl: ctrl == ControlVariable.PQ),
+        _ports(m, lambda ctrl: ctrl == ControlVariable.PQ),
+        lambda r: cp.norm(cp.stack([m.p_bat[r, :], m.q_bat[r, :]]), 2, axis=0)
+        <= column(m.s_bat_rated[r]),
     )
-
-
-def add_circular_battery_constraints(m: CvxModel) -> None:
-    """``P_bat^2 + Q_bat^2 <= S_rated^2`` for all batteries."""
-    _circle(m, "bat_circle_constraint", np.arange(len(m.bat_phase_set)))
 
 
 __all__ = ["BatteryProvider", "create_battery_parameters", "validate_bat_data"]

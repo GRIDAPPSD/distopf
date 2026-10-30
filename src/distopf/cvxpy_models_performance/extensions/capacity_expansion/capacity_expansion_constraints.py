@@ -38,7 +38,7 @@ def add_capacity_expansion_as_fraction_of_load(
     relative_capacity = {
         k: v / total_relative_capacity for k, v in relative_capacity.items()
     }
-    m.resource_set = IndexSet(relative_capacity.keys(), dimen=1)
+    m.resource_set = IndexSet(relative_capacity.keys())
     total_load_p = case.bus_data[["pl_a", "pl_b", "pl_c"]].sum().sum()
     m.total_capacity_expansion = fraction * total_load_p
     m.relative_capacity = dict(relative_capacity)
@@ -54,7 +54,7 @@ def add_capacity_expansion_from_absolute_capacity(
     if any(v < 0 for v in absolute_capacity.values()):
         raise ValueError("Absolute capacities must be non-negative.")
 
-    m.resource_set = IndexSet(absolute_capacity.keys(), dimen=1)
+    m.resource_set = IndexSet(absolute_capacity.keys())
     m.total_capacity_expansion = total_capacity
     if total_capacity == 0:
         relative_capacity = {
@@ -128,7 +128,7 @@ def add_capacity_expansion_variables(m, case: Case, zones):
             "parameters."
         )
 
-    m.zone_set = IndexSet(list(zones.keys()), dimen=1)
+    m.zone_set = IndexSet(list(zones.keys()))
     z_of_bus = {_id: None for _id in m.bus_set}
     for z, buses in zones.items():
         for _id in buses:
@@ -161,7 +161,7 @@ def _zone_resource_view(m, resource: str):
 def add_pv_capacity_constraints(m):
     if "PV" not in m.resource_set:
         return
-    m.pv_set = IndexSet(["PV"], dimen=1)
+    m.pv_set = IndexSet(["PV"])
     p_max, p_zr = _zone_resource_view(m, "PV")
     factor = m.capacity_factor.reshape(1, -1)
     keys = [(z, "PV") for z in m.zone_set]
@@ -174,7 +174,7 @@ def add_pv_capacity_constraints(m):
 def add_bess_capacity_constraints(m):
     if "BESS" not in m.resource_set:
         return
-    m.bess_set = IndexSet(["BESS"], dimen=1)
+    m.bess_set = IndexSet(["BESS"])
     p_max, p_zr = _zone_resource_view(m, "BESS")
     ones = np.ones((1, len(m.time_set)))
     keys = [(z, "BESS") for z in m.zone_set]

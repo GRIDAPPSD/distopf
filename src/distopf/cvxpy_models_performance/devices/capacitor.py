@@ -60,8 +60,8 @@ class CapacitorProvider:
             for phase in parse_phases(cell_text(row["phases"])):
                 ports.append((device, phase))
                 devices_by_bus_phase.setdefault((bus, phase), []).append(device)
-        model.cap_device_set = IndexSet(list(bus_by_device), dimen=1)
-        model.cap_device_phase_set = IndexSet(ports, dimen=2)
+        model.cap_device_set = IndexSet(list(bus_by_device))
+        model.cap_device_phase_set = IndexSet(ports)
         model.cap_bus_by_device = bus_by_device
         model.cap_devices_by_bus_phase = devices_by_bus_phase
         create_capacitor_parameters(model, case)

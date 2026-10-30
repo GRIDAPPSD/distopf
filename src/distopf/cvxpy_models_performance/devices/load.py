@@ -60,8 +60,7 @@ class LoadProvider:
     def add_constraints(self, model: Any, config: Any) -> None:
         if len(model.bus_phase_set) == 0:
             return
-        free_boundary_loads = getattr(config, "free_boundary_loads", False)
-        add_cvr_load_constraints(model, free_boundary_loads)
+        add_cvr_load_constraints(model, config.free_boundary_loads)
 
 
 def add_cvr_load_constraints(

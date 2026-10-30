@@ -13,6 +13,8 @@ from typing import Any, Protocol
 import numpy as np
 import scipy.sparse as sp
 
+from distopf.cvxpy_models_performance.common.model import sparse
+
 
 class DeviceProvider(Protocol):
     """Protocol implemented by a bus or edge device model."""
@@ -29,7 +31,7 @@ class DeviceProvider(Protocol):
 
 
 def port_to_bus_matrix(
-    model: Any, ports: Iterable[Any], bus_of_port, phase_of_port
+    model: Any, ports: list, bus_of_port, phase_of_port
 ) -> sp.csr_matrix:
     """Sparse ``(n_bus_phase, n_ports)`` matrix summing ports onto bus-phase rows."""
     bus_pos = model.bus_phase_set.pos
@@ -39,14 +41,7 @@ def port_to_bus_matrix(
         if row is not None:
             rows.append(row)
             cols.append(j)
-    n_ports = len(list(ports)) if not isinstance(ports, list) else len(ports)
-    return sp.coo_matrix(
-        (
-            np.ones(len(rows)),
-            (np.asarray(rows, dtype=int), np.asarray(cols, dtype=int)),
-        ),
-        shape=(len(bus_pos), n_ports),
-    ).tocsr()
+    return sparse(rows, cols, np.ones(len(rows)), (len(bus_pos), len(ports)))
 
 
 class DeviceRegistry:

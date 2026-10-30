@@ -1,15 +1,21 @@
 """Objective expressions for vectorized CVXPY models.
 
-Each rule takes a ``CvxModel`` and returns a CVXPY expression, built from whole
-arrays instead of Python loops. Rule names match ``cvxpy_models``.
+Every objective is a plain function ``f(model) -> cvxpy expression`` built from
+whole arrays. Combine them with ordinary arithmetic and pass the result to
+``set_objective``::
 
-Array conventions used by the rules (``T`` is ``n_steps``):
+    set_objective(m, loss(m) + 1e3 * voltage_violation_penalty(m))
+
+Array conventions (``T`` is ``n_steps``):
 
 - ``p_flow``, ``q_flow``, ``l_flow``: ``(n_index, T)``; ``r_diag``: ``(n_branch_phase,)``.
 - Generator: ``p_gen``, ``q_gen``, ``gen_p_available``: ``(n_port, T)``; ``gen_cost``,
   ``gen_s_max``: ``(n_port,)``.
 - Battery: ``p_bat``, ``q_bat``: ``(n_port, T)``; ``s_bat_rated``: ``(n_port,)``;
   ``soc``: ``(n_device, T)``; ``soc_min``, ``soc_max``: ``(n_device,)``.
+- ``price`` and ``schedule_<column>``: ``(T,)``.
+
+The old ``*_rule`` names are kept as aliases at the bottom of this file.
 """
 
 from __future__ import annotations
@@ -21,30 +27,61 @@ import numpy as np
 
 from distopf.cvxpy_models_performance.common.model import CvxModel, column
 
+# ============ Building blocks =========================================================
+
 
 def _swing_rows(model: CvxModel) -> np.ndarray:
+    """Rows of ``branch_phase_set`` whose from-bus is a swing bus."""
     return np.array(
         [
             i
-            for i, (fb, _tb, _ph) in enumerate(model.branch_phase_set)
-            if fb in model.swing_bus_set
+            for i, (from_bus, _to_bus, _phase) in enumerate(model.branch_phase_set)
+            if from_bus in model.swing_bus_set
         ],
         dtype=int,
     )
 
 
-def none_rule(model: CvxModel):
-    """Trivial objective function that returns 0."""
+def substation_power(model: CvxModel):
+    """Total active power on branches leaving swing buses (linear)."""
+    rows = _swing_rows(model)
+    if len(rows) == 0:
+        return 0
+    return cp.sum(model.p_flow[rows, :])
+
+
+def substation_cost(model: CvxModel):
+    """Cost of substation energy using ``schedule_price`` (linear)."""
+    rows = _swing_rows(model)
+    if len(rows) == 0:
+        return 0
+    return cp.sum(
+        cp.multiply(model.p_flow[rows, :], model.schedule_price.reshape(1, -1))
+    )
+
+
+def generation_cost(model: CvxModel):
+    """``sum(gen_cost * delta_t * p_gen)`` (linear)."""
+    if len(model.gen_device_phase_set) == 0:
+        return 0
+    return cp.sum(cp.multiply(column(model.gen_cost) * model.delta_t, model.p_gen))
+
+
+# ============ Objectives ==============================================================
+
+
+def no_objective(model: CvxModel):
+    """Trivial objective that returns 0."""
     return 0
 
 
-def loss_objective_rule(model: CvxModel):
+def loss(model: CvxModel):
     """Total losses ``sum((P^2 + Q^2) * r)`` (convex quadratic)."""
     r = column(model.r_diag)
     return cp.sum(cp.multiply(r, cp.square(model.p_flow) + cp.square(model.q_flow)))
 
 
-def loss_objective_i2r_rule(model: CvxModel):
+def loss_i2r(model: CvxModel):
     """Total losses based on current: ``sum(l_flow * r)`` (linear)."""
     if not hasattr(model, "l_flow"):
         raise AttributeError(
@@ -58,89 +95,66 @@ def loss_objective_i2r_rule(model: CvxModel):
     return cp.sum(cp.multiply(column(model.r_diag), model.l_flow[rows, :]))
 
 
-def substation_power_objective_rule(model: CvxModel):
-    """Total active power on branches leaving swing buses (linear)."""
-    rows = _swing_rows(model)
-    if len(rows) == 0:
-        return 0
-    return cp.sum(model.p_flow[rows, :])
-
-
-def voltage_deviation_objective_rule(model: CvxModel):
+def voltage_deviation(model: CvxModel):
     """``sum((v^2 - 1)^2)`` (convex quadratic)."""
     return cp.sum_squares(model.v2 - 1.0)
 
 
-def voltage_min_objective_rule(model: CvxModel):
+def voltage_min(model: CvxModel):
     """Minimize the sum of squared voltage magnitudes: ``min sum(v2)`` (linear)."""
     return cp.sum(model.v2)
 
 
-def generation_curtailment_objective_rule(model: CvxModel):
+def generation_curtailment(model: CvxModel):
     """Difference between available and actual generation (linear)."""
     if len(model.gen_device_phase_set) == 0:
         return 0
     return cp.sum(model.gen_p_available - model.p_gen)
 
 
-def cost_minimization_rule(m: CvxModel):
-    """Minimize energy procurement cost from swing bus plus generation cost."""
-    total_cost: Any = 0
-    rows = _swing_rows(m)
-    if len(rows):
-        total_cost = total_cost + cp.sum(
-            cp.multiply(m.p_flow[rows, :], m.price.reshape(1, -1) * m.delta_t)
-        )
-    return total_cost + gen_cost_rule(m)
-
-
-def substation_cost_objective_rule(model: CvxModel):
-    """Cost of substation energy using ``schedule_price``."""
+def energy_and_generation_cost(model: CvxModel):
+    """Substation energy cost using ``price * delta_t`` plus generation cost."""
     rows = _swing_rows(model)
-    if len(rows) == 0:
-        return 0
-    return cp.sum(
-        cp.multiply(model.p_flow[rows, :], model.schedule_price.reshape(1, -1))
-    )
+    energy: Any = 0
+    if len(rows):
+        energy = cp.sum(
+            cp.multiply(
+                model.p_flow[rows, :], model.price.reshape(1, -1) * model.delta_t
+            )
+        )
+    return energy + generation_cost(model)
 
 
-def gen_cost_rule(model: CvxModel):
-    if len(model.gen_device_phase_set) == 0:
-        return 0
-    return cp.sum(cp.multiply(column(model.gen_cost) * model.delta_t, model.p_gen))
+def total_cost(model: CvxModel):
+    """Generation cost plus substation cost using ``schedule_price``."""
+    return generation_cost(model) + substation_cost(model)
 
 
-def total_cost_rule(model: CvxModel):
-    return gen_cost_rule(model) + substation_cost_objective_rule(model)
-
-
-def generation_cost_with_substation_quadratic_penalty_objective_rule(
-    model: CvxModel,
-    substation_penalty_weight: float = 1e6,
+def generation_cost_with_substation_penalty(
+    model: CvxModel, substation_penalty_weight: float = 1e6
 ):
     """Generation cost plus a quadratic penalty on substation active power."""
     rows = _swing_rows(model)
     penalty: Any = 0
     if len(rows):
         penalty = cp.sum_squares(model.p_flow[rows, :])
-    return gen_cost_rule(model) + substation_penalty_weight * penalty
+    return generation_cost(model) + substation_penalty_weight * penalty
 
 
-def demand_charge_objective_rule(model: CvxModel):
+def demand_charge_cost(model: CvxModel):
     """Demand charge on the peak substation active power (convex ``max``)."""
-    if not hasattr(model, "demand_charge"):
-        return 0
     rows = _swing_rows(model)
-    if len(rows) == 0:
+    if not hasattr(model, "demand_charge") or len(rows) == 0:
         return 0
     return cp.max(model.p_flow[rows, :]) * model.demand_charge
 
 
-def combined_energy_and_demand_charge_objective_rule(model: CvxModel):
-    return substation_cost_objective_rule(model) + demand_charge_objective_rule(model)
+def energy_and_demand_charge(model: CvxModel):
+    """``schedule_price`` energy cost plus the demand charge."""
+    return substation_cost(model) + demand_charge_cost(model)
 
 
-# ============ Penalty Functions for Soft Constraints ==================================
+# ============ Penalties for soft constraints ==========================================
 
 
 def voltage_violation_penalty(model: CvxModel, weight: float = 1e3):
@@ -194,140 +208,52 @@ def soc_violation_penalty(model: CvxModel, weight: float = 1e3):
     )
 
 
-# ============ Combined Objective Factories ============================================
+def voltage_slack_penalty(model: CvxModel, weight: float = 1e3):
+    """Penalty on the slack added by ``voltage_slacks=True``."""
+    if not hasattr(model, "v2_slack"):
+        return 0
+    return weight * cp.sum(model.v2_slack)
+
+
+def thermal_slack_penalty(model: CvxModel, weight: float = 1e3):
+    """Penalty on the slack added by ``thermal_slacks=True``."""
+    if not hasattr(model, "thermal_slack"):
+        return 0
+    return weight * cp.sum(model.thermal_slack)
+
+
+def swing_voltage_slack_penalty(model: CvxModel, weight: float = 1e3):
+    """Penalty on the slack added by ``free_swing_voltage=True``."""
+    if not hasattr(model, "swing_v2_slack"):
+        return 0
+    return weight * cp.sum(model.swing_v2_slack)
 
 
 def create_penalized_objective(
-    primary_objective_rule: Callable[[CvxModel], Any],
+    primary: Callable[[CvxModel], Any],
     voltage_weight: float | None = None,
     thermal_weight: float | None = None,
     generator_weight: float | None = None,
     battery_weight: float | None = None,
     soc_weight: float | None = None,
 ) -> Callable[[CvxModel], Any]:
-    """Return a rule combining a primary objective with soft-constraint penalties."""
-
-    def objective_rule(m: CvxModel):
-        obj = primary_objective_rule(m)
-        if voltage_weight is not None:
-            obj += voltage_violation_penalty(m, voltage_weight)
-        if thermal_weight is not None:
-            obj += thermal_violation_penalty(m, thermal_weight)
-        if generator_weight is not None:
-            obj += generator_violation_penalty(m, generator_weight)
-        if battery_weight is not None:
-            obj += battery_violation_penalty(m, battery_weight)
-        if soc_weight is not None:
-            obj += soc_violation_penalty(m, soc_weight)
-        return obj
-
-    return objective_rule
-
-
-# ============ Penalty Functions for ADMM ==============================================
-
-
-def _schedule_target(m: CvxModel, key: str):
-    """Per-time schedule array ``(n_steps,)`` or ``None`` if the schedule is absent."""
-    return getattr(m, f"schedule_{key}", None)
-
-
-def admm_v_up_penalty(m: CvxModel, rho: float = 1.0):
-    if not hasattr(m, "swing_phase_set") or len(m.swing_phase_set) == 0:
-        return 0
-    rows = m.bus_phase_set.indices(m.swing_phase_set)
-    return 0.5 * rho * cp.sum_squares(m.v2[rows, :] - m.v_swing**2)
-
-
-def admm_s_up_penalty(m: CvxModel, rho: float = 1.0):
-    swing_branches: dict[tuple[int, str], list[int]] = {}
-    for i, (fb, _tb, ph) in enumerate(m.branch_phase_set):
-        if fb not in m.swing_bus_set:
-            continue
-        swing_branches.setdefault((fb, ph), []).append(i)
-
-    penalty: Any = 0
-    for (fb, ph), rows in swing_branches.items():
-        area_name = m.name_map[fb]
-        p_param = _schedule_target(m, f"{area_name}.{ph}.p")
-        q_param = _schedule_target(m, f"{area_name}.{ph}.q")
-        if p_param is None or q_param is None:
-            continue
-        penalty += cp.sum_squares(cp.sum(m.p_flow[rows, :], axis=0) - p_param)
-        penalty += cp.sum_squares(cp.sum(m.q_flow[rows, :], axis=0) - q_param)
-    return 0.5 * rho * penalty
-
-
-def admm_v_down_penalty(m: CvxModel, rho: float = 1.0):
-    penalty: Any = 0
-    for i, (_id, ph) in enumerate(m.bus_phase_set):
-        v_param = _schedule_target(m, f"{m.name_map[_id]}.{ph}.v")
-        if v_param is None:
-            continue
-        penalty += cp.sum_squares(m.v2[i, :] - v_param**2)
-    return 0.5 * rho * penalty
-
-
-def admm_s_down_penalty(m: CvxModel, rho: float = 1.0):
-    penalty: Any = 0
-    for i, (_id, ph) in enumerate(m.bus_phase_set):
-        if _id in m.swing_bus_set:
-            continue
-        area_name = m.name_map[_id]
-        p_param = _schedule_target(m, f"{area_name}.{ph}.p")
-        q_param = _schedule_target(m, f"{area_name}.{ph}.q")
-        if p_param is None or q_param is None:
-            continue
-        penalty += cp.sum_squares(m.p_load[i, :] - p_param)
-        penalty += cp.sum_squares(m.q_load[i, :] - q_param)
-    return 0.5 * rho * penalty
-
-
-# ============ Convenience Functions ===================================================
-
-
-def set_objective(model: CvxModel, objective: Any, sense: str = "minimize") -> None:
-    """Set the model objective, replacing any existing one.
-
-    ``objective`` is a CVXPY expression, a number, or a rule ``f(model)``
-    returning one. ``sense`` is ``"minimize"`` or ``"maximize"``.
-    """
-    if callable(objective) and not isinstance(objective, cp.Expression):
-        objective = objective(model)
-    if sense not in ("minimize", "maximize"):
-        raise ValueError("sense must be 'minimize' or 'maximize'")
-    if not isinstance(objective, cp.Expression):
-        objective = cp.Constant(objective)
-    model.objective_expression = objective
-    model.objective_sense = sense
-    model.problem = None
-
-
-def add_loss_objective(model: CvxModel) -> None:
-    set_objective(model, loss_objective_rule)
-
-
-def add_substation_power_objective(model: CvxModel) -> None:
-    set_objective(model, substation_power_objective_rule)
-
-
-def add_voltage_deviation_objective(model: CvxModel) -> None:
-    set_objective(model, voltage_deviation_objective_rule)
-
-
-def add_generation_cost_with_substation_quadratic_penalty_objective(
-    model: CvxModel, substation_penalty_weight: float = 1e6
-) -> None:
-    set_objective(
-        model,
-        generation_cost_with_substation_quadratic_penalty_objective_rule(
-            model, substation_penalty_weight=substation_penalty_weight
-        ),
+    """Return an objective ``primary(m)`` plus the penalties whose weight is set."""
+    penalties = (
+        (voltage_weight, voltage_violation_penalty),
+        (thermal_weight, thermal_violation_penalty),
+        (generator_weight, generator_violation_penalty),
+        (battery_weight, battery_violation_penalty),
+        (soc_weight, soc_violation_penalty),
     )
 
+    def objective(model: CvxModel):
+        total = primary(model)
+        for weight, penalty in penalties:
+            if weight is not None:
+                total = total + penalty(model, weight)
+        return total
 
-def _add_penalized(model: CvxModel, primary, **weights: float) -> None:
-    set_objective(model, create_penalized_objective(primary, **weights))
+    return objective
 
 
 def add_penalized_loss_objective(
@@ -338,14 +264,17 @@ def add_penalized_loss_objective(
     battery_weight: float = 1e3,
     soc_weight: float = 1e3,
 ) -> None:
-    _add_penalized(
+    """Set ``loss`` plus all soft-constraint penalties as the objective."""
+    set_objective(
         model,
-        loss_objective_rule,
-        voltage_weight=voltage_weight,
-        thermal_weight=thermal_weight,
-        generator_weight=generator_weight,
-        battery_weight=battery_weight,
-        soc_weight=soc_weight,
+        create_penalized_objective(
+            loss,
+            voltage_weight,
+            thermal_weight,
+            generator_weight,
+            battery_weight,
+            soc_weight,
+        ),
     )
 
 
@@ -357,30 +286,111 @@ def add_penalized_substation_power_objective(
     battery_weight: float = 1e3,
     soc_weight: float = 1e3,
 ) -> None:
-    _add_penalized(
+    """Set ``substation_power`` plus all soft-constraint penalties as the objective."""
+    set_objective(
         model,
-        substation_power_objective_rule,
-        voltage_weight=voltage_weight,
-        thermal_weight=thermal_weight,
-        generator_weight=generator_weight,
-        battery_weight=battery_weight,
-        soc_weight=soc_weight,
+        create_penalized_objective(
+            substation_power,
+            voltage_weight,
+            thermal_weight,
+            generator_weight,
+            battery_weight,
+            soc_weight,
+        ),
     )
 
 
-def voltage_slack_penalty(m: CvxModel, weight=1e3):
-    if not hasattr(m, "v2_slack"):
+# ============ ADMM coupling penalties =================================================
+
+
+def admm_v_up_penalty(m: CvxModel, rho: float = 1.0):
+    """Match swing-bus ``v2`` to the squared upstream voltage target ``v_swing``."""
+    if len(m.swing_phase_set) == 0:
         return 0
-    return weight * cp.sum(m.v2_slack)
+    rows = m.bus_phase_set.indices(m.swing_phase_set)
+    return 0.5 * rho * cp.sum_squares(m.v2[rows, :] - m.v_swing**2)
 
 
-def thermal_slack_penalty(m: CvxModel, weight=1e3):
-    if not hasattr(m, "thermal_slack"):
-        return 0
-    return weight * cp.sum(m.thermal_slack)
+def admm_s_up_penalty(m: CvxModel, rho: float = 1.0):
+    """Match power leaving each swing bus phase to the ``schedule_<area>.<ph>.p/q`` targets."""
+    swing_branches: dict[tuple[int, str], list[int]] = {}
+    for i, (from_bus, _to_bus, phase) in enumerate(m.branch_phase_set):
+        if from_bus in m.swing_bus_set:
+            swing_branches.setdefault((from_bus, phase), []).append(i)
+
+    penalty: Any = 0
+    for (from_bus, phase), rows in swing_branches.items():
+        area = m.name_map[from_bus]
+        p_target = getattr(m, f"schedule_{area}.{phase}.p", None)
+        q_target = getattr(m, f"schedule_{area}.{phase}.q", None)
+        if p_target is None or q_target is None:
+            continue
+        penalty += cp.sum_squares(cp.sum(m.p_flow[rows, :], axis=0) - p_target)
+        penalty += cp.sum_squares(cp.sum(m.q_flow[rows, :], axis=0) - q_target)
+    return 0.5 * rho * penalty
 
 
-def swing_voltage_slack_penalty(m: CvxModel, weight=1e3):
-    if not hasattr(m, "swing_v2_slack"):
-        return 0
-    return weight * cp.sum(m.swing_v2_slack)
+def admm_v_down_penalty(m: CvxModel, rho: float = 1.0):
+    """Match ``v2`` to squared ``schedule_<area>.<ph>.v`` targets at boundary buses."""
+    penalty: Any = 0
+    for i, (bus, phase) in enumerate(m.bus_phase_set):
+        v_target = getattr(m, f"schedule_{m.name_map[bus]}.{phase}.v", None)
+        if v_target is not None:
+            penalty += cp.sum_squares(m.v2[i, :] - v_target**2)
+    return 0.5 * rho * penalty
+
+
+def admm_s_down_penalty(m: CvxModel, rho: float = 1.0):
+    """Match boundary loads to ``schedule_<area>.<ph>.p/q`` targets at non-swing buses."""
+    penalty: Any = 0
+    for i, (bus, phase) in enumerate(m.bus_phase_set):
+        if bus in m.swing_bus_set:
+            continue
+        area = m.name_map[bus]
+        p_target = getattr(m, f"schedule_{area}.{phase}.p", None)
+        q_target = getattr(m, f"schedule_{area}.{phase}.q", None)
+        if p_target is None or q_target is None:
+            continue
+        penalty += cp.sum_squares(m.p_load[i, :] - p_target)
+        penalty += cp.sum_squares(m.q_load[i, :] - q_target)
+    return 0.5 * rho * penalty
+
+
+# ============ Setting the objective ===================================================
+
+
+def set_objective(model: CvxModel, objective: Any, sense: str = "minimize") -> None:
+    """Set the model objective, replacing any existing one.
+
+    ``objective`` is a CVXPY expression, a number, or a function ``f(model)``
+    returning one. ``sense`` is ``"minimize"`` or ``"maximize"``.
+    """
+    if sense not in ("minimize", "maximize"):
+        raise ValueError("sense must be 'minimize' or 'maximize'")
+    if callable(objective) and not isinstance(objective, cp.Expression):
+        objective = objective(model)
+    if not isinstance(objective, cp.Expression):
+        objective = cp.Constant(objective)
+    model.objective_expression = objective
+    model.objective_sense = sense
+    model.problem = None
+
+
+# ============ Backward-compatible names (same behavior as the scalar package) =========
+
+none_rule = no_objective
+loss_objective_rule = loss
+loss_objective_i2r_rule = loss_i2r
+substation_power_objective_rule = substation_power
+substation_cost_objective_rule = substation_cost
+voltage_deviation_objective_rule = voltage_deviation
+voltage_min_objective_rule = voltage_min
+generation_curtailment_objective_rule = generation_curtailment
+cost_minimization_rule = energy_and_generation_cost
+gen_cost_rule = generation_cost
+total_cost_rule = total_cost
+generation_cost_with_substation_quadratic_penalty_objective_rule = (
+    generation_cost_with_substation_penalty
+)
+demand_charge_objective_rule = demand_charge_cost
+combined_energy_and_demand_charge_objective_rule = energy_and_demand_charge

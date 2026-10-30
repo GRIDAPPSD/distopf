@@ -16,7 +16,7 @@ from typing import Any, Optional, Union
 
 import numpy as np
 
-from distopf.cvxpy_models.common import objectives
+from distopf.cvxpy_models_performance.common import objectives
 from distopf.pyomo_models.common.data import parse_phases
 from distopf.wrappers.pyomo_wrapper import PyomoWrapper
 
@@ -38,13 +38,14 @@ class CvxpyWrapper(PyomoWrapper):
         a CVXPY solver name (default: chosen automatically).
         """
         model_type = kwargs.pop("model_type", "lindist")
-        if model_type in ("branchflow", "socp"):
+        if model_type in ("branchflow", "socp", "sdp"):
             return self._solve_branchflow(
                 objective=objective,
                 control_regulators=control_regulators,
                 control_capacitors=control_capacitors,
                 raw_result=raw_result,
                 socp_relaxation=model_type == "socp",
+                sdp_relaxation=model_type == "sdp" or kwargs.pop("sdp_relaxation", False),
                 **kwargs,
             )
         return self._solve_lindist(
@@ -93,9 +94,9 @@ class CvxpyWrapper(PyomoWrapper):
     def _solve_lindist(
         self, objective, control_regulators, control_capacitors, raw_result, **kwargs
     ):
-        from distopf.cvxpy_models.common.factory import create_lindist_model
-        from distopf.cvxpy_models.common.objectives import set_objective
-        from distopf.cvxpy_models.common.solvers import solve
+        from distopf.cvxpy_models_performance.common.factory import create_lindist_model
+        from distopf.cvxpy_models_performance.common.objectives import set_objective
+        from distopf.cvxpy_models_performance.common.solvers import solve
 
         circular_constraints = kwargs.pop("circular_constraints", False)
         thermal_constraints = kwargs.pop("thermal_constraints", False)
@@ -179,15 +180,16 @@ class CvxpyWrapper(PyomoWrapper):
     def _solve_branchflow(
         self, objective, control_regulators, control_capacitors, raw_result, **kwargs
     ):
-        from distopf.cvxpy_models.common.factory import create_nl_branchflow_model
-        from distopf.cvxpy_models.common.objectives import set_objective
-        from distopf.cvxpy_models.common.solvers import solve
+        from distopf.cvxpy_models_performance.common.factory import create_nl_branchflow_model
+        from distopf.cvxpy_models_performance.common.objectives import set_objective
+        from distopf.cvxpy_models_performance.common.solvers import solve
 
         socp_relaxation = kwargs.pop("socp_relaxation", False)
         sdp_relaxation = kwargs.pop("sdp_relaxation", False)
         circular_constraints = kwargs.pop("circular_constraints", True)
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         initialize = kwargs.pop("initialize", "fbs")
+        direct_initialize = kwargs.pop("direct_initialize", False)
         solver = kwargs.pop("solver", None)
         verbose = kwargs.pop("verbose", False)
         duals = kwargs.pop("duals", False)
@@ -214,8 +216,8 @@ class CvxpyWrapper(PyomoWrapper):
             free_swing_voltage=free_swing_voltage,
             free_boundary_loads=free_boundary_loads,
         )
-        if initialize == "fbs":
-            self._initialize_from_fbs()
+        if self._wants_initialization(initialize):
+            self._initialize_from_fbs(initialize, direct=direct_initialize)
 
         set_objective(
             self.model,
@@ -240,17 +242,34 @@ class CvxpyWrapper(PyomoWrapper):
             return "cvxpy"
         return str(solver).upper()
 
-    def _initialize_from_fbs(self) -> None:
-        """Warm start BranchFlow variables and current angles from FBS."""
-        from distopf.cvxpy_models.network.bfm import set_current_angles
-        from distopf.fbs import fbs_solve
+    def _initialize_from_fbs(self, source: Any = None, direct: bool = False) -> None:
+        """Warm start BranchFlow variables and current angles from FBS or a result."""
+        from distopf.cvxpy_models_performance.network.bfm import set_current_angles
 
-        fbs_results = fbs_solve(self.case)
+        fbs_results = self._resolve_initial_result(source, direct)
+        for var_name, data in self._collect_start_values(source).items():
+            spec = self.model.var_specs.get(var_name)
+            if spec is None or not len(data):
+                continue
+            current = spec.variable.value
+            array = (
+                np.zeros(spec.variable.shape) if current is None else np.array(current)
+            )
+            row_pos = spec.axes[0].pos
+            time_pos = self.model.time_set.pos
+            for key, value in data.items():
+                row_key = key[:-1] if len(key) > 2 else key[0]
+                if row_key in row_pos and key[-1] in time_pos:
+                    array[row_pos[row_key], time_pos[key[-1]]] = value
+            if spec.variable.attributes["nonneg"]:
+                array = np.maximum(array, 0.0)
+            self.model.set_values(var_name, array)
         voltages = fbs_results.voltages
         active_power_flows = fbs_results.active_power_flows
         reactive_power_flows = fbs_results.reactive_power_flows
         currents = fbs_results.currents
-        current_angles = fbs_results.current_angles
+        current_angles = fbs_results.current_angles.copy()
+        self._initial_current_angles = fbs_results.current_angles.copy()
         assert voltages is not None
         assert active_power_flows is not None
         assert reactive_power_flows is not None
@@ -265,36 +284,47 @@ class CvxpyWrapper(PyomoWrapper):
             vals = df.loc[mask, ph].to_numpy()
             return 0.0 if len(vals) == 0 else vals[0]
 
+        n_steps = len(model.time_set)
+
+        v2 = np.ones((len(model.bus_phase_set), n_steps))
         for _id, ph in model.bus_phase_set:
             v_mag = voltages.loc[(voltages.id == _id), ph].to_numpy()[0]
-            for t in model.time_set:
-                model.v2[_id, ph, t].value = float(v_mag**2)
-        for fb, tb, ph in model.reg_phase_set:
-            v_mag = voltages.loc[(voltages.id == tb), ph].to_numpy()[0]
-            for t in model.time_set:
-                model.v2_reg[fb, tb, ph, t].value = float(v_mag**2)
+            v2[model.bus_phase_set.pos[(_id, ph)], :] = float(v_mag**2)
+        model.set_values("v2", v2)
 
-        l_data: dict[tuple, float] = {}
+        if len(model.reg_phase_set):
+            v2_reg = np.ones((len(model.reg_phase_set), n_steps))
+            for fb, tb, ph in model.reg_phase_set:
+                v_mag = voltages.loc[(voltages.id == tb), ph].to_numpy()[0]
+                v2_reg[model.reg_phase_set.pos[(fb, tb, ph)], :] = float(v_mag**2)
+            model.set_values("v2_reg", v2_reg)
+
+        p_arr = np.zeros((len(model.branch_phase_set), n_steps))
+        q_arr = np.zeros_like(p_arr)
+        l_arr = np.zeros((len(model.branch_phase_pair_set), n_steps))
+        l_pos = model.branch_phase_pair_set.pos
+        l_diag: dict[tuple, float] = {}
         for fb, tb, ph in model.branch_phase_set:
-            p_flow = _lookup_branch_phase(active_power_flows, fb, tb, ph)
-            q_flow = _lookup_branch_phase(reactive_power_flows, fb, tb, ph)
-            i_mag = _lookup_branch_phase(currents, fb, tb, ph)
-            for t in model.time_set:
-                model.p_flow[fb, tb, ph, t].value = float(p_flow)
-                model.q_flow[fb, tb, ph, t].value = float(q_flow)
-                l_data[(fb, tb, ph + ph, t)] = float(i_mag) ** 2
+            row = model.branch_phase_set.pos[(fb, tb, ph)]
+            p_arr[row, :] = float(_lookup_branch_phase(active_power_flows, fb, tb, ph))
+            q_arr[row, :] = float(
+                _lookup_branch_phase(reactive_power_flows, fb, tb, ph)
+            )
+            i_mag = float(_lookup_branch_phase(currents, fb, tb, ph))
+            l_diag[(fb, tb, ph)] = i_mag**2
+            if (fb, tb, ph + ph) in l_pos:
+                l_arr[l_pos[(fb, tb, ph + ph)], :] = i_mag**2
         for fb, tb, phases in model.branch_phase_pair_set:
             ph1, ph2 = parse_phases(phases)
             if ph1 == ph2:
                 continue
-            for t in model.time_set:
-                if (fb, tb, ph1 + ph1, t) in l_data and (fb, tb, ph2 + ph2, t) in l_data:
-                    l_data[(fb, tb, phases, t)] = float(
-                        np.sqrt(l_data[fb, tb, ph1 + ph1, t] * l_data[fb, tb, ph2 + ph2, t])
-                    )
-        for key, value in l_data.items():
-            if key in model.l_flow:
-                model.l_flow[key].value = value
+            if (fb, tb, ph1) in l_diag and (fb, tb, ph2) in l_diag:
+                l_arr[l_pos[(fb, tb, phases)], :] = float(
+                    np.sqrt(l_diag[(fb, tb, ph1)] * l_diag[(fb, tb, ph2)])
+                )
+        model.set_values("p_flow", p_arr)
+        model.set_values("q_flow", q_arr)
+        model.set_values("l_flow", l_arr)
 
         current_angles["ab"] = (current_angles.a - current_angles.b) % 360
         current_angles["bc"] = (current_angles.b - current_angles.c) % 360
