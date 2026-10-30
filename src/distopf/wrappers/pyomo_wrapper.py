@@ -7,6 +7,8 @@ BranchFlow models via the `model_type` parameter.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional, Union
+
+import numpy as np
 from distopf.wrappers.base import Wrapper
 from distopf.pyomo_models.common import objectives
 from distopf.pyomo_models.common.data import parse_phases
@@ -60,8 +62,11 @@ class PyomoWrapper(Wrapper):
                 Only add equality constraints (power flow, voltage drop).
             - reg_tap_change_limit : int or None (lindist only)
                 Max tap change per timestep (only if control_regulators=True)
-            - initialize : str or None (branchflow/socp only)
-                Warm-start strategy: 'fbs' to initialize from FBS results.
+            - initialize : str, PowerFlowResult or None (branchflow/socp only)
+                Warm-start strategy: 'fbs' to initialize from FBS results, or a
+                PowerFlowResult from another solve. If that result lacks
+                voltages, flows, currents or current angles, its setpoints are
+                run through FBS and the FBS values are used.
             - solver : str, default 'ipopt'
                 Solver to use. 'ipopt' for continuous, 'bonmin'/'couenne' for MINLP.
             - duals : bool, default False
@@ -216,6 +221,7 @@ class PyomoWrapper(Wrapper):
         circular_constraints = kwargs.pop("circular_constraints", True)
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         initialize = kwargs.pop("initialize", "fbs")
+        direct_initialize = kwargs.pop("direct_initialize", False)
         solver_name = kwargs.pop("solver", "ipopt")
         verbose = kwargs.pop("verbose", False)
 
@@ -247,8 +253,8 @@ class PyomoWrapper(Wrapper):
             free_boundary_loads=free_boundary_loads,
         )
 
-        if initialize == "fbs":
-            self._initialize_from_fbs()
+        if self._wants_initialization(initialize):
+            self._initialize_from_fbs(initialize, direct=direct_initialize)
 
         obj_rule = self._resolve_objective(objective)
 
@@ -329,6 +335,8 @@ class PyomoWrapper(Wrapper):
             voltages=self.get_voltages(),
             active_power_flows=self.get_p_flows(),
             reactive_power_flows=self.get_q_flows(),
+            currents=self.get_currents(),
+            current_angles=getattr(self, "_initial_current_angles", None),
             active_power_generation=self.get_p_gens(),
             reactive_power_generation=self.get_q_gens(),
             active_power_loads=p_loads,
@@ -357,13 +365,121 @@ class PyomoWrapper(Wrapper):
             log=log,
         )
 
-    def _initialize_from_fbs(self) -> None:
-        """Initialize BranchFlow model variables from FBS power flow solution."""
-        from distopf.fbs import fbs_solve
-        import numpy as np
+    @staticmethod
+    def _wants_initialization(initialize: Any) -> bool:
+        from distopf.results import PowerFlowResult
+
+        return initialize == "fbs" or isinstance(initialize, PowerFlowResult)
+
+    def _resolve_initial_result(self, source: Any = None, direct: bool = False):
+        """Return the result used to warm start BranchFlow.
+
+        ``source`` is None/'fbs' (plain FBS) or a PowerFlowResult. By default a
+        supplied result is never used directly: its generator, battery and
+        boundary-load setpoints are run through FBS and the FBS values are used.
+        With ``direct=True`` the supplied result's own fields are used and it
+        must contain voltages, flows, currents and current angles.
+        """
+        from distopf.fbs import fbs_solve, run_fbs_with_opf_setpoints
+        from distopf.results import PowerFlowResult
+
+        if source is None or isinstance(source, str):
+            return fbs_solve(self.case)
+        if not direct:
+            return run_fbs_with_opf_setpoints(self.case, source)
+        if not isinstance(source, PowerFlowResult):
+            raise TypeError("direct_initialize requires a PowerFlowResult")
+        missing = [
+            name
+            for name in (
+                "voltages",
+                "active_power_flows",
+                "reactive_power_flows",
+                "currents",
+                "current_angles",
+            )
+            if getattr(source, name, None) is None
+        ]
+        if missing:
+            raise ValueError(
+                f"direct_initialize: result is missing {', '.join(missing)}"
+            )
+        return source
+
+    def _collect_start_values(self, source: Any) -> dict[str, dict[tuple, float]]:
+        """Start values for device variables taken from a supplied PowerFlowResult.
+
+        Returns ``{variable_name: {index_without_time + (t,): value}}``. Bus
+        quantities shared by several devices at one bus are split equally.
+        Variables missing from the result or the model are left out.
+        """
+        from distopf.results import PowerFlowResult
+
+        values: dict[str, dict[tuple, float]] = {}
+        if not isinstance(source, PowerFlowResult):
+            return values
+        model = self.model
+
+        def devices_at(bus_map_name):
+            by_bus: dict[Any, list] = {}
+            for device, bus in getattr(model, bus_map_name, {}).items():
+                by_bus.setdefault(bus, []).append(device)
+            return by_bus
+
+        def phase_frame(var_name, frame, devices=None):
+            if frame is None or not hasattr(model, var_name):
+                return
+            out = values.setdefault(var_name, {})
+            for row in frame.itertuples(index=False):
+                bus, t = row.id, row.t
+                targets = [bus] if devices is None else devices.get(bus, [])
+                for target in targets:
+                    for ph in ("a", "b", "c"):
+                        val = getattr(row, ph, None)
+                        if val is None or val != val:
+                            continue
+                        scale = len(targets) if devices is not None else 1
+                        out[(target, ph, t)] = float(val) / scale
+
+        def device_frame(var_name, frame, devices):
+            if frame is None or not hasattr(model, var_name):
+                return
+            out = values.setdefault(var_name, {})
+            for row in frame.itertuples(index=False):
+                targets = devices.get(row.id, [])
+                for target in targets:
+                    out[(target, row.t)] = float(row.value) / len(targets)
+
+        gens = devices_at("gen_bus_by_device")
+        caps = devices_at("cap_bus_by_device")
+        bats = devices_at("bat_bus_by_device")
+        phase_frame("p_load", source.active_power_loads)
+        phase_frame("q_load", source.reactive_power_loads)
+        phase_frame("p_gen", source.active_power_generation, gens)
+        phase_frame("q_gen", source.reactive_power_generation, gens)
+        phase_frame("q_cap", source.capacitor_reactive_power, caps)
+        phase_frame("p_bat", source.battery_active_power, bats)
+        phase_frame("q_bat", source.battery_reactive_power, bats)
+        device_frame("p_charge", source.p_charge, bats)
+        device_frame("p_discharge", source.p_discharge, bats)
+        device_frame("soc", source.soc, bats)
+        return values
+
+    def _initialize_from_fbs(self, source: Any = None, direct: bool = False) -> None:
+        """Initialize BranchFlow model variables from an FBS or supplied result."""
         from math import pi
 
-        fbs_results = fbs_solve(self.case)
+        fbs_results = self._resolve_initial_result(source, direct)
+        for var_name, data in self._collect_start_values(source).items():
+            var = getattr(self.model, var_name)
+            for key, value in data.items():
+                if key in var:
+                    lower, upper = var[key].lb, var[key].ub
+                    if lower is not None:
+                        value = max(value, lower)
+                    if upper is not None:
+                        value = min(value, upper)
+                    var[key].value = value
         assert fbs_results.voltages is not None
         assert fbs_results.active_power_flows is not None
         assert fbs_results.reactive_power_flows is not None
@@ -376,7 +492,8 @@ class PyomoWrapper(Wrapper):
         active_power_flows = fbs_results.active_power_flows
         reactive_power_flows = fbs_results.reactive_power_flows
         currents = fbs_results.currents
-        current_angles = fbs_results.current_angles
+        current_angles = fbs_results.current_angles.copy()
+        self._initial_current_angles = fbs_results.current_angles.copy()
 
         def _lookup_branch_phase(df, fb, tb, ph):
             mask = df.tb == tb
@@ -544,6 +661,24 @@ class PyomoWrapper(Wrapper):
     def get_q_flows(self) -> pd.DataFrame:
         """Extract reactive power flow results from solved model."""
         return self.result.q_flow
+
+    def get_currents(self) -> Optional[pd.DataFrame]:
+        """Branch current magnitudes ``sqrt(L)`` from the squared-current variable.
+
+        Returns None when the model has no ``l_flow`` variable (e.g. LinDistFlow).
+        """
+        l_flow = getattr(self.result, "l_flow", None)
+        if l_flow is None:
+            return None
+        diagonal = {"aa": "a", "bb": "b", "cc": "c", "s1s1": "s1", "s2s2": "s2"}
+        id_cols = [
+            col for col in ("fb", "tb", "from_name", "to_name", "t") if col in l_flow
+        ]
+        currents = l_flow[id_cols].copy()
+        for pair, phase in diagonal.items():
+            if pair in l_flow:
+                currents[phase] = np.sqrt(l_flow[pair].clip(lower=0.0))
+        return currents
 
     def get_p_gens(self) -> pd.DataFrame:
         """Extract active power generation results from solved model."""
