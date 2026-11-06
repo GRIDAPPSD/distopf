@@ -1623,7 +1623,11 @@ def create_case_from_csv(
 
         # Load optional files
         if csv_files["gen_data"].exists():
-            gen_data = pd.read_csv(csv_files["gen_data"], header=0)
+            gen_data = pd.read_csv(
+                csv_files["gen_data"],
+                header=0,
+                dtype={"device_name": str, "bus_name": str},
+            )
 
         if csv_files["cap_data"].exists():
             cap_data = pd.read_csv(

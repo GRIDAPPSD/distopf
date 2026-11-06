@@ -228,6 +228,9 @@ class MatrixWrapper(Wrapper):
             If raw_result=True: Raw scipy OptimizeResult object
         """
         from distopf.results import PowerFlowResult
+        from distopf.utils.input_handlers import require_legacy_device_schema
+
+        require_legacy_device_schema(self.case, "the matrix wrapper")
 
         # Pop model_type injected by formulation= routing (not a solver kwarg)
         model_type = kwargs.pop("model_type", None)

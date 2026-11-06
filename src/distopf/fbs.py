@@ -103,6 +103,9 @@ class FBS:
     """
 
     def __init__(self, case: Case, times: Optional[Sequence[int]] = None):
+        from distopf.utils.input_handlers import require_legacy_device_schema
+
+        require_legacy_device_schema(case, "fbs")
         self.case = case
         if times is None:
             start = int(case.start_step)

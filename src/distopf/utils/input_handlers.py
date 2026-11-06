@@ -93,6 +93,18 @@ def get(s: pd.Series, i, default=None):
         return default
 
 
+def require_legacy_device_schema(case, solver_name: str) -> None:
+    """Raise if any device table uses the multi-device ``device_name`` schema."""
+    for table in ("gen_data", "cap_data", "bat_data"):
+        data = getattr(case, table, None)
+        if data is not None and "device_name" in data.columns:
+            raise ValueError(
+                f"{table} uses the 'device_name'/'bus_name' schema, which {solver_name} "
+                "does not support. Use the 'pyomo' or 'cvxpy' wrapper, or the legacy "
+                "'id'/'name' schema."
+            )
+
+
 def handle_gen_input(gen_data: Optional[pd.DataFrame]) -> pd.DataFrame:
     if gen_data is None:
         return pd.DataFrame(
@@ -120,6 +132,8 @@ def handle_gen_input(gen_data: Optional[pd.DataFrame]) -> pd.DataFrame:
             ]
         )
     gen_data = _rename_known_columns(gen_data, GEN_COLUMN_RENAMES)
+    if "device_name" in gen_data.columns:
+        return gen_data.reset_index(drop=True)
     if "control_variable" not in gen_data.columns:
         gen_data["control_variable"] = ""
     else:
