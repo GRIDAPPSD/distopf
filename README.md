@@ -120,6 +120,16 @@ replayed = opf.replay("results/ieee13-enapp/run_config.json")
 
 Replay preserves the recorded `parallel` setting for ENAPP and ADMM. Parallel replay requires a normal multiprocessing-capable execution environment; arbitrary custom objective callables and solve/iteration callbacks remain non-replayable because they cannot be reconstructed from JSON.
 
+### Importing OpenDSS models
+
+The DSS importer converts OpenDSS circuits to the tabular case format and can export results for comparison with OpenDSS. Notable options and behavior:
+
+- `delta_to_wye=True` (`create_case`, `create_case_from_dss`, `DSSToCSVConverter`) rewrites 3-phase transformer windings to wye, since the OPF models have no delta model.
+- Buses behind open switches only keep the phases that are energized, and switched-off capacitors are skipped.
+- Transformer no-load loss and magnetizing current are exported as `g_sh_*`/`b_sh_*` branch columns and used by the forward-backward sweep and the Pyomo and CVXPY models (not the matrix models).
+
+See [docs/dss_converter_old_vs_new.md](docs/dss_converter_old_vs_new.md) for details and validation results.
+
 ### Command-line interface
 
 The installed `distopf` command provides human-readable and JSON output for saved runs, user-authored TOML scenarios, and result comparisons. Run `distopf --help` or any subcommand with `--help` for the complete option list.
