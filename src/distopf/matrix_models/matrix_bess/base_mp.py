@@ -858,6 +858,9 @@ class LinDistBaseMP(BaseModelMP):
         elif f"{load_shape}.{a}.p" in self.schedules.columns:
             load_mult_p = self.schedules.at[t, f"{load_shape}.{a}.p"]
             load_mult_q = self.schedules.at[t, f"{load_shape}.{a}.q"]
+        elif f"{load_shape}.p" in self.schedules.columns:
+            load_mult_p = self.schedules.at[t, f"{load_shape}.p"]
+            load_mult_q = self.schedules.at[t, f"{load_shape}.q"]
         if self.bus.bus_type[j] == opf.PQ_BUS:
             p_load_nom = self.bus[f"pl_{a}"][j] * load_mult_p
             q_load_nom = self.bus[f"ql_{a}"][j] * load_mult_q

@@ -48,11 +48,11 @@ def create_load_parameters(model: Any, case: Any) -> None:
                     ("p", p_load, p_data),
                     ("q", q_load, q_data),
                 ):
-                    column = (
-                        shape
-                        if shape in case.schedules.columns
-                        else f"{shape}.{phase}.{kind}"
-                    )
+                    column = shape
+                    if shape not in case.schedules.columns:
+                        column = f"{shape}.{phase}.{kind}"
+                        if column not in case.schedules.columns:
+                            column = f"{shape}.{kind}"
                     multiplier = 1.0
                     if column in case.schedules.columns:
                         if time not in case.schedules.index:

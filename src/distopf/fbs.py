@@ -389,9 +389,11 @@ class FBS:
             for si, shape in enumerate(uniq):
                 for slot, phase in enumerate(_PHASES):
                     for kind, out in (("p", self._mp), ("q", self._mq)):
-                        column = (
-                            shape if shape in columns else f"{shape}.{phase}.{kind}"
-                        )
+                        column = shape
+                        if shape not in columns:
+                            column = f"{shape}.{phase}.{kind}"
+                            if column not in columns:
+                                column = f"{shape}.{kind}"
                         if column not in columns:
                             continue
                         values = self._schedule_column(column)
