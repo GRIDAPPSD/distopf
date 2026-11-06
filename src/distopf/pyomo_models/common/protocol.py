@@ -47,7 +47,7 @@ class LindistModelProtocol(Protocol):
     gen_q_min: pyo.Param  # Clamped minimum reactive power
     gen_control: pyo.Param  # Generator control variable type
     gen_cost: pyo.Param
-    gen_phase_lock: pyo.Param
+    gen_balanced: pyo.Param
 
     # Capacitor parameters
     cap_q_nom: pyo.Param  # Nominal capacitor reactive power at 1.0 p.u. voltage

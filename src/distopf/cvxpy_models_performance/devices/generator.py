@@ -29,6 +29,7 @@ from distopf.pyomo_models.common.data import parse_phases
 from distopf.pyomo_models.common.device_data import (
     NetworkContext,
     cell_control,
+    cell_flag,
     cell_num,
     cell_text,
 )
@@ -73,6 +74,7 @@ class GeneratorProvider:
         ports: list[tuple[str, str]] = []
         phases_by_device: dict[str, list[str]] = {}
         bus_by_device: dict[str, int] = {}
+        balanced: dict[str, bool] = {}
         devices_by_bus_phase: dict[tuple[int, str], list[str]] = {}
 
         s_max: list[float] = []
@@ -94,6 +96,7 @@ class GeneratorProvider:
             devices.append(device)
             phases_by_device[device] = phases
             bus_by_device[device] = bus
+            balanced[device] = cell_flag(row, "balanced")
 
             for ph in phases:
                 rating = float(row[f"s_{ph}_max"])
@@ -116,10 +119,11 @@ class GeneratorProvider:
 
         phase_pairs: list[tuple[str, str, str]] = []
         for device, phases in phases_by_device.items():
-            abc = [ph for ph in ("a", "b", "c") if ph in phases]
-            phase_pairs.extend(
-                (device, left, right) for left, right in zip(abc, abc[1:])
-            )
+            for group in (("a", "b", "c"), ("s1", "s2")):
+                present = [ph for ph in group if ph in phases]
+                phase_pairs.extend(
+                    (device, left, right) for left, right in zip(present, present[1:])
+                )
 
         model.gen_device_set = IndexSet(devices)
         model.gen_device_phase_set = IndexSet(ports)
@@ -137,7 +141,7 @@ class GeneratorProvider:
         model.gen_cost = np.array(cost, dtype=float)
         model.gen_p_available = np.array(p_available, dtype=float).reshape(n_ports, n_t)
         model.gen_q_setpoint = np.array(q_setpoint, dtype=float).reshape(n_ports, n_t)
-        model.gen_phase_lock = {device: False for device in devices}
+        model.gen_balanced = balanced
 
         model.add_var("p_gen", model.gen_device_phase_set, nonneg=True)
         model.add_var("q_gen", model.gen_device_phase_set, value=0.0)
@@ -160,6 +164,7 @@ class GeneratorProvider:
             return
         add_gen_constant_p_constraints(model)
         add_gen_constant_q_constraints(model)
+        add_gen_balanced_constraints(model)
         if config.equality_only:
             return
         add_gen_limits(model)
@@ -192,6 +197,19 @@ def add_gen_constant_q_constraints(m: CvxModel) -> None:
         _ports(m, lambda ctrl: ctrl in _Q_FIXED),
         lambda r: m.q_gen[r, :] == m.gen_q_setpoint[r, :],
     )
+
+
+def add_gen_balanced_constraints(m: CvxModel) -> None:
+    """Equal P and Q on consecutive phases of generators flagged `balanced`."""
+    pairs = [pair for pair in m.gen_phase_pair_set if m.gen_balanced[pair[0]]]
+    if not pairs:
+        add_constraint(m, "gen_balanced_p", [], [])
+        add_constraint(m, "gen_balanced_q", [], [])
+        return
+    left = m.gen_device_phase_set.indices((d, l) for d, l, _ in pairs)
+    right = m.gen_device_phase_set.indices((d, r) for d, _, r in pairs)
+    add_constraint(m, "gen_balanced_p", m.p_gen[left, :] == m.p_gen[right, :], pairs)
+    add_constraint(m, "gen_balanced_q", m.q_gen[left, :] == m.q_gen[right, :], pairs)
 
 
 def add_gen_limits(m: CvxModel) -> None:

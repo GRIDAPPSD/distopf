@@ -22,6 +22,8 @@ Optional columns:
                       shape must exist, and blank means "PV" if that column exists,
                       else constant P.
     cost              Cost per unit of active power, default 0.
+    balanced          True/False, default False. Flags the generator to dispatch the
+                      same P and Q on all of its a/b/c phases (or on s1 and s2).
     s_base            Accepted for compatibility; not used by this provider.
 
 Conventions:
@@ -50,6 +52,7 @@ from distopf.pyomo_models.common.device_data import (
     TOL,
     NetworkContext,
     cell_control,
+    cell_flag,
     cell_num,
     cell_opt_float,
     cell_required_float,
@@ -77,7 +80,7 @@ _REQUIRED = {"device_name", "bus_name", "phases"}
 _LEGACY = {"id", "name", "bus_id"}
 _KNOWN = (
     _REQUIRED
-    | {"control_variable", "gen_shape", "cost", "s_base"}
+    | {"control_variable", "gen_shape", "cost", "balanced", "s_base"}
     | {f"{k}_{p}" for k in ("p", "q") for p in _PHASES}
     | {f"s_{p}_max" for p in _PHASES}
     | {f"q_{p}_{b}" for p in _PHASES for b in ("min", "max")}
@@ -309,6 +312,10 @@ def validate_gen_data(
             errors.append(f"{label}: {exc}")
             ctrl = None
         cell_opt_float(row, "cost", label, errors)
+        try:
+            cell_flag(row, "balanced")
+        except ValueError as exc:
+            errors.append(f"{label}: {exc}")
 
         mult: dict[Any, float] | None = None
         try:
@@ -412,6 +419,7 @@ class GeneratorProvider(DeviceProvider):
         ports: list[tuple[str, str]] = []
         phases_by_device: dict[str, list[str]] = {}
         bus_by_device: dict[str, int] = {}
+        balanced: dict[str, bool] = {}
         devices_by_bus_phase: dict[tuple[int, str], list[str]] = {}
 
         s_max: dict[tuple[str, str], float] = {}
@@ -433,6 +441,7 @@ class GeneratorProvider(DeviceProvider):
             devices.append(device)
             phases_by_device[device] = phases
             bus_by_device[device] = bus
+            balanced[device] = cell_flag(row, "balanced")
 
             for ph in phases:
                 port = (device, ph)
@@ -457,13 +466,14 @@ class GeneratorProvider(DeviceProvider):
                     p_available[(*port, t)] = p_nom * mult[t]
                     q_setpoint[(*port, t)] = q_nom
 
-        # Consecutive phase pairs among a, b, c (for phase-lock constraints elsewhere)
+        # Consecutive phase pairs within a/b/c and within s1/s2 (for balanced constraints)
         phase_pairs: list[tuple[str, str, str]] = []
         for device, phases in phases_by_device.items():
-            abc = [ph for ph in ("a", "b", "c") if ph in phases]
-            phase_pairs.extend(
-                (device, left, right) for left, right in zip(abc, abc[1:])
-            )
+            for group in (("a", "b", "c"), ("s1", "s2")):
+                present = [ph for ph in group if ph in phases]
+                phase_pairs.extend(
+                    (device, left, right) for left, right in zip(present, present[1:])
+                )
 
         # Sets
         model.gen_device_set = pyo.Set(initialize=devices)
@@ -484,9 +494,9 @@ class GeneratorProvider(DeviceProvider):
         model.gen_cost = pyo.Param(ports_set, initialize=cost)
         model.gen_p_available = pyo.Param(ports_set, time_set, initialize=p_available)
         model.gen_q_setpoint = pyo.Param(ports_set, time_set, initialize=q_setpoint)
-        model.gen_phase_lock = pyo.Param(
+        model.gen_balanced = pyo.Param(
             model.gen_device_set,
-            initialize={device: False for device in devices},
+            initialize=balanced,
             within=pyo.Boolean,
             mutable=True,
         )
@@ -516,6 +526,7 @@ class GeneratorProvider(DeviceProvider):
             return
         add_gen_constant_p_constraints(model)
         add_gen_constant_q_constraints(model)
+        add_gen_balanced_constraints(model)
         if _cfg(config, "equality_only", False):
             return
         add_gen_limits(model)
@@ -552,6 +563,26 @@ def add_gen_constant_q_constraints(m: Any) -> None:
         return pyo.Constraint.Skip
 
     m.gen_constant_q = pyo.Constraint(m.gen_device_phase_set, m.time_set, rule=rule)
+
+
+def add_gen_balanced_constraints(m: Any) -> None:
+    """Equal P and Q on consecutive phases of generators flagged `balanced`."""
+
+    def make_rule(var_name: str):
+        def rule(m, device, left, right, time):
+            if not pyo.value(m.gen_balanced[device]):
+                return pyo.Constraint.Skip
+            var = getattr(m, var_name)
+            return var[device, left, time] == var[device, right, time]
+
+        return rule
+
+    m.gen_balanced_p = pyo.Constraint(
+        m.gen_phase_pair_set, m.time_set, rule=make_rule("p_gen")
+    )
+    m.gen_balanced_q = pyo.Constraint(
+        m.gen_phase_pair_set, m.time_set, rule=make_rule("q_gen")
+    )
 
 
 def add_gen_limits(m: Any) -> None:
