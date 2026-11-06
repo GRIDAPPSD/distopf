@@ -238,7 +238,7 @@ class CvxpyWrapper(PyomoWrapper):
 
     @staticmethod
     def _solver_name(solver: Optional[str]) -> str:
-        if solver is None or str(solver).lower() == "ipopt":
+        if solver is None:
             return "cvxpy"
         return str(solver).upper()
 

@@ -32,7 +32,7 @@ Tooling: `mypy` and `ruff` (CI rule set plus unused imports/variables) are clean
 - [ ] Dual sign convention differs from Pyomo/IPOPT (CVXPY equality dual of `min x s.t. x==1` is -1). Current test compares up to a global sign. Decide on a normalization.
 - [ ] Ranged constraints (Pyomo `(lo, expr, hi)`) are stored as two CVXPY constraints; `get_dual` reports `dual(lower) - dual(upper)`.
 - [ ] Mixed-integer models have no duals.
-- [ ] Default solver selection: CLARABEL (continuous), HIGHS (MI LP/QP), SCIP (MI with cones). `solver="ipopt"` is treated as "auto". `CvxpyWrapper` reports `solver="cvxpy"` in `PowerFlowResult` when auto-selected.
+- [ ] Default solver selection: CLARABEL (continuous), HIGHS (MI LP/QP), SCIP (MI with cones). `solver=None` selects automatically; `"ipopt"` is no longer remapped. `CvxpyWrapper` reports `solver="cvxpy"` in `PowerFlowResult` when auto-selected.
 - [ ] `CvxpyWrapper` subclasses `PyomoWrapper` to reuse result-building helpers (`_build_result`, `_get_bus_values`, `get_*`). Consider a shared base if the two diverge.
 - [ ] `ParamDict.get(key)` returns `None` for missing keys (dict semantics) while `ParamDict[key]` returns the default. `s_branch_max` relies on `.get`; confirm no other code path depends on the default through `.get`.
 - [ ] `CvxResult` has its own extractor for zone-indexed variables (`p_max`, `p_zr`); the shared Pyomo extractor assumes bus-indexed variables.

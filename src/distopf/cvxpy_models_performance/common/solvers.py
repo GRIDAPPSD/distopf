@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import time
 
 import cvxpy as cp
@@ -29,15 +30,23 @@ def _has_integers(model: CvxModel) -> bool:
     return any(spec.boolean for spec in model.var_specs.values())
 
 
-def _default_solver(model: CvxModel, problem: cp.Problem) -> str:
+def _select_solver(model: CvxModel, problem: cp.Problem, solver: str | None) -> str:
+    """Return the requested solver, or CLARABEL (continuous) / HIGHS or SCIP (integer)."""
+    if solver is not None:
+        return str(solver).upper()
     if not _has_integers(model):
-        return "SCIP"
-    return "HIGHS" if (problem.is_qp()) else "CLARABEL"
+        return "CLARABEL"
+    # CLARABEL cannot handle integer variables; HiGHS covers LP/QP, SCIP the rest.
+    chosen = "HIGHS" if problem.is_qp() else "SCIP"
+    if chosen not in cp.installed_solvers():
+        raise NotImplementedError(
+            f"Integer variables need a mixed-integer solver; install {chosen} "
+            "or pass solver=... explicitly."
+        )
+    return chosen
 
 
 def _cyipopt_available() -> bool:
-    import importlib.util
-
     return importlib.util.find_spec("cyipopt") is not None
 
 
@@ -87,9 +96,7 @@ def solve(
     if nlp:
         _solve_nlp(model, problem, verbose)
     else:
-        if solver is None or str(solver).lower() == "ipopt":
-            solver = _default_solver(model, problem)
-        problem.solve(solver=str(solver).upper(), verbose=verbose)
+        problem.solve(solver=_select_solver(model, problem, solver), verbose=verbose)
     solve_time = time.perf_counter() - t0
 
     if problem.status not in _OK_STATUSES:
