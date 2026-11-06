@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 from distopf.pyomo_models.common.protocol import LindistModelProtocol
 import pyomo.environ as pyo
 from numpy import sqrt
@@ -62,6 +64,13 @@ def loss_objective_i2r_rule(model: LindistModelProtocol):
     return total_loss
 
 
+def loss_objective_auto_rule(model: LindistModelProtocol):
+    """I^2*R loss if the model has l_flow, otherwise (P^2 + Q^2)*R."""
+    if hasattr(model, "l_flow"):
+        return loss_objective_i2r_rule(model)
+    return loss_objective_rule(model)
+
+
 def substation_power_objective_rule(model: LindistModelProtocol):
     """
     Minimize total active power imported from the substation (swing bus).
@@ -111,7 +120,7 @@ def voltage_deviation_objective_rule(model: LindistModelProtocol):
 
 def voltage_min_objective_rule(model: LindistModelProtocol):
     """
-    Minimize the sum of squared voltage magnitudes: min sum(v2).
+    Minimize the mean squared voltage magnitude: min mean(v2).
 
     Uses the model's v2 variable (voltage squared), so the objective is linear.
 
@@ -122,20 +131,21 @@ def voltage_min_objective_rule(model: LindistModelProtocol):
 
     Returns
     -------
-    Pyomo expression for the sum of v2 over all buses, phases and time steps
+    Pyomo expression for the mean of v2 over all buses, phases and time steps
     """
     total_voltage = 0
     for _id, ph in model.bus_phase_set:
         for t in model.time_set:
             total_voltage += model.v2[_id, ph, t]
-    return total_voltage
+    return total_voltage / (len(model.bus_phase_set) * len(model.time_set))
 
 
 def generation_curtailment_objective_rule(model: LindistModelProtocol):
     """
     Minimize total generation curtailment.
 
-    Penalizes difference between available generation and actual output.
+    Penalizes difference between available generation and actual output,
+    normalized by total available generation (value in [0, 1]).
     This is a linear objective.
 
     Parameters
@@ -148,12 +158,16 @@ def generation_curtailment_objective_rule(model: LindistModelProtocol):
     Pyomo expression for total curtailment
     """
     total_curtailment = 0
+    total_available = 0
     for device, ph in model.gen_device_phase_set:
         for t in model.time_set:
+            total_available += pyo.value(model.gen_p_available[device, ph, t])
             total_curtailment += (
                 model.gen_p_available[device, ph, t] - model.p_gen[device, ph, t]
             )
-    return total_curtailment
+    if total_available <= 0:
+        return 0
+    return total_curtailment / total_available
 
 
 def cost_minimization_rule(m):
@@ -686,7 +700,9 @@ def admm_s_down_penalty(m, rho: float = 1.0):
 # ======================================================================================
 
 
-def set_objective(model: LindistModelProtocol, objective: pyo.Objective) -> None:
+def set_objective(
+    model: LindistModelProtocol, objective: pyo.Objective | Callable
+) -> None:
     """
     Set the objective on a model, removing any existing objective first.
 
@@ -694,11 +710,13 @@ def set_objective(model: LindistModelProtocol, objective: pyo.Objective) -> None
     ----------
     model : LindistModelProtocol
         Pyomo model
-    objective : pyo.Objective
-        Objective to set
+    objective : pyo.Objective | Callable
+        Objective to set. Can be a Pyomo Objective or a callable that returns an expression.
     """
     if hasattr(model, "objective"):
         model.del_component("objective")
+    if not isinstance(objective, pyo.Objective):
+        objective = pyo.Objective(rule=objective, sense=pyo.minimize)
     model.objective = objective
 
 

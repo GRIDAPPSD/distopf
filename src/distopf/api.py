@@ -505,7 +505,9 @@ class Case:
         ----------
         objective : str or Callable, optional
             Objective function for optimization. String options (case-insensitive):
-            - "loss_min" or "loss": Minimize total line losses (quadratic)
+            - "loss_min" or "loss": Minimize total line losses (I^2*R when the
+              model has a current variable, otherwise quadratic P^2+Q^2)
+            - "loss_pq" / "loss_i2r": Force the (P^2+Q^2)*r or l*r loss form
             - "curtail_min" or "curtail": Minimize DER curtailment (quadratic)
             - "gen_max": Maximize generator output (linear)
             - "load_min": Minimize substation power (linear)

@@ -14,11 +14,11 @@ def gradient_load_min(model):
 
 def gradient_curtail(model):
     c = np.zeros(model.n_x)
-    for i in range(
+    p_der_idx = np.arange(
         model.p_der_start_phase_idx["a"],
         model.p_der_start_phase_idx["c"] + len(model.gen_buses["c"]),
-    ):
-        c[i] = -1
+    )
+    c[p_der_idx] = -1 / np.sum(model.x_max[p_der_idx])
     return c
 
 
@@ -254,7 +254,9 @@ def cp_obj_curtail(model: LinDistBaseMP, xk: cp.Variable, **kwargs) -> cp.Expres
                 continue
             all_pg_idx = np.r_[all_pg_idx, model.pg_map[t][a].to_numpy()]
     all_pg_idx = all_pg_idx.astype(int)
-    return cp.sum((model.x_max[all_pg_idx] - xk[all_pg_idx]) ** 2)
+    return cp.sum((model.x_max[all_pg_idx] - xk[all_pg_idx]) ** 2) / np.sum(
+        model.x_max[all_pg_idx] ** 2
+    )
 
 
 def cp_obj_curtail_lp(model: LinDistBaseMP, xk: cp.Variable, **kwargs) -> cp.Expression:
@@ -283,7 +285,9 @@ def cp_obj_curtail_lp(model: LinDistBaseMP, xk: cp.Variable, **kwargs) -> cp.Exp
                 continue
             all_pg_idx = np.r_[all_pg_idx, model.pg_map[t][a].to_numpy()]
     all_pg_idx = all_pg_idx.astype(int)
-    return cp.sum((model.x_max[all_pg_idx] - xk[all_pg_idx]))
+    return cp.sum((model.x_max[all_pg_idx] - xk[all_pg_idx])) / np.sum(
+        model.x_max[all_pg_idx]
+    )
 
 
 def cp_obj_energy_cost_min(model: LinDistBaseMP, xk, **kwargs):

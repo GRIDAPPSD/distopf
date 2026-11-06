@@ -95,21 +95,31 @@ def loss_i2r(model: CvxModel):
     return cp.sum(cp.multiply(column(model.r_diag), model.l_flow[rows, :]))
 
 
+def loss_auto(model: CvxModel):
+    """``loss_i2r`` if the model has ``l_flow``, otherwise ``loss`` (P^2 + Q^2)."""
+    if hasattr(model, "l_flow"):
+        return loss_i2r(model)
+    return loss(model)
+
+
 def voltage_deviation(model: CvxModel):
     """``sum((v^2 - 1)^2)`` (convex quadratic)."""
     return cp.sum_squares(model.v2 - 1.0)
 
 
 def voltage_min(model: CvxModel):
-    """Minimize the sum of squared voltage magnitudes: ``min sum(v2)`` (linear)."""
-    return cp.sum(model.v2)
+    """Minimize the mean squared voltage magnitude: ``min mean(v2)`` (linear)."""
+    return cp.sum(model.v2) / model.v2.size
 
 
 def generation_curtailment(model: CvxModel):
-    """Difference between available and actual generation (linear)."""
-    if len(model.gen_device_phase_set) == 0:
+    """Curtailed fraction of available generation, in [0, 1] (linear)."""
+    total_available = (
+        model.gen_p_available.sum() if len(model.gen_device_phase_set) else 0
+    )
+    if total_available <= 0:
         return 0
-    return cp.sum(model.gen_p_available - model.p_gen)
+    return cp.sum(model.gen_p_available - model.p_gen) / total_available
 
 
 def energy_and_generation_cost(model: CvxModel):
@@ -381,6 +391,7 @@ def set_objective(model: CvxModel, objective: Any, sense: str = "minimize") -> N
 none_rule = no_objective
 loss_objective_rule = loss
 loss_objective_i2r_rule = loss_i2r
+loss_objective_auto_rule = loss_auto
 substation_power_objective_rule = substation_power
 substation_cost_objective_rule = substation_cost
 voltage_deviation_objective_rule = voltage_deviation

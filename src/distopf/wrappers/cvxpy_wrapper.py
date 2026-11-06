@@ -362,8 +362,10 @@ class CvxpyWrapper(PyomoWrapper):
             objectives.generation_cost_with_substation_quadratic_penalty_objective_rule
         )
         objective_map = {
-            "loss": objectives.loss_objective_rule,
-            "loss_min": objectives.loss_objective_rule,
+            "loss": objectives.loss_objective_auto_rule,
+            "loss_min": objectives.loss_objective_auto_rule,
+            "loss_pq": objectives.loss_objective_rule,
+            "loss_i2r": objectives.loss_objective_i2r_rule,
             "substation": objectives.substation_power_objective_rule,
             "substation_power": objectives.substation_power_objective_rule,
             "voltage_deviation": objectives.voltage_deviation_objective_rule,

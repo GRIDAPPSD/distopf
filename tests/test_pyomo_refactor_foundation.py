@@ -474,9 +474,10 @@ def named_generator_model():
 
 def test_generator_objectives_use_scheduled_device_availability(named_generator_model):
     model = named_generator_model
+    # Each generator produces half of its scheduled availability (0.9 in total).
     assert pyo.value(
         objectives.generation_curtailment_objective_rule(model)
-    ) == pytest.approx(0.45)
+    ) == pytest.approx(0.5)
     assert pyo.value(objectives.gen_cost_rule(model)) == pytest.approx(0.975)
     assert pyo.value(objectives.cost_minimization_rule(model)) == pytest.approx(8.975)
     assert pyo.value(objectives.total_cost_rule(model)) == pytest.approx(16.975)
