@@ -17,6 +17,9 @@ from distopf.pyomo_models.common.data import parse_phases
 if TYPE_CHECKING:
     from distopf.results import PowerFlowResult
 
+# Squared-current floor for the start point (pu^2); keeps l_ab^2 = l_aa*l_bb rows non-degenerate.
+_MIN_START_L = 1e-4
+
 
 class PyomoWrapper(Wrapper):
     """Pyomo/IPOPT wrapper for OPF optimization.
@@ -304,8 +307,12 @@ class PyomoWrapper(Wrapper):
             step = step.reindex(pd.MultiIndex.from_frame(reg_taps[["fb", "tb"]]))
             for ph in "abc":
                 tap_ratios[ph] = 1 + step.to_numpy() * reg_taps[ph]
-        u_caps = getattr(self.result, "u_cap", None)
-        z_caps = getattr(self.result, "z_cap", None)
+        u_caps = (
+            self._get_bus_values("u_cap") if hasattr(self.result, "u_cap") else None
+        )
+        z_caps = (
+            self._get_bus_values("z_cap") if hasattr(self.result, "z_cap") else None
+        )
         p_loads = getattr(self.result, "p_load", None)
         q_loads = getattr(self.result, "q_load", None)
         p_bats = (
@@ -324,7 +331,7 @@ class PyomoWrapper(Wrapper):
             if hasattr(self.result, "p_discharge")
             else None
         )
-        soc = getattr(self.result, "soc", None)
+        soc = self._get_bus_values("soc") if hasattr(self.result, "soc") else None
 
         objective_value = getattr(self.result, "objective_value", None)
         solve_time = getattr(self.result, "solve_time", None)
@@ -554,16 +561,16 @@ class PyomoWrapper(Wrapper):
         self.model.p_flow.set_values(p_data)
         self.model.q_flow.set_values(q_data)
 
-        # Initialize current magnitudes (squared)
+        # Initialize current magnitudes (squared); zero start makes l_ab^2 = l_aa*l_bb rows degenerate
         l_data: dict[tuple[Any, ...], float] = {}
         if branch_dimen == 3:
             for fb, tb, ph, t in self.model.branch_phase_set * self.model.time_set:
                 i_mag = _lookup_branch_phase(currents, fb, tb, ph)
-                l_data[(fb, tb, ph + ph, t)] = i_mag**2
+                l_data[(fb, tb, ph + ph, t)] = max(i_mag**2, _MIN_START_L)
         else:
             for _id, ph, t in self.model.branch_phase_set * self.model.time_set:
                 i_mag = currents.loc[(currents.tb == _id), ph].to_numpy()[0]
-                l_data[(_id, ph + ph, t)] = i_mag**2
+                l_data[(_id, ph + ph, t)] = max(i_mag**2, _MIN_START_L)
 
         # Initialize cross-phase current magnitudes
         for fb, tb, phases in self.model.branch_phase_pair_set:

@@ -36,7 +36,10 @@ def solve(
     log = buf.getvalue()
 
     if results.solver.status != pyo.SolverStatus.ok:
-        raise ValueError(results.solver.status)
+        raise ValueError(
+            f"Solver status '{results.solver.status.value}', termination "
+            f"'{results.solver.termination_condition.value}'.\n{log[-3000:]}"
+        )
 
     obj_value = pyo.value(model.objective)
     if verbose:
