@@ -62,6 +62,9 @@ BRANCH_COLUMN_RENAMES = {
 }
 
 
+REG_RANGE_DEFAULTS = {"ratio_min": 0.9, "ratio_max": 1.1, "num_taps": 32}
+
+
 def _rename_known_columns(df: pd.DataFrame, rename_map: dict[str, str]) -> pd.DataFrame:
     available = {
         k: v for k, v in rename_map.items() if k in df.columns and v not in df.columns
@@ -169,10 +172,16 @@ def handle_reg_input(reg_data: Optional[pd.DataFrame]) -> pd.DataFrame:
                 "ratio_a",
                 "ratio_b",
                 "ratio_c",
+                *REG_RANGE_DEFAULTS,
             ]
         )
     reg = reg_data.sort_values(by="tb", ignore_index=True)
     reg.index = reg.tb.to_numpy() - 1
+    for key, default in REG_RANGE_DEFAULTS.items():
+        if key not in reg.columns:
+            reg[key] = default
+        reg[key] = pd.to_numeric(reg[key], errors="coerce").fillna(default)
+    step = (reg["ratio_max"] - reg["ratio_min"]) / reg["num_taps"]
     for ph in "abc":
         tap_key = f"tap_{ph}"
         ratio_key = f"ratio_{ph}"
@@ -201,7 +210,7 @@ def handle_reg_input(reg_data: Optional[pd.DataFrame]) -> pd.DataFrame:
                     f"{tap_key} is required; {ratio_key} is derived from {tap_key}"
                 )
         reg.loc[tap_missing, tap_key] = 0.0
-        reg[ratio_key] = 1 + 0.00625 * reg[tap_key]
+        reg[ratio_key] = 1 + step * reg[tap_key]
     return reg
 
 

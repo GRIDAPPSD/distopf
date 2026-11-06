@@ -29,10 +29,8 @@ from __future__ import annotations
 
 import pandas as pd
 from distopf import Case
+from distopf.pyomo_models.common.device_data import reg_tap_step
 from distopf.pyomo_models.common.results import PyoResult
-
-TAP_STEP = 0.00625  # per-unit ratio change per tap
-MAX_TAP = 16
 
 
 def fix_regulator_branches(case: Case) -> Case:
@@ -140,7 +138,7 @@ def default_regulator_setpoint(
         for ph in "abc":
             tap = int(sel[ph].iloc[0])
             reg.at[i, f"tap_{ph}"] = tap
-            reg.at[i, f"ratio_{ph}"] = 1 + TAP_STEP * tap
+            reg.at[i, f"ratio_{ph}"] = 1 + reg_tap_step(row) * tap
     out = Case(
         case.branch_data.copy(),
         case.bus_data.copy(),

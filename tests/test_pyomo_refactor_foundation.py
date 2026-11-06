@@ -208,7 +208,7 @@ def test_regulator_ratios_and_tap_changes(capacitor_model, controlled):
             tap = 16 + time
             for candidate in model.tap_set:
                 model.u_reg[1, 2, "a", candidate, time].set_value(int(candidate == tap))
-            ratio = pyo.value(model.tap_ratio[tap])
+            ratio = pyo.value(model.tap_ratio[1, 2, "a", tap])
         else:
             ratio = 1.025
         model.v2_reg[1, 2, "a", time].set_value(ratio**2)

@@ -228,7 +228,7 @@ class CvxResult:
         u_reg = getattr(self, "u_reg", None)
         if u_reg is not None:
             self.reg_taps = u_reg.loc[u_reg.value.round() == 1].copy()
-            self.reg_taps["tap"] -= 16
+            self.reg_taps["tap"] -= u_reg["tap"].max() // 2
             self.reg_taps = self.reg_taps.drop(columns=["value"]).reset_index(drop=True)
             self.reg_taps = self.reg_taps.pivot(
                 index=["fb", "tb", "from_name", "to_name", "t"],

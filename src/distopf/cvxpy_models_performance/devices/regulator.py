@@ -3,7 +3,7 @@
 ``reg_ratio`` is an array ``(n_reg_phase,)`` aligned with ``reg_phase_set``;
 ``v2_reg`` is ``(n_reg_phase, n_steps)``. With discrete control, ``u_reg`` has
 shape ``(n_reg_phase, n_tap, n_steps)`` and ``tap_ratio``/``tap_ratio_squared``
-are arrays ``(n_tap,)``.
+are arrays ``(n_reg_phase, n_tap)``.
 """
 
 from __future__ import annotations
@@ -22,14 +22,18 @@ from distopf.cvxpy_models_performance.common.model import (
     column,
 )
 from distopf.pyomo_models.common.data import parse_phases
-from distopf.pyomo_models.common.device_data import cell_num
+from distopf.pyomo_models.common.device_data import (
+    case_num_taps,
+    cell_num,
+    reg_tap_step,
+)
 
 
 def create_regulator_parameters(model: Any, case: Any) -> None:
     """Create ``reg_ratio`` aligned with ``reg_phase_set``."""
     ratio = {
         (int(row.fb), int(row.tb), phase): 1.0
-        + 0.00625 * cell_num(row, f"tap_{phase}", 0)
+        + reg_tap_step(row) * cell_num(row, f"tap_{phase}", 0)
         for _, row in case.reg_data.iterrows()
         for phase in parse_phases(str(row.phases))
     }
@@ -62,15 +66,24 @@ class RegulatorProvider:
 
         model.add_var("v2_reg", model.reg_phase_set, nonneg=True, value=1.0)
         if getattr(model, "reg_mi_enabled", False):
-            model.tap_set = IndexSet(range(0, 33))
-            model.tap_ratio = np.array([0.9 + k * 0.00625 for k in range(33)])
+            n_taps = case_num_taps(data)
+            neutral = n_taps // 2
+            steps = {
+                (int(row.fb), int(row.tb), phase): reg_tap_step(row)
+                for _, row in data.iterrows()
+                for phase in parse_phases(str(row.phases).strip())
+            }
+            row_steps = np.array([steps[key] for key in model.reg_phase_set])
+            model.tap_set = IndexSet(range(0, n_taps + 1))
+            offsets = np.arange(n_taps + 1) - neutral
+            model.tap_ratio = 1.0 + np.outer(row_steps, offsets)
             model.tap_ratio_squared = model.tap_ratio**2
             model.reg_big_m = 1e6
             model.add_var(
                 "u_reg", model.reg_phase_set, model.tap_set, boolean=True, value=0.0
             )
             initial = np.zeros(model.u_reg.shape)
-            initial[:, 16, :] = 1.0
+            initial[:, neutral, :] = 1.0
             model.u_reg.value = initial
 
     def active_power_injection(self, model: Any) -> Any:
@@ -126,7 +139,10 @@ def add_regulator_tap_sos1_constraints(m: CvxModel) -> None:
     keys = list(m.reg_phase_set)
     n_tap = len(m.tap_set)
     v2_from = m.v2[_from_rows(m), :]
-    gap = [m.v2_reg - m.tap_ratio_squared[k] * v2_from for k in range(n_tap)]
+    gap = [
+        m.v2_reg - cp.multiply(column(m.tap_ratio_squared[:, k]), v2_from)
+        for k in range(n_tap)
+    ]
     upper = [gap[k] <= m.reg_big_m * (1 - m.u_reg[:, k, :]) for k in range(n_tap)]
     lower = [gap[k] >= -m.reg_big_m * (1 - m.u_reg[:, k, :]) for k in range(n_tap)]
     add_constraint(m, "reg_tap_upper", upper, keys)

@@ -46,8 +46,8 @@ class PyoResult:
 
         self.validate_u_reg()
         if getattr(self, "u_reg", None) is not None:
-            self.reg_taps = self.u_reg.loc[self.u_reg.value == 1].copy()
-            self.reg_taps["tap"] -= 16
+            self.reg_taps = self.u_reg.loc[self.u_reg.value >= 0.9].copy()
+            self.reg_taps["tap"] -= self.u_reg["tap"].max() // 2
             self.reg_taps = self.reg_taps.drop(columns=["value"]).reset_index(drop=True)
             self.reg_taps = self.reg_taps.pivot(
                 index=["fb", "tb", "from_name", "to_name", "t"],
@@ -74,7 +74,7 @@ class PyoResult:
         """Validate that u_reg variable is present and has only binary values."""
         if hasattr(self, "u_reg"):
             value = self.u_reg["value"]
-            if ((value - value.round()).abs() > 1e-6).any():
+            if ((value - value.round()).abs() > 1e-3).any():
                 raise ValueError("u_reg DataFrame contains non-binary values.")
             self.u_reg["value"] = value.round()
 

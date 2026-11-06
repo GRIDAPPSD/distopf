@@ -53,6 +53,28 @@ def cell_num(row: pd.Series, key: str, default: Any) -> Any:
     return default if cell_blank(row, key) else float(row[key])
 
 
+def reg_num_taps(row: pd.Series) -> int:
+    """Total number of regulator taps between min and max ratio (default 32)."""
+    return int(cell_num(row, "num_taps", 32))
+
+
+def reg_tap_step(row: pd.Series) -> float:
+    """Per-unit ratio change per tap: (ratio_max - ratio_min) / num_taps."""
+    ratio_min = cell_num(row, "ratio_min", 0.9)
+    ratio_max = cell_num(row, "ratio_max", 1.1)
+    return (ratio_max - ratio_min) / reg_num_taps(row)
+
+
+def case_num_taps(reg_data: pd.DataFrame) -> int:
+    """Common num_taps of all regulators; mixed values are not supported."""
+    values = {reg_num_taps(row) for _, row in reg_data.iterrows()}
+    if len(values) > 1:
+        raise ValueError(
+            f"reg_data num_taps must be the same for all regulators, got {sorted(values)}"
+        )
+    return values.pop() if values else 32
+
+
 def cell_opt_float(
     row: pd.Series, key: str, label: str, errors: list[str]
 ) -> float | None:

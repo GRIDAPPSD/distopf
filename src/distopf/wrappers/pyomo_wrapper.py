@@ -9,12 +9,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import numpy as np
+import pandas as pd
 from distopf.wrappers.base import Wrapper
 from distopf.pyomo_models.common import objectives
 from distopf.pyomo_models.common.data import parse_phases
 
 if TYPE_CHECKING:
-    import pandas as pd
     from distopf.results import PowerFlowResult
 
 
@@ -299,7 +299,11 @@ class PyomoWrapper(Wrapper):
         tap_ratios = None
         if reg_taps is not None:
             tap_ratios = reg_taps.copy()
-            tap_ratios[["a", "b", "c"]] = 1 + 0.00625 * reg_taps[["a", "b", "c"]]
+            reg = self.case.reg_data.set_index(["fb", "tb"])
+            step = (reg["ratio_max"] - reg["ratio_min"]) / reg["num_taps"]
+            step = step.reindex(pd.MultiIndex.from_frame(reg_taps[["fb", "tb"]]))
+            for ph in "abc":
+                tap_ratios[ph] = 1 + step.to_numpy() * reg_taps[ph]
         u_caps = getattr(self.result, "u_cap", None)
         z_caps = getattr(self.result, "z_cap", None)
         p_loads = getattr(self.result, "p_load", None)

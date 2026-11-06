@@ -14,8 +14,11 @@ from distopf.pyomo_models.common.device_data import (
     cell_num,
     cell_opt_float,
     cell_required_float,
+    case_num_taps,
     check_phases,
     finish_validation,
+    reg_num_taps,
+    reg_tap_step,
 )
 
 
@@ -51,8 +54,13 @@ def validate_reg_data(data: pd.DataFrame, model: Any) -> None:
                 errors.append(
                     f"{label}: tap_{phase} is required; {ratio_key} is derived from tap_{phase}"
                 )
-            if tap is not None and (tap != round(tap) or not -16 <= tap <= 16):
-                errors.append(f"{label}: tap_{phase} must be an integer in [-16, 16]")
+            if tap is not None and (
+                tap != round(tap) or abs(tap) > reg_num_taps(row) / 2
+            ):
+                half = reg_num_taps(row) // 2
+                errors.append(
+                    f"{label}: tap_{phase} must be an integer in [{-half}, {half}]"
+                )
     finish_validation("reg_data", errors, [], [])
 
 
@@ -60,7 +68,7 @@ def create_regulator_parameters(model: Any, case: Any) -> None:
     """Create regulator ratio parameter components from case data."""
     ratio = {
         (int(row.fb), int(row.tb), phase): 1.0
-        + 0.00625 * cell_num(row, f"tap_{phase}", 0)
+        + reg_tap_step(row) * cell_num(row, f"tap_{phase}", 0)
         for _, row in case.reg_data.iterrows()
         for phase in parse_phases(str(row.phases))
     }
@@ -98,20 +106,33 @@ class RegulatorProvider:
             initialize=1,
         )
         if getattr(model, "reg_mi_enabled", False):
-            model.tap_set = pyo.RangeSet(0, 32)
-            ratios = {index: 0.9 + index * 0.00625 for index in range(33)}
-            model.tap_ratio = pyo.Param(model.tap_set, initialize=ratios)
+            n_taps = case_num_taps(data)
+            neutral = n_taps // 2
+            model.tap_set = pyo.RangeSet(0, n_taps)
+            ratios = {
+                (int(row.fb), int(row.tb), phase, k): 1.0
+                + reg_tap_step(row) * (k - neutral)
+                for _, row in data.iterrows()
+                for phase in parse_phases(str(row.phases).strip())
+                for k in range(n_taps + 1)
+            }
+            model.tap_ratio = pyo.Param(
+                model.reg_phase_set, model.tap_set, initialize=ratios
+            )
             model.tap_ratio_squared = pyo.Param(
+                model.reg_phase_set,
                 model.tap_set,
                 initialize={key: value**2 for key, value in ratios.items()},
             )
-            model.reg_big_m = pyo.Param(initialize=1e6)
+            model.reg_big_m = pyo.Param(initialize=1e3)
             model.u_reg = pyo.Var(
                 model.reg_phase_set,
                 model.tap_set,
                 model.time_set,
                 domain=pyo.Binary,
-                initialize=lambda _m, _fb, _tb, _ph, tap, _t: 1 if tap == 16 else 0,
+                initialize=lambda _m, _fb, _tb, _ph, tap, _t: (
+                    1 if tap == neutral else 0
+                ),
             )
 
     def active_power_injection(
@@ -180,12 +201,12 @@ def add_regulator_tap_sos1_constraints(m: LindistModelProtocol) -> None:
         return sum(m.u_reg[fb, tb, ph, k, t] for k in m.tap_set) == 1
 
     def reg_tap_upper(m: LindistModelProtocol, fb, tb, ph, k, t):
-        return m.v2_reg[fb, tb, ph, t] - m.tap_ratio_squared[k] * m.v2[
+        return m.v2_reg[fb, tb, ph, t] - m.tap_ratio_squared[fb, tb, ph, k] * m.v2[
             fb, ph, t
         ] <= m.reg_big_m * (1 - m.u_reg[fb, tb, ph, k, t])
 
     def reg_tap_lower(m: LindistModelProtocol, fb, tb, ph, k, t):
-        return m.v2_reg[fb, tb, ph, t] - m.tap_ratio_squared[k] * m.v2[
+        return m.v2_reg[fb, tb, ph, t] - m.tap_ratio_squared[fb, tb, ph, k] * m.v2[
             fb, ph, t
         ] >= -m.reg_big_m * (1 - m.u_reg[fb, tb, ph, k, t])
 

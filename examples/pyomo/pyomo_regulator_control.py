@@ -77,7 +77,10 @@ if result.solver.termination_condition == pyo.TerminationCondition.optimal:
     )
     taps = u_reg.loc[u_reg.value == 1].reset_index(drop=True)
     taps["tap"] = taps.k
-    taps["ratio"] = taps["tap"].map(model.tap_ratio)
+    taps["ratio"] = [
+        pyo.value(model.tap_ratio[fb, tb, ph, k])
+        for fb, tb, ph, k in taps[["fb", "tb", "phase", "k"]].itertuples(index=False)
+    ]
     taps = taps.loc[:, ["fb", "tb", "phase", "t", "tap", "ratio"]]
     taps = taps.sort_values(["t", "tb", "phase"])
     print(taps)

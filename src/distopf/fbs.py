@@ -27,7 +27,6 @@ from distopf.results import PowerFlowResult
 if TYPE_CHECKING:
     from distopf.api import Case
 
-_TAP_STEP = 0.00625
 _PHASES = ("a", "b", "c", "s1", "s2")
 _PHASE_IDX = {phase: i for i, phase in enumerate(_PHASES)}
 _LOAD_SLOTS = (*_PHASES, "s1s2")
@@ -202,6 +201,7 @@ class FBS:
         tap = np.ones((n, 5), dtype=complex)
         reg_tb: list[int] = []
         reg_masks: list[list[bool]] = []
+        reg_steps: list[float] = []
         reg = case.reg_data
         if reg is not None and len(reg):
             node_pos = {int(i): k for k, i in enumerate(self.node_ids)}
@@ -216,7 +216,11 @@ class FBS:
                     tap[k, "abc".index(phase)] = rec[f"ratio_{phase}"]
                 reg_tb.append(int(rec["tb"]))
                 reg_masks.append([p in phases for p in "abc"])
+                reg_steps.append(
+                    (rec["ratio_max"] - rec["ratio_min"]) / rec["num_taps"]
+                )
         self._reg_tb = reg_tb
+        self._reg_step = np.array(reg_steps, dtype=float)
         self._reg_nodes = (
             np.array([node_pos[t] for t in reg_tb], dtype=np.int64)
             if reg_tb
@@ -533,7 +537,9 @@ class FBS:
         if frame is None or not len(frame) or not self._reg_nodes.size:
             return
         saved = frame.drop_duplicates("tb", keep="first").set_index("tb")
-        for node, tb, legs in zip(self._reg_nodes, self._reg_tb, self._reg_phase_mask):
+        for node, tb, legs, step in zip(
+            self._reg_nodes, self._reg_tb, self._reg_phase_mask, self._reg_step
+        ):
             if tb not in saved.index:
                 continue
             for k, phase in enumerate("abc"):
@@ -542,7 +548,7 @@ class FBS:
                     continue
                 value = pd.to_numeric(saved.at[tb, column], errors="coerce")
                 if pd.notna(value):
-                    self._tap_t[ti, node, k] = 1 + _TAP_STEP * float(value)
+                    self._tap_t[ti, node, k] = 1 + step * float(value)
 
     def _cap_states(
         self,
