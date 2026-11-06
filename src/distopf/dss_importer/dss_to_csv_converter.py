@@ -39,12 +39,18 @@ _Z_COLUMNS = [
     for prefix in "rx"
     for suffix, _, _ in entries
 ]
+# Total line-charging susceptance per phase, per unit on the branch z_base.
+_B_COLUMNS = ["b_a", "b_b", "b_c"]
+# Transformer no-load loss (g) and magnetizing (b) admittance at the from-bus, pu on s_base.
+_SHUNT_COLUMNS = [f"{kind}_sh_{phase}" for kind in "gb" for phase in "abc"]
 _BRANCH_COLUMNS = [
     "fb",
     "tb",
     "from_name",
     "to_name",
     *_Z_COLUMNS,
+    *_B_COLUMNS,
+    *_SHUNT_COLUMNS,
     "primary_phase",
     "type",
     "name",
@@ -53,6 +59,22 @@ _BRANCH_COLUMNS = [
     "v_ln_base",
     "z_base",
     "phases",
+]
+_BAT_COLUMNS = [
+    "id",
+    "name",
+    "s_max",
+    "phases",
+    "energy_capacity",
+    "min_soc",
+    "max_soc",
+    "start_soc",
+    "charge_efficiency",
+    "discharge_efficiency",
+    "annual_cycle_limit",
+    "control_variable",
+    "p",
+    "q",
 ]
 _GEN_FIRST_COLUMNS = ("id", "name", "primary_phase", "control_variable", "gen_shape")
 _GEN_COLUMNS = [
@@ -138,6 +160,7 @@ def load_dss_model(
         bus_data=converter.bus_data,
         branch_data=converter.branch_data,
         gen_data=converter.gen_data,
+        bat_data=converter.bat_data,
         cap_data=converter.cap_data,
         reg_data=converter.reg_data,
     )
@@ -200,9 +223,13 @@ class DSSToCSVConverter:
         cvr_p: float = 0,
         cvr_q: float = 0,
         voltage_bases: Optional[dict[str, float]] = None,
+        schedule_steps: int = 96,
+        delta_to_wye: bool = False,
     ) -> None:
         self.dss = dss
         self.dssfile = dssfile
+        self.schedule_steps = schedule_steps
+        self._shape_cache: dict[str, np.ndarray] = {}
         self.s_base = s_base
         self.v_min = v_min
         self.v_max = v_max
@@ -213,7 +240,28 @@ class DSSToCSVConverter:
             for name, value in (voltage_bases or {}).items()
         }
         self.dss.Text.Command(f"Redirect {self.dssfile}")
+        if delta_to_wye:
+            self._convert_delta_to_wye()
         self._refresh()
+
+    def _convert_delta_to_wye(self) -> None:
+        """Make 3-phase transformer windings wye with no neutral node, then re-solve."""
+        names = []
+        self.dss.Transformers.First()
+        for _ in range(self.dss.Transformers.Count()):
+            if self.dss.CktElement.NumPhases() == 3:
+                names.append(self.dss.Transformers.Name())
+            self.dss.Transformers.Next()
+        for name in names:
+            self.dss.Transformers.Name(name)
+            bus_names = list(self.dss.CktElement.BusNames())
+            for winding, bus in enumerate(bus_names, start=1):
+                if bus.endswith(".1.2.3.4"):
+                    bus = bus[: -len(".4")]
+                self.dss.Text.Command(
+                    f"Edit Transformer.{name} wdg={winding} conn=wye bus={bus}"
+                )
+        self.dss.Solution.Solve()
 
     def update(self) -> None:
         """Re-solve the circuit and rebuild every derived table."""
@@ -229,11 +277,16 @@ class DSSToCSVConverter:
         # before any element-iteration loops below.
         self._nominal_voltage_bases = self._build_nominal_voltage_bases()
 
+        self._schedule_columns: dict[str, np.ndarray] = {}
         self.branch_data = self.get_branch_data()
         self.bus_data = self.get_bus_data()
         self.gen_data = self.get_gen_data()
+        self.bat_data = self.get_bat_data()
         self.cap_data = self.get_cap_data()
         self.reg_data = self.get_reg_data()
+        self.schedules = pd.DataFrame(
+            {"time": np.arange(self.schedule_steps), **self._schedule_columns}
+        )
         self.v_solved = self.get_v_solved()
         self.s_solved = self.get_apparent_power_flows()
 
@@ -581,6 +634,7 @@ class DSSToCSVConverter:
             )
 
         bases: dict[str, float] = {}
+        unanchored: list[set[str]] = []
         for component in nx.connected_components(graph):
             explicit = [
                 (self._voltage_base_overrides[n.lower()], "explicit override")
@@ -603,14 +657,57 @@ class DSSToCSVConverter:
                         )
                 bases.update(dict.fromkeys(component, voltage))
             else:
-                # No anchor: keep the DSS reporting base.
-                for name in component:
-                    self.dss.Circuit.SetActiveBus(name)
-                    voltage = float(self.dss.Bus.kVBase()) * 1000.0
-                    if not np.isfinite(voltage) or voltage <= 0:
-                        raise ValueError(f"No valid voltage base for bus {name!r}")
-                    bases[name] = voltage
+                unanchored.append(component)
+
+        self._propagate_bases_through_transformers(bases, unanchored)
+        for component in unanchored:
+            for name in component:
+                if name in bases:
+                    continue
+                # Not reachable from an anchor: keep the DSS reporting base.
+                self.dss.Circuit.SetActiveBus(name)
+                voltage = float(self.dss.Bus.kVBase()) * 1000.0
+                if not np.isfinite(voltage) or voltage <= 0:
+                    raise ValueError(f"No valid voltage base for bus {name!r}")
+                bases[name] = voltage
         return bases
+
+    def _propagate_bases_through_transformers(
+        self, bases: dict[str, float], unanchored: list[set[str]]
+    ) -> None:
+        """Give unanchored components base = upstream base x nameplate kV ratio.
+
+        The per-unit turns ratio then equals the tap even when the nameplate
+        differs from the DSS reporting bases.
+        """
+        windings = []
+        flag = self.dss.Transformers.First()
+        while flag:
+            name = self.dss.CktElement.Name().lower().split(".")[1]
+            if name not in self.center_taps and self.dss.CktElement.Enabled():
+                buses = [self._bus_of(s) for s in self.dss.CktElement.BusNames()]
+                kvs = []
+                for w in range(1, len(buses) + 1):
+                    self.dss.Transformers.Wdg(w)
+                    kvs.append(float(self.dss.Transformers.kV()))
+                windings.append(list(zip(buses, kvs)))
+            flag = self.dss.Transformers.Next()
+
+        component_of = {bus: comp for comp in unanchored for bus in comp}
+        changed = True
+        while changed:
+            changed = False
+            for xfmr in windings:
+                for known_bus, known_kv in xfmr:
+                    if known_bus not in bases:
+                        continue
+                    for bus, kv in xfmr:
+                        comp = component_of.get(bus)
+                        if comp is None or bus in bases:
+                            continue
+                        voltage = bases[known_bus] * kv / known_kv
+                        bases.update(dict.fromkeys(comp, voltage))
+                        changed = True
 
     def _discover_neutral_nodes(self) -> dict[str, set[int]]:
         """Find extra neutral nodes on three-phase wye transformer windings.
@@ -679,6 +776,29 @@ class DSSToCSVConverter:
         full[np.ix_(idx, idx)] = z
         return full.real, full.imag
 
+    def _get_line_susceptance(self) -> np.ndarray:
+        """Total shunt susceptance (siemens) per phase a, b, c for the active line.
+
+        OpenDSS C1/C0/CMatrix are nF per line-length unit (same unit as Length),
+        so C_total = CMatrix * Length nF. CMatrix is a nodal capacitance matrix
+        (negative off-diagonals). Under balanced 120-degree voltages, the
+        reactive injection of phase i is w*V^2*(C_ii - 0.5*sum_{j!=i} C_ij).
+        """
+        _, nodes = self._split_bus_spec(self.dss.Lines.Bus1())
+        nodes = [n for n in nodes if n != 0] or list(
+            range(1, self.dss.Lines.Phases() + 1)
+        )
+        n = len(nodes)
+        c_nf = (
+            np.array(self.dss.Lines.CMatrix()).reshape(n, n) * self.dss.Lines.Length()
+        )
+        c_eff = np.diag(c_nf) - 0.5 * (c_nf.sum(axis=1) - np.diag(c_nf))
+        omega = 2 * np.pi * self.dss.Solution.Frequency()
+
+        b = np.zeros(3)
+        b[np.array(nodes) - 1] = omega * c_eff * 1e-9
+        return b
+
     def _get_reactor_zmatrix(self) -> tuple[np.ndarray, np.ndarray]:
         if self.dss.Reactors.Phases() != 3:
             raise NotImplementedError(
@@ -692,10 +812,34 @@ class DSSToCSVConverter:
         v_base = self.dss.Transformers.kV() / np.sqrt(3) * 1000
         s_base = self.dss.Transformers.kVA() * 1000 / 3
         z_base = v_base**2 / s_base
-
+        # OpenDSS defines %R/%X on the tapped winding voltage, so ohms scale with tap^2.
+        z_base *= float(self.dss.Transformers.Tap()) ** 2
         x = self.dss.Transformers.Xhl() / 100 * z_base
         r = self.dss.Transformers.R() / 100 * z_base * 2
         return np.eye(3) * r, np.eye(3) * x
+
+    def _get_transformer_shunt(self, phases: str) -> dict[str, float]:
+        """No-load loss and magnetizing admittance of the active transformer.
+
+        OpenDSS models %noloadloss and %imag as P and Q drawn at rated voltage,
+        both as a percent of kVA. The total is split evenly over ``phases``.
+        """
+        kva = self.dss.Transformers.kVA()
+        p_pu = (
+            float(self.dss.Properties.Value("%noloadloss"))
+            / 100
+            * kva
+            * 1000
+            / self.s_base
+        )
+        q_pu = (
+            float(self.dss.Properties.Value("%imag")) / 100 * kva * 1000 / self.s_base
+        )
+        shunt = dict.fromkeys(_SHUNT_COLUMNS, np.nan)
+        for phase in phases:
+            shunt[f"g_sh_{phase}"] = p_pu / len(phases)
+            shunt[f"b_sh_{phase}"] = q_pu / len(phases)
+        return shunt
 
     # ------------------------------------------------------------------
     # Branch data
@@ -713,6 +857,8 @@ class DSSToCSVConverter:
         primary_phase: str = "",
         z_abc: Optional[tuple[np.ndarray, np.ndarray]] = None,
         z_split: Optional[np.ndarray] = None,
+        b_abc: Optional[np.ndarray] = None,
+        shunt: Optional[dict[str, float]] = None,
     ) -> dict:
         """One branch row, normalized on the receiving bus's nominal voltage base.
 
@@ -729,6 +875,11 @@ class DSSToCSVConverter:
             to_name=to_name,
         )
         row.update(dict.fromkeys(_Z_COLUMNS, np.nan))
+        row.update(dict.fromkeys(_B_COLUMNS, np.nan))
+        row.update(shunt or dict.fromkeys(_SHUNT_COLUMNS, np.nan))
+        if b_abc is not None:
+            for column, siemens in zip(_B_COLUMNS, b_abc):
+                row[column] = float(siemens) * z_base
 
         if z_abc is not None:
             r, x = z_abc
@@ -765,21 +916,31 @@ class DSSToCSVConverter:
         return ""
 
     def _simple_branch_row(
-        self, z_abc: tuple[np.ndarray, np.ndarray], element_type: str, element_name: str
+        self,
+        z_abc: tuple[np.ndarray, np.ndarray],
+        element_type: str,
+        element_name: str,
+        b_abc: Optional[np.ndarray] = None,
+        shunt_from_transformer: bool = False,
     ) -> dict:
         """Branch row for the active two-terminal line/transformer/reactor."""
         specs = self.dss.CktElement.BusNames()
         from_name, to_name = self._orient_edge(
             self._bus_of(specs[0]), self._bus_of(specs[1])
         )
+        phases = self._branch_phases(from_name, specs)
         return self._branch_row(
             from_name=from_name,
             to_name=to_name,
             element_type=element_type,
             element_name=element_name,
             status=self._switch_status(),
-            phases=self._branch_phases(from_name, specs),
+            phases=phases,
             z_abc=z_abc,
+            b_abc=b_abc,
+            shunt=self._get_transformer_shunt(phases)
+            if shunt_from_transformer
+            else None,
         )
 
     def append_lines(self, rows: list[dict]) -> None:
@@ -793,7 +954,10 @@ class DSSToCSVConverter:
             element_type = "switch" if self.dss.Lines.IsSwitch() else "line"
             rows.append(
                 self._simple_branch_row(
-                    self._get_line_zmatrix(), element_type, self.dss.Lines.Name()
+                    self._get_line_zmatrix(),
+                    element_type,
+                    self.dss.Lines.Name(),
+                    b_abc=self._get_line_susceptance(),
                 )
             )
 
@@ -804,7 +968,10 @@ class DSSToCSVConverter:
                 continue  # handled by append_center_tap_transformers
             rows.append(
                 self._simple_branch_row(
-                    self._get_transformer_zmatrix(), "transformer", name
+                    self._get_transformer_zmatrix(),
+                    "transformer",
+                    name,
+                    shunt_from_transformer=True,
                 )
             )
 
@@ -919,7 +1086,7 @@ class DSSToCSVConverter:
             if not np.isclose(
                 base_ratio,
                 data["secondary_voltage"] / data["primary_voltage"],
-                rtol=1e-6,
+                rtol=1e-4,  # matches the anchor-conflict tolerance in _build_nominal_voltage_bases
             ):
                 raise ValueError(
                     f"{name}: selected voltage bases do not match the rated "
@@ -941,6 +1108,7 @@ class DSSToCSVConverter:
                     phases="s1s2",
                     primary_phase=data["primary_phase"],
                     z_split=impedance,
+                    shunt=self._get_transformer_shunt(data["primary_phase"]),
                 )
             )
 
@@ -952,7 +1120,7 @@ class DSSToCSVConverter:
         self.append_center_tap_transformers(rows)
         self.append_reactors(rows)
 
-        agg = {col: "sum" for col in _Z_COLUMNS}
+        agg = {col: "sum" for col in [*_Z_COLUMNS, *_B_COLUMNS, *_SHUNT_COLUMNS]}
         agg.update(
             fb="max",
             tb="max",
@@ -989,6 +1157,18 @@ class DSSToCSVConverter:
             ]
             return "".join(legs) or "s1s2"
         return self._phases_from_nodes(nodes)
+
+    def _energized_phases(self, bus_id: int, phases: str) -> str:
+        """Drop primary phases that no closed branch at the bus carries (e.g. open switches)."""
+        if "s" in phases:
+            return phases
+        touching = self.branch_data[
+            ((self.branch_data.fb == bus_id) | (self.branch_data.tb == bus_id))
+            & (self.branch_data.status != "OPEN")
+        ]
+        carried = "".join(touching.phases)
+        kept = "".join(p for p in phases if p in carried)
+        return kept or phases
 
     def get_bus_data(self) -> pd.DataFrame:
         """Bus table (one row per bus), merged with per-bus load totals."""
@@ -1031,9 +1211,13 @@ class DSSToCSVConverter:
                 )
             )
 
+        for row in rows:
+            row["phases"] = self._energized_phases(row["id"], row["phases"])
+
         bus_df = pd.merge(load_df, pd.DataFrame(rows), on="id", how="outer")
         bus_df = bus_df.sort_values(by="id", ignore_index=True)
         bus_df["primary_phase"] = bus_df["primary_phase"].fillna("")
+        bus_df["load_shape"] = bus_df["load_shape"].fillna("")
         bus_df = bus_df.fillna(0)
         first = ["id", "name"]
         return bus_df[first + [c for c in bus_df.columns if c not in first]]
@@ -1101,6 +1285,12 @@ class DSSToCSVConverter:
             setters[etype](ename)
             specs = self.dss.CktElement.BusNames()
             bus1, bus2 = self._bus_of(specs[0]), self._bus_of(specs[1])
+            # Disabled/open elements are absent from the topology but present in the flat arrays.
+            if (
+                bus1 not in self.bus_names_to_index_map
+                or bus2 not in self.bus_names_to_index_map
+            ):
+                continue
 
             if n_phases < 3:
                 nodes = [int(n) for n in specs[0].split(".")[1:] if n != "0"]
@@ -1237,7 +1427,13 @@ class DSSToCSVConverter:
     # ------------------------------------------------------------------
 
     def _build_gen_row(
-        self, bus_name: str, gen_name: str, kw: float, kvar: float, kva_rated: float
+        self,
+        bus_name: str,
+        gen_name: str,
+        kw: float,
+        kvar: float,
+        kva_rated: float,
+        shape: str = "",
     ) -> dict:
         """gen_data row for one generator or PV system (all values in pu)."""
         scale = 1000 / self.s_base
@@ -1250,7 +1446,7 @@ class DSSToCSVConverter:
             primary_phase="",
             phases="",
             control_variable="",
-            gen_shape="PV",
+            gen_shape=shape.lower(),
         )
 
         def assign(phase: str, share: float) -> None:
@@ -1307,26 +1503,103 @@ class DSSToCSVConverter:
                     self.dss.PVsystems.Pmpp(),
                     self.dss.PVsystems.kvar(),
                     self.dss.PVsystems.kVARated(),
+                    self.dss.PVsystems.yearly(),
                 )
             )
             flag = self.dss.PVsystems.Next()
 
         if not rows:
             return pd.DataFrame({col: [] for col in _GEN_COLUMNS})
-        return pd.DataFrame(rows).groupby("id", as_index=False).agg(_gen_agg())
+        gen_df = pd.DataFrame(rows)
+        power_cols = [c for c in ("p_a", "p_b", "p_c", "p_s1", "p_s2") if c in gen_df]
+        gen_df["weight"] = gen_df[power_cols].sum(axis=1)
+        groups = {
+            bus: list(zip(g["weight"], g["gen_shape"]))
+            for bus, g in gen_df.groupby("id")
+        }
+        shape_of_id = self._link_shapes(groups, "gen")
+        gen_df["gen_shape"] = gen_df["id"].map(shape_of_id).fillna("")
+        gen_df = gen_df.drop(columns="weight")
+        return gen_df.groupby("id", as_index=False).agg(_gen_agg())
+
+    # ------------------------------------------------------------------
+    # Batteries
+    # ------------------------------------------------------------------
+
+    def _storage_property(self, name: str, prop: str) -> float:
+        self.dss.Text.Command(f"? Storage.{name}.{prop}")
+        return float(self.dss.Text.Result())
+
+    def _build_bat_row(self, name: str) -> dict:
+        """bat_data row (pu) for one Storage element; p/q are its solved discharge power."""
+        element = self.dss.CktElement.BusNames()[0]
+        bus_name = self._bus_of(element)
+        if bus_name in self.secondary_buses:
+            raise NotImplementedError(f"Storage.{name} on secondary bus {bus_name}")
+        nodes = element.split(".")[1:]
+        n_phases = len(nodes) if 0 < len(nodes) < 3 else 3
+        active = np.array(nodes).astype(int) - 1 if n_phases < 3 else [0, 1, 2]
+        scale = 1000 / self.s_base
+        # CktElement.Powers is consumption; discharge is its negative.
+        powers = np.array(self.dss.CktElement.Powers())
+        return dict(
+            id=self.bus_names_to_index_map[bus_name],
+            name=name,
+            s_max=self._storage_property(name, "kVA") * scale,
+            phases="".join("abc"[k] for k in active),
+            energy_capacity=self._storage_property(name, "kWhrated") * scale,
+            min_soc=self._storage_property(name, "%reserve") / 100,
+            max_soc=1.0,
+            start_soc=self._storage_property(name, "%stored") / 100,
+            charge_efficiency=self._storage_property(name, "%effcharge") / 100,
+            discharge_efficiency=self._storage_property(name, "%effdischarge") / 100,
+            annual_cycle_limit=365,
+            control_variable="P",
+            p=-powers[0::2].sum() * scale,
+            q=-powers[1::2].sum() * scale,
+        )
+
+    def get_bat_data(self) -> pd.DataFrame:
+        """One row per bus: Storage elements at the same bus are combined."""
+        rows = []
+        flag = self.dss.Storages.First()
+        while flag:
+            rows.append(self._build_bat_row(self.dss.Storages.Name()))
+            flag = self.dss.Storages.Next()
+        if not rows:
+            return pd.DataFrame({col: [] for col in _BAT_COLUMNS})
+        additive = ["s_max", "energy_capacity", "p", "q"]
+        agg = {col: "first" for col in _BAT_COLUMNS if col != "id"}
+        agg.update(dict.fromkeys(additive, "sum"))
+        agg["phases"] = lambda s: "".join(sorted(set("".join(s))))
+        return pd.DataFrame(rows).groupby("id", as_index=False).agg(agg)[_BAT_COLUMNS]
 
     # ------------------------------------------------------------------
     # Capacitors and regulators
     # ------------------------------------------------------------------
+
+    def _rated_to_base_ratio(
+        self, bus: str, rated_kv: float, is_delta: bool = False
+    ) -> float:
+        """Bus base / element's rated kV (line-to-line if multiphase or delta); 1.0 on secondaries."""
+        if bus in self.secondary_buses:
+            return 1.0
+        line_to_line = is_delta or self.dss.CktElement.NumPhases() > 1
+        rated_ln = rated_kv * 1000 / (3**0.5 if line_to_line else 1)
+        return float(self._nominal_voltage_bases[bus]) / rated_ln
 
     def get_cap_data(self) -> pd.DataFrame:
         columns = ["id", "name", "q_a", "q_b", "q_c", "phases"]
         rows = []
         flag = self.dss.Capacitors.First()
         while flag:
+            if not any(self.dss.Capacitors.States()):  # switched off in OpenDSS
+                flag = self.dss.Capacitors.Next()
+                continue
             bus, nodes = self._split_bus_spec(self.dss.CktElement.BusNames()[0])
             phases = self._phases_from_nodes(nodes)  # no nodes -> abc
             q_pu = self.dss.Capacitors.kvar() * 1000 / self.s_base / len(phases)
+            q_pu *= self._rated_to_base_ratio(bus, self.dss.Capacitors.kV()) ** 2
             row = dict(id=self.bus_names_to_index_map[bus], name=bus, phases=phases)
             row.update({f"q_{ph}": (q_pu if ph in phases else 0) for ph in "abc"})
             rows.append(row)
@@ -1356,6 +1629,9 @@ class DSSToCSVConverter:
             "tap_b",
             "tap_c",
             "phases",
+            "ratio_min",
+            "ratio_max",
+            "num_taps",
         ]
         reg_names: list[str] = []
         if len(self.dss.RegControls.AllNames()) != 0:
@@ -1365,22 +1641,28 @@ class DSSToCSVConverter:
         flag = self.dss.Transformers.First()
         while flag:
             name = self.dss.CktElement.Name().lower().split(".")[1]
-            if name in reg_names:
+            self.dss.Transformers.Wdg(2)
+            if name in reg_names or self.dss.Transformers.Tap() != 1:
                 specs = self.dss.CktElement.BusNames()
                 raw1, raw2 = self._bus_of(specs[0]), self._bus_of(specs[-1])
                 bus1, bus2 = self._orient_edge(raw1, raw2)
                 direction = 1 if (bus1, bus2) == (raw1, raw2) else -1
                 phases = self._phases_from_nodes(self._split_bus_spec(specs[0])[1])
                 self.dss.Transformers.Wdg(2)
-                tap = int(
-                    round((self.dss.Transformers.Tap() - 1) / 0.00625 * direction)
-                )
+                ratio_min = self.dss.Transformers.MinTap()
+                ratio_max = self.dss.Transformers.MaxTap()
+                num_taps = self.dss.Transformers.NumTaps()
+                step = (ratio_max - ratio_min) / num_taps
+                tap = int(round((self.dss.Transformers.Tap() - 1) / step * direction))
                 row = dict(
                     fb=self.bus_names_to_index_map[bus1],
                     tb=self.bus_names_to_index_map[bus2],
                     from_name=bus1,
                     to_name=bus2,
                     phases=phases,
+                    ratio_min=ratio_min,
+                    ratio_max=ratio_max,
+                    num_taps=num_taps,
                 )
                 row.update({f"tap_{ph}": tap for ph in phases})
                 rows.append(row)
@@ -1399,6 +1681,9 @@ class DSSToCSVConverter:
             tap_b=("tap_b", "max"),
             tap_c=("tap_c", "max"),
             phases=("phases", "sum"),
+            ratio_min=("ratio_min", "first"),
+            ratio_max=("ratio_max", "first"),
+            num_taps=("num_taps", "first"),
         )
         return df.sort_values(by="tb", ignore_index=True).fillna(0)
 
@@ -1416,48 +1701,170 @@ class DSSToCSVConverter:
             return 2 * z[0] + z[1], 2 * z[3] + z[4]
         return _LOAD_MODEL_CVR.get(model, (0, 0))
 
+    def _shape_values(self, name: str, kind: str = "p") -> np.ndarray:
+        """First `schedule_steps` multipliers of a loadshape (kind "p" or "q")."""
+        key = (name.lower(), kind)
+        if key not in self._shape_cache:
+            self.dss.LoadShape.Name(key[0])
+            values = np.array(self.dss.LoadShape.PMult())
+            if kind == "q":
+                q_values = np.array(self.dss.LoadShape.QMult())
+                # OpenDSS reuses PMult for kvar when qmult is not defined.
+                values = q_values if len(q_values) > 1 else values
+            is_constant = len(values) == 1  # interval is irrelevant
+            if is_constant:
+                values = np.repeat(values, self.schedule_steps)
+            interval = self.dss.LoadShape.SInterval()
+            step = self.dss.Solution.StepSize()
+            if interval != step and not is_constant:
+                raise ValueError(
+                    f"Loadshape {name!r} interval is {interval} s but the solution "
+                    f"step is {step} s; resampling is not supported"
+                )
+            if len(values) < self.schedule_steps:
+                raise ValueError(
+                    f"Loadshape {name!r} has {len(values)} points, "
+                    f"need {self.schedule_steps}"
+                )
+            self._shape_cache[key] = values[: self.schedule_steps]
+        return self._shape_cache[key]
+
+    def _blend_shapes(self, weights, shapes, kind: str = "p") -> np.ndarray:
+        """Weighted average of loadshapes (no shape counts as 1.0)."""
+        weights = np.asarray(weights, dtype=float)
+        curves = np.array(
+            [
+                self._shape_values(s, kind) if s else np.ones(self.schedule_steps)
+                for s in shapes
+            ]
+        )
+        return weights @ curves / weights.sum()
+
+    def _link_load_shapes(self, bus_loads: dict) -> dict:
+        """Add load schedule columns; return the load_shape name for each bus.
+
+        Buses whose kW and kvar multipliers differ get "<name>.p" and "<name>.q"
+        columns; the others share one "<name>" column.
+        """
+        shape_of_bus = {}
+        for bus, entries in bus_loads.items():
+            kws, kvars, shapes = zip(*entries)
+            if set(shapes) == {""}:
+                continue
+            p_curve = self._blend_shapes(kws, shapes, "p")
+            q_weights = kvars if sum(kvars) else kws
+            q_curve = self._blend_shapes(q_weights, shapes, "q")
+            name = shapes[0] if len(set(shapes)) == 1 else f"{bus}_load".lower()
+            if np.allclose(p_curve, q_curve):
+                self._schedule_columns[name] = p_curve
+            else:
+                self._schedule_columns[f"{name}.p"] = p_curve
+                self._schedule_columns[f"{name}.q"] = q_curve
+            shape_of_bus[bus] = name
+        return shape_of_bus
+
+    def _link_shapes(self, groups: dict, suffix: str) -> dict:
+        """Add schedule columns; return the shape name for each key in `groups`.
+
+        A key whose entries share one shape uses it directly. Otherwise a
+        kW-weighted blend is stored under "<key>_<suffix>" (no shape counts as 1.0).
+        """
+        shape_of_key = {}
+        for key, entries in groups.items():
+            names = {shape for _, shape in entries}
+            if names == {""}:
+                continue
+            if len(names) == 1:
+                shape = names.pop()
+                self._schedule_columns[shape] = self._shape_values(shape)
+            else:
+                shape = f"{key}_{suffix}".lower()
+                self._schedule_columns[shape] = self._blend_shapes(
+                    [kw for kw, _ in entries], [s for _, s in entries]
+                )
+            shape_of_key[key] = shape
+        return shape_of_key
+
     def _get_loads(self) -> pd.DataFrame:
         """Per-bus load totals (pu), including secondary-side loads."""
         scale = 1000 / self.s_base
         rows = []
+        bus_loads: dict[str, list[tuple[float, float, str]]] = {}
         flag = self.dss.Loads.First()
         while flag:
             specs = self.dss.CktElement.BusNames()
+            shape = self.dss.Loads.Yearly().lower()
             if len(specs) > 1:
                 raise ValueError("Multiple connected buses")
             bus, nodes = self._split_bus_spec(specs[0])
 
             cvr_p, cvr_q = self._load_cvr()
             row = dict.fromkeys(_LOAD_COLUMNS, 0)
-            row.update(id=self.bus_names_to_index_map[bus], cvr_p=cvr_p, cvr_q=cvr_q)
+            row.update(id=self.bus_names_to_index_map[bus])
 
-            power = np.array(self.dss.CktElement.Powers())
-            p, q = power[::2], power[1::2]
+            # Nominal (rated-voltage) power; the OPF applies cvr_p/cvr_q itself.
+            kw, kvar = self.dss.Loads.kW(), self.dss.Loads.kvar()
+            ratio = self._rated_to_base_ratio(
+                bus, self.dss.Loads.kV(), self.dss.Loads.IsDelta()
+            )
+            kw *= ratio**cvr_p
+            kvar *= ratio**cvr_q
+            row.update(
+                _kw=abs(kw),
+                _kvar=abs(kvar),
+                _cvr_p_kw=cvr_p * abs(kw),
+                _cvr_q_kvar=cvr_q * abs(kvar),
+            )
+            bus_loads.setdefault(bus, []).append((kw, kvar, shape))
 
             if bus in self.secondary_buses:
                 hot = sorted(n for n in nodes if n != 0)
                 if hot == [1, 2]:  # 240 V across both legs
-                    row["pl_s1s2"] = p[:2].sum() * scale
-                    row["ql_s1s2"] = q[:2].sum() * scale
+                    row["pl_s1s2"] = kw * scale
+                    row["ql_s1s2"] = kvar * scale
                 elif (
                     len(hot) == 1 and hot[0] in _SECONDARY_NODE_LEG
                 ):  # 120 V on one leg
                     leg = _SECONDARY_NODE_LEG[hot[0]]
-                    row[f"pl_{leg}"] = p[0] * scale
-                    row[f"ql_{leg}"] = q[0] * scale
+                    row[f"pl_{leg}"] = kw * scale
+                    row[f"ql_{leg}"] = kvar * scale
+            elif self.dss.Loads.IsDelta() and len(nodes) >= 2 and 0 not in nodes:
+                # Each line-to-line element becomes line-to-neutral injections (balanced voltage).
+                # OpenDSS uses n_phases elements on consecutive node pairs, wrapping around.
+                n_elements = self.dss.CktElement.NumPhases()
+                s_element = complex(kw, kvar) / n_elements
+                for k in range(n_elements):
+                    i, j = nodes[k], nodes[(k + 1) % len(nodes)]
+                    sign = 1 if (j - i) % 3 == 1 else -1
+                    shift = np.exp(1j * sign * np.pi / 6) / np.sqrt(3)
+                    for node, s in (
+                        (i, s_element * shift.conjugate()),
+                        (j, s_element * shift),
+                    ):
+                        row[f"pl_{'abc'[node - 1]}"] += s.real * scale
+                        row[f"ql_{'abc'[node - 1]}"] += s.imag * scale
             else:
                 phases = "".join("abc"[n - 1] for n in nodes) if nodes else "abc"
-                for k, ph in enumerate(phases):
-                    row[f"pl_{ph}"] = p[k] * scale
-                    row[f"ql_{ph}"] = q[k] * scale
+                for ph in phases:
+                    row[f"pl_{ph}"] = kw / len(phases) * scale
+                    row[f"ql_{ph}"] = kvar / len(phases) * scale
 
             rows.append(row)
             flag = self.dss.Loads.Next()
 
         columns = ["id", *_LOAD_COLUMNS, "cvr_p", "cvr_q"]
         if not rows:
-            return pd.DataFrame(columns=columns)
-        return pd.DataFrame(rows).groupby("id", as_index=False).sum()[columns].fillna(0)
+            return pd.DataFrame(columns=[*columns, "load_shape"])
+        load_df = pd.DataFrame(rows).groupby("id", as_index=False).sum()
+        # Several loads on one bus: CVR exponents are the kW/kvar-weighted average.
+        load_df["cvr_p"] = (load_df["_cvr_p_kw"] / load_df["_kw"]).fillna(0)
+        load_df["cvr_q"] = (load_df["_cvr_q_kvar"] / load_df["_kvar"]).fillna(0)
+        load_df = load_df[columns]
+        shape_of_bus = self._link_load_shapes(bus_loads)
+        load_df["load_shape"] = load_df["id"].map(
+            {self.bus_names_to_index_map[b]: s for b, s in shape_of_bus.items()}
+        )
+        return load_df.fillna({c: 0 for c in columns})
 
     # ------------------------------------------------------------------
     # Output / write-back
@@ -1466,7 +1873,15 @@ class DSSToCSVConverter:
     def to_csv(self, dir_name: Optional[str] = None, overwrite: bool = True) -> None:
         out = Path(dir_name or "testfiles")
         out.mkdir(parents=True, exist_ok=overwrite)
-        for key in ("branch_data", "bus_data", "cap_data", "gen_data", "reg_data"):
+        for key in (
+            "branch_data",
+            "bus_data",
+            "cap_data",
+            "gen_data",
+            "bat_data",
+            "reg_data",
+            "schedules",
+        ):
             getattr(self, key).to_csv(out / f"{key}.csv", index=False)
 
     def _update_gens(
@@ -1648,7 +2063,7 @@ class DSSToCSVConverter:
             self.dss.Circuit.SetActiveElement(full_name)
             specs = list(self.dss.CktElement.BusNames())
             n_term = int(self.dss.CktElement.NumTerminals())
-            if self._is_open(n_term):
+            if not self.dss.CktElement.Enabled() or self._is_open(n_term):
                 continue
 
             b1, b2 = canonical_bus(specs[0]), canonical_bus(specs[1])

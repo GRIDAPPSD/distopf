@@ -1347,6 +1347,7 @@ def create_case(
     ignore_bat: bool = False,
     ignore_cap: bool = False,
     ignore_reg: bool = False,
+    delta_to_wye: bool = False,
 ) -> Case:
     """
     Create a Case object from various input formats.
@@ -1367,6 +1368,9 @@ def create_case(
         - "dss" or "opendss": OpenDSS file
         - "cim": CIM XML file
         - None: Auto-detect based on path
+    delta_to_wye : bool
+        OpenDSS input only: rewrite 3-phase transformer windings as wye before
+        converting, since the OPF models have no delta model.
 
     Returns
     -------
@@ -1418,6 +1422,7 @@ def create_case(
             ignore_bat=ignore_bat,
             ignore_cap=ignore_cap,
             ignore_reg=ignore_reg,
+            delta_to_wye=delta_to_wye,
         )
     elif model_type == "cim":
         case = create_case_from_cim(
@@ -1674,6 +1679,7 @@ def create_case_from_dss(
     ignore_bat: bool = False,
     ignore_cap: bool = False,
     ignore_reg: bool = False,
+    delta_to_wye: bool = False,
 ) -> Case:
     """Enhanced version with better error handling."""
 
@@ -1690,13 +1696,18 @@ def create_case_from_dss(
         # Lazy import to avoid loading opendssdirect at module load time
         from distopf.dss_importer import DSSToCSVConverter
 
-        dss_parser = DSSToCSVConverter(data_path)
+        dss_parser = DSSToCSVConverter(
+            data_path,
+            schedule_steps=start_step + n_steps,
+            delta_to_wye=delta_to_wye,
+        )
         case = Case(
             dss_parser.branch_data,
             dss_parser.bus_data,
             dss_parser.gen_data,
             dss_parser.cap_data,
             dss_parser.reg_data,
+            schedules=dss_parser.schedules,
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,
