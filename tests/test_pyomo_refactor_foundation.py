@@ -186,6 +186,14 @@ def test_named_battery_tables_work_through_case():
     assert model.bat_bus_by_device == {"bat": int(bus["id"])}
 
 
+def test_generator_type_column_is_accepted():
+    """`type` labels the generator kind; it is a recognized (currently unused) column."""
+    case = create_case(CASES_DIR / "csv" / "ieee123_bat")
+    assert "type" in case.gen_data.columns
+    model = create_lindist_model(case)
+    assert len(model.gen_bus_by_device) == len(case.gen_data)
+
+
 @pytest.mark.parametrize("controlled", [False, True])
 def test_regulator_ratios_and_tap_changes(capacitor_model, controlled):
     model = capacitor_model

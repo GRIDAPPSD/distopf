@@ -208,14 +208,15 @@ SCENARIOS = [
         "formulation": "branchflow",
         "requires_ipopt": True,
     },
-    # {
-    #     "id": "ieee123_bat_nlp_loss",
-    #     "case": "ieee123_bat",
-    #     "method": "opf",
-    #     "objective": "loss_min",
-    #     "formulation": "branchflow",
-    #     "requires_ipopt": True,
-    # },
+    {
+        "id": "ieee123_bat_nlp_loss",
+        "case": "ieee123_bat",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "pyomo",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
     # ── Edge cases ──
     {
         "id": "ieee123_nosched_mat_Q",
