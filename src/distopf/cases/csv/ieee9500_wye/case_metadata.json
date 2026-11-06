@@ -8,16 +8,14 @@
   "start_step": 0,
   "n_steps": 1,
   "delta_t": 1,
-  "ignore_schedule": true,
+  "ignore_schedule": false,
   "ignore_gen": false,
-  "ignore_bat": true,
+  "ignore_bat": false,
   "ignore_cap": false,
   "ignore_reg": false,
   "generator_controls": {
     "": 187
   },
-  "schedule_columns": [
-    "M"
-  ],
+  "schedule_columns": [],
   "schedule_summary": {}
 }
