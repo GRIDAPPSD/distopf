@@ -115,7 +115,8 @@ def _voltage_drop_matrices(m: CvxModel):
             add(i, i, 2 * m.r[fb, tb, ph + ph], 2 * m.x[fb, tb, ph + ph])
             j = bp_pos.get((fb, tb, other))
             if j is not None:
-                add(i, j, 2 * m.r[fb, tb, "s1s2"], 2 * m.x[fb, tb, "s1s2"])
+                # Flipped-s2 frame: physical mutual impedance enters negated.
+                add(i, j, -2 * m.r[fb, tb, "s1s2"], -2 * m.x[fb, tb, "s1s2"])
             continue
         a = ph
         idx = "abc".index(a)

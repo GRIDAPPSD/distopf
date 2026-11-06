@@ -45,9 +45,10 @@ def _voltage_drop_triplex_terms(m: CvxModel, fb, tb, ph, t):
     dv = 2 * r11 * m.p_flow[fb, tb, ph, t] + 2 * x11 * m.q_flow[fb, tb, ph, t]
     if (fb, tb, other) not in m.branch_phase_set:
         return dv
+    # Flows use the flipped-s2 frame, so the physical mutual impedance enters negated.
     r12 = m.r[fb, tb, "s1s2"]
     x12 = m.x[fb, tb, "s1s2"]
-    dvx = 2 * r12 * m.p_flow[fb, tb, other, t] + 2 * x12 * m.q_flow[fb, tb, other, t]
+    dvx = -2 * r12 * m.p_flow[fb, tb, other, t] - 2 * x12 * m.q_flow[fb, tb, other, t]
     return dv + dvx
 
 
