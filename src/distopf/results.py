@@ -392,7 +392,8 @@ class PowerFlowResult:
         self,
         title: str = "Voltage vs Distance from Source",
         color_by: str = "algorithm",
-        include_secondary_phases: bool = False,
+        include_secondary_phases: bool = True,
+        t=None,
     ):
         """Plot voltage magnitude vs nodal distance from source bus.
 
@@ -403,7 +404,9 @@ class PowerFlowResult:
         color_by : str, optional
             Column name to color by. Default: "algorithm"
         include_secondary_phases : bool, optional
-            If True, include secondary phases (s1, s2). Default: False
+            If False, only phases a, b, c are plotted. Default: True
+        t : int, optional
+            Time step to plot. Defaults to the first one.
 
         Returns
         -------
@@ -426,6 +429,7 @@ class PowerFlowResult:
             title=title,
             color_by=color_by,
             include_secondary_phases=include_secondary_phases,
+            t=t,
         )
 
     def plot_line_flow_vs_distance(
@@ -433,7 +437,8 @@ class PowerFlowResult:
         power_type: str = "active",
         title: str = "Line Flow vs Distance from Source",
         color_by: str = "algorithm",
-        include_secondary_phases: bool = False,
+        include_secondary_phases: bool = True,
+        t=None,
     ):
         """Plot line flow vs nodal distance from source bus.
 
@@ -446,7 +451,9 @@ class PowerFlowResult:
         color_by : str, optional
             Column name to color by. Default: "algorithm"
         include_secondary_phases : bool, optional
-            If True, include secondary phases (s1, s2). Default: False
+            If False, only phases a, b, c are plotted. Default: True
+        t : int, optional
+            Time step to plot. Defaults to the first one.
 
         Returns
         -------
@@ -456,34 +463,21 @@ class PowerFlowResult:
         ------
         RuntimeError
             If no case reference or power flow results available
+        ValueError
+            If power_type is not 'active' or 'reactive'
         """
         if self.case is None:
             raise RuntimeError("No case reference available in result.")
-
-        if power_type.lower() == "active":
-            if self.active_power_flows is None:
-                raise RuntimeError("No active power flow results available.")
-            flow_data = self.active_power_flows
-            flow_name = "Active Power"
-        elif power_type.lower() == "reactive":
-            if self.reactive_power_flows is None:
-                raise RuntimeError("No reactive power flow results available.")
-            flow_data = self.reactive_power_flows
-            flow_name = "Reactive Power"
-        else:
-            raise ValueError(
-                f"power_type must be 'active' or 'reactive', got '{power_type}'"
-            )
-
         from distopf.plot import plot_line_flow_vs_distance
 
         return plot_line_flow_vs_distance(
             self.case,
-            flow_data,
-            flow_name=flow_name,
+            self,
             title=title,
             color_by=color_by,
             include_secondary_phases=include_secondary_phases,
+            t=t,
+            power_type=power_type.lower(),
         )
 
 

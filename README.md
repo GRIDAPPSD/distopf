@@ -320,7 +320,7 @@ Battery and device fields include `battery_active_power`, `battery_reactive_powe
 
 #### Plotting and Dual Variables
 
-The public plotting methods return Plotly figures: `plot_voltages(t=None)`, `plot_power_flows(t=None)`, `plot_gens(t=None)`, `plot_batteries()`, `plot_schedules()`, `plot_network(v_min=0.95, v_max=1.05, show_phases="abc", show_reactive_power=False, t=None)`, `plot_voltage_vs_distance(title=..., color_by="algorithm", include_secondary_phases=False)`, and `plot_line_flow_vs_distance(power_type="active", title=..., color_by="algorithm", include_secondary_phases=False)`. Methods that require unavailable result data or a case reference raise `RuntimeError`.
+The public plotting methods return Plotly figures: `plot_voltages(t=None)`, `plot_power_flows(t=None)`, `plot_gens(t=None)`, `plot_batteries()`, `plot_schedules()`, `plot_network(v_min=0.95, v_max=1.05, show_phases="abc", show_reactive_power=False, t=None)`, `plot_voltage_vs_distance(title=..., color_by="algorithm", include_secondary_phases=True, t=None)`, and `plot_line_flow_vs_distance(power_type="active", title=..., color_by="algorithm", include_secondary_phases=True, t=None)`. Methods that require unavailable result data or a case reference raise `RuntimeError`.
 
 When running with `duals=True` using the Pyomo wrapper, dual variables are accessible on the result object. The unified names are:
 
