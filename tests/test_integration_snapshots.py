@@ -6,7 +6,7 @@ alters numerical results, the affected scenario will fail with a clear diff.
 
 Reference data is stored in tests/integration_references.json.
 
-To regenerate after intentional changes:
+To regenerate after intentional changes, delete the reference file, then run:
     uv run python tests/test_integration_snapshots.py
 """
 
@@ -499,6 +499,10 @@ def test_integration_snapshot(scenario, references):
 def generate_all_references():
     """Run every scenario and write reference metrics to JSON."""
     refs = {}
+    if REFERENCE_FILE.exists():
+        raise RuntimeError(
+            f"Reference file {REFERENCE_FILE} already exists. Delete or rename it first if you want to regenerate references."
+        )
     for scenario in SCENARIOS:
         sid = scenario["id"]
         if scenario.get("requires_ipopt") and not _ipopt_available:
