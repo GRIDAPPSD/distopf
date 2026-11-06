@@ -70,13 +70,6 @@ from distopf.utils.ngon import ngon_line_equations
 _PHASES = "abc"
 _REQUIRED = {"device_name", "bus_name", "phases", "dc_bus"}
 _LEGACY = {"id", "name", "bus_id"}
-_KNOWN = (
-    _REQUIRED
-    | {"control_variable", "balanced_phases"}
-    | {f"{k}_{p}" for k in ("p", "q") for p in _PHASES}
-    | {f"s_{p}_max" for p in _PHASES}
-    | {f"q_{p}_{b}" for p in _PHASES for b in ("min", "max")}
-)
 
 
 # --------------------------------------------------------------------------- #
@@ -104,7 +97,6 @@ def validate_mpssd_data(
         data,
         "mpssd",
         _REQUIRED,
-        _KNOWN,
         _LEGACY,
         "devices are identified by 'device_name' and buses by 'bus_name'",
     )

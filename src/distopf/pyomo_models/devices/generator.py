@@ -76,15 +76,6 @@ _PHASES = ("a", "b", "c", "s1", "s2")
 _DEFAULT_SHAPE = "PV"
 _REQUIRED = {"device_name", "bus_name", "phases"}
 _LEGACY = {"id", "name", "bus_id"}
-# "type" labels the kind of generator (e.g. pv, diesel). It is accepted but not used
-# yet; it is reserved so that generator types can behave differently later.
-_KNOWN = (
-    _REQUIRED
-    | {"control_variable", "gen_shape", "cost", "balanced", "s_base", "type"}
-    | {f"{k}_{p}" for k in ("p", "q") for p in _PHASES}
-    | {f"s_{p}_max" for p in _PHASES}
-    | {f"q_{p}_{b}" for p in _PHASES for b in ("min", "max")}
-)
 _P_FIXED = (ControlVariable.NONE, ControlVariable.Q)
 _Q_FIXED = (ControlVariable.NONE, ControlVariable.P)
 
@@ -268,7 +259,6 @@ def validate_gen_data(
         data,
         _TABLE,
         _REQUIRED,
-        _KNOWN,
         _LEGACY,
         "generators are identified by 'device_name' and buses by 'bus_name'",
     )

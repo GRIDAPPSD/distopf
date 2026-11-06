@@ -35,7 +35,6 @@ from distopf.pyomo_models.common.device_data import (
 
 _PHASES = ("a", "b", "c", "s1", "s2")
 _REQUIRED = {"device_name", "bus_name", "phases"}
-_KNOWN = _REQUIRED | {"s_base"} | {f"q_{phase}" for phase in _PHASES}
 
 
 def _capacitor_data(model: Any, case: Any) -> pd.DataFrame:
@@ -66,7 +65,6 @@ def validate_cap_data(data: pd.DataFrame, ctx: NetworkContext) -> None:
         data,
         "cap_data",
         _REQUIRED,
-        _KNOWN,
         {"id", "name", "bus_id"},
         "capacitors use 'device_name' and 'bus_name'",
     )

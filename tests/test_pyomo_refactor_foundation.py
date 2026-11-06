@@ -186,10 +186,12 @@ def test_named_battery_tables_work_through_case():
     assert model.bat_bus_by_device == {"bat": int(bus["id"])}
 
 
-def test_generator_type_column_is_accepted():
-    """`type` labels the generator kind; it is a recognized (currently unused) column."""
+def test_extra_device_columns_are_ignored():
+    """Columns the model does not use (e.g. a generator `type`) are never rejected."""
     case = create_case(CASES_DIR / "csv" / "ieee123_bat")
     assert "type" in case.gen_data.columns
+    for table in (case.gen_data, case.cap_data, case.bat_data):
+        table["extra_note"] = "not used by the model"
     model = create_lindist_model(case)
     assert len(model.gen_bus_by_device) == len(case.gen_data)
 
@@ -612,16 +614,17 @@ def test_mpssd_shared_parsing_rejects_blank_required_numbers(mpssd_data, column)
         )
 
 
-@pytest.mark.parametrize(
-    "column, message",
-    [("id", "removed columns"), ("typo", "unrecognized columns")],
-)
-def test_mpssd_uses_shared_structural_checks(mpssd_data, column, message):
-    mpssd_data[column] = 1
-    with pytest.raises(ValueError, match=message):
+def test_mpssd_uses_shared_structural_checks(mpssd_data):
+    mpssd_data["id"] = 1
+    with pytest.raises(ValueError, match="removed columns"):
         validate_mpssd_data(
             mpssd_data, {"151": 1}, {(1, phase) for phase in "abc"}, set()
         )
+
+
+def test_mpssd_ignores_extra_columns(mpssd_data):
+    mpssd_data["note"] = "anything"
+    validate_mpssd_data(mpssd_data, {"151": 1}, {(1, phase) for phase in "abc"}, set())
 
 
 def test_mpssd_shared_validation_aggregates_errors(mpssd_data):

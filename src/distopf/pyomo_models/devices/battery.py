@@ -33,20 +33,6 @@ from distopf.pyomo_models.common.device_data import (
 
 _PHASES = ("a", "b", "c", "s1", "s2")
 _REQUIRED = {"device_name", "bus_name", "phases", "s_max", "energy_capacity"}
-_KNOWN = _REQUIRED | {
-    "p",
-    "q",
-    "q_min",
-    "q_max",
-    "min_soc",
-    "max_soc",
-    "start_soc",
-    "charge_efficiency",
-    "discharge_efficiency",
-    "annual_cycle_limit",
-    "control_variable",
-    "s_base",
-}
 
 
 def _battery_data(model: Any, case: Any) -> pd.DataFrame:
@@ -72,7 +58,6 @@ def validate_bat_data(data: pd.DataFrame, ctx: NetworkContext) -> None:
         data,
         "bat_data",
         _REQUIRED,
-        _KNOWN,
         {"id", "name", "bus_id"},
         "batteries use 'device_name' and 'bus_name'",
     )

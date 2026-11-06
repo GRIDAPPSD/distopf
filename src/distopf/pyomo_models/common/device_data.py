@@ -200,7 +200,6 @@ def check_columns(
     data: pd.DataFrame,
     table: str,
     required: set[str],
-    known: set[str],
     legacy: set[str],
     legacy_hint: str,
 ) -> None:
@@ -210,8 +209,6 @@ def check_columns(
         raise ValueError(f"{table}: missing columns {sorted(missing)}")
     if old := legacy & cols:
         raise ValueError(f"{table}: removed columns {sorted(old)}; {legacy_hint}")
-    if unknown := cols - known:
-        raise ValueError(f"{table}: unrecognized columns (typo?): {sorted(unknown)}")
 
 
 def check_device_names(data: pd.DataFrame, errors: list[str]) -> None:
