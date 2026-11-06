@@ -403,4 +403,5 @@ def add_constraints(
 
     if voltage_slacks:
         const.add_voltage_slack_constraints(model)
-    const.add_voltage_limits(model)
+    else:
+        const.add_voltage_limits(model)

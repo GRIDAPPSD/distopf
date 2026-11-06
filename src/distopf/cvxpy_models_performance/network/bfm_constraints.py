@@ -560,8 +560,7 @@ def add_constraints(
     - thermal (if ``thermal_constraints``): ``thermal_slack_constraint`` if
       ``thermal_slacks``, else ``thermal_limit_circle`` if ``circular_constraints``,
       else ``thermal_limit_1..8``
-    - ``voltage_slack_*`` if ``voltage_slacks``
-    - ``voltage_limits``
+    - ``voltage_slack_*`` if ``voltage_slacks``, else ``voltage_limits``
     """
     add_p_flow_constraints(model, linear=linear)
     add_q_flow_constraints(model, linear=linear)
@@ -595,4 +594,5 @@ def add_constraints(
             const.add_octagonal_thermal_constraints(model)
     if voltage_slacks:
         const.add_voltage_slack_constraints(model)
-    const.add_voltage_limits(model)
+    else:
+        const.add_voltage_limits(model)
