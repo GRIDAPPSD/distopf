@@ -193,6 +193,11 @@ class CvxpyWrapper(PyomoWrapper):
         solver = kwargs.pop("solver", None)
         verbose = kwargs.pop("verbose", False)
         duals = kwargs.pop("duals", False)
+        iterative_rank = kwargs.pop("iterative_rank", False)
+        iterative_options = dict(kwargs.pop("iterative_options", {}))
+        update_angles = iterative_options.pop("update_angles", True)
+        if iterative_rank and not sdp_relaxation:
+            raise ValueError("iterative_rank requires model_type='sdp'.")
 
         rho_v_up = kwargs.pop("rho_v_up", None)
         rho_s_dn = kwargs.pop("rho_s_dn", None)
@@ -231,7 +236,24 @@ class CvxpyWrapper(PyomoWrapper):
                 rho_s_dn,
             ),
         )
-        self.result = solve(self.model, solver=solver, duals=duals, verbose=verbose)
+        if iterative_rank:
+            from distopf.cvxpy_models_performance.common.iterative_sdp import (
+                solve_iterative_sdp,
+            )
+
+            self.result, self.rank_history = solve_iterative_sdp(
+                self.model,
+                solver=solver or "CLARABEL",
+                verbose=verbose,
+                update_angles=(
+                    (lambda: self._update_angles_from_iterate(solver))
+                    if update_angles
+                    else None
+                ),
+                **iterative_options,
+            )
+        else:
+            self.result = solve(self.model, solver=solver, duals=duals, verbose=verbose)
         if raw_result:
             return self.result
         return self._build_result(solver_name=self._solver_name(solver))
@@ -244,8 +266,6 @@ class CvxpyWrapper(PyomoWrapper):
 
     def _initialize_from_fbs(self, source: Any = None, direct: bool = False) -> None:
         """Warm start BranchFlow variables and current angles from FBS or a result."""
-        from distopf.cvxpy_models_performance.network.bfm import set_current_angles
-
         fbs_results = self._resolve_initial_result(source, direct)
         for var_name, data in self._collect_start_values(source).items():
             spec = self.model.var_specs.get(var_name)
@@ -268,13 +288,12 @@ class CvxpyWrapper(PyomoWrapper):
         active_power_flows = fbs_results.active_power_flows
         reactive_power_flows = fbs_results.reactive_power_flows
         currents = fbs_results.currents
-        current_angles = fbs_results.current_angles.copy()
         self._initial_current_angles = fbs_results.current_angles.copy()
         assert voltages is not None
         assert active_power_flows is not None
         assert reactive_power_flows is not None
         assert currents is not None
-        assert current_angles is not None
+        assert fbs_results.current_angles is not None
         model = self.model
 
         def _lookup_branch_phase(df, fb, tb, ph):
@@ -325,7 +344,32 @@ class CvxpyWrapper(PyomoWrapper):
         model.set_values("p_flow", p_arr)
         model.set_values("q_flow", q_arr)
         model.set_values("l_flow", l_arr)
+        self._set_current_angles(fbs_results.current_angles)
 
+    def _update_angles_from_iterate(self, solver: Optional[str]) -> None:
+        """Set current angles from FBS run with the model's current iterate as setpoints."""
+        from distopf.cvxpy_models_performance.common.results import CvxResult
+        from distopf.fbs import run_fbs_with_opf_setpoints
+
+        problem = self.model.problem
+        self.result = CvxResult(
+            self.model,
+            problem,
+            solve_time=0.0,
+            log="",
+            objective_value=0.0,  # unused: only the variable values are read
+            extract_duals=False,
+        )
+        iterate = self._build_result(solver_name=self._solver_name(solver))
+        fbs_results = run_fbs_with_opf_setpoints(self.case, iterate)
+        self._set_current_angles(fbs_results.current_angles)
+
+    def _set_current_angles(self, fbs_angles) -> None:
+        """Write FBS current angles (degrees) into the model's cos/sin parameters."""
+        from distopf.cvxpy_models_performance.network.bfm import set_current_angles
+
+        model = self.model
+        current_angles = fbs_angles.copy()
         current_angles["ab"] = (current_angles.a - current_angles.b) % 360
         current_angles["bc"] = (current_angles.b - current_angles.c) % 360
         current_angles["ca"] = (current_angles.c - current_angles.a) % 360
