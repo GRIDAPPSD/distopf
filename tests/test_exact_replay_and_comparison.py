@@ -140,22 +140,23 @@ def test_run_fbs_from_saved_results_reads_csv_filenames_without_duplicate_suffix
     class _Case:
         bus_data = pd.DataFrame({"id": [1]})
         gen_data = pd.DataFrame({"id": [1]})
+        cap_data = None
+        reg_data = None
         bat_data = None
 
     captured = {}
 
-    def fake_run(case, replay_result, **kwargs):
-        captured["result"] = replay_result
-        return replay_result
+    def fake_solve(case, frames, **kwargs):
+        captured["frames"] = frames
+        return frames
 
-    monkeypatch.setattr(fbs, "run_fbs_with_opf_setpoints", fake_run)
+    monkeypatch.setattr(fbs, "_solve_with_setpoints", fake_solve)
 
-    result = fbs.run_fbs_from_saved_results(results_dir, case=_Case())
+    frames = fbs.run_fbs_from_saved_results(results_dir, case=_Case())
 
-    replay_result = captured["result"]
-    assert result is replay_result
-    assert replay_result.active_power_loads is not None
-    assert replay_result.reactive_power_loads is not None
+    assert frames is captured["frames"]
+    assert frames["active_power_loads"] is not None
+    assert frames["reactive_power_loads"] is not None
 
 
 def test_replay_exact_power_flow_delegates_and_saves_default_exact_path(

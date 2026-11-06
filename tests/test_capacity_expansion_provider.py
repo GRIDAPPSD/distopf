@@ -38,7 +38,7 @@ def test_capacity_provider_registers_virtual_active_injection():
     model.time_set = pyo.RangeSet(0, 0)
     model.p_der_inj = pyo.Var(model.bus_phase_set, model.time_set, initialize=2)
     registry = DeviceRegistry()
-    provider = CapacityExpansionProvider(case=None, zones={}, enabled=True)
+    provider = CapacityExpansionProvider()
     registry.add(provider)
 
     assert pyo.value(registry.active_power_injection(model, 1, "a", 0)) == 2
