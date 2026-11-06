@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import math
 from typing import Any, Mapping
-import warnings
 import pandas as pd
 import pyomo.environ as pyo  # type: ignore
 
@@ -65,7 +64,6 @@ from distopf.pyomo_models.common.device_data import (
     preview,
     row_label,
     cell_blank,
-    DeviceDataWarning,
 )
 
 
@@ -112,7 +110,8 @@ def translate_legacy_gen_data(
 
     Returns `data` unchanged if it is empty or already uses the new schema.
     The old provider connected generators by bus `id`, so `id` takes precedence
-    over `name` when both are present.
+    over `name` when both are present; in the old schema `name` is often the
+    device name rather than the bus name, so a differing `name` is ignored.
     """
     cols = set(data.columns)
     if data.empty or "device_name" in cols or not cols & {"id", "name"}:
@@ -124,7 +123,6 @@ def translate_legacy_gen_data(
         )
 
     errors: list[str] = []
-    mismatches: list[str] = []
     bus_names: list[str] = []
     for idx, row in data.iterrows():
         bus_name = ""
@@ -138,13 +136,6 @@ def translate_legacy_gen_data(
                     errors.append(f"row {idx}: bus id {bus_id} not found in network")
                 else:
                     bus_name = bus_id_to_name[bus_id]
-                    if "name" in cols and not cell_blank(row, "name"):
-                        given = _legacy_bus_name(row["name"])
-                        if given != bus_name:
-                            mismatches.append(
-                                f"row {idx}: id={bus_id} is bus {bus_name!r} but "
-                                f"name={given!r}; using id"
-                            )
         elif "name" in cols and not cell_blank(row, "name"):
             bus_name = _legacy_bus_name(row["name"])
         else:
@@ -156,14 +147,6 @@ def translate_legacy_gen_data(
             f"Cannot translate legacy {_TABLE}:\n"
             + "\n".join(f"  - {e}" for e in errors)
         )
-    for message in mismatches:
-        warnings.warn(f"{_TABLE}: {message}", DeviceDataWarning, stacklevel=2)
-    warnings.warn(
-        f"{_TABLE} uses the legacy 'id'/'name' schema; translated to "
-        "'device_name'/'bus_name'. Update the file to the new schema.",
-        FutureWarning,
-        stacklevel=2,
-    )
 
     out = data.drop(columns=[c for c in ("id", "name", "primary_phase") if c in cols])
     out.insert(0, "device_name", [f"gen_{b}" for b in bus_names])

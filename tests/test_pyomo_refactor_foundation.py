@@ -632,9 +632,11 @@ def test_mpssd_uses_shared_warnings(mpssd_data):
     mpssd_data["p_a"] = 0.2
     with pytest.warns(DeviceDataWarning) as caught:
         validate_mpssd_data(mpssd_data, {"151": 1}, {(1, "a")}, set())
-    messages = [str(warning.message) for warning in caught]
-    assert any("p_a is ignored" in message for message in messages)
-    assert any("only one port" in message for message in messages)
+    # All data warnings of a table are summarized in one warning.
+    assert len(caught) == 1
+    message = str(caught[0].message)
+    assert message.startswith("mpssd: 2 data warning(s)")
+    assert "p_a is ignored" in message
 
 
 def test_mpssd_preserves_balanced_dc_interval_and_shared_exception(mpssd_data):

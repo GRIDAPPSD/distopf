@@ -271,8 +271,12 @@ def finish_validation(
     table: str, errors: list[str], infeasible: list[str], warns: list[str]
 ) -> None:
     """Emit warnings, then raise data errors first and infeasibility second."""
-    for message in warns:
-        warnings.warn(f"{table}: {message}", DeviceDataWarning, stacklevel=3)
+    if warns:
+        warnings.warn(
+            f"{table}: {len(warns)} data warning(s), e.g. {warns[0]}",
+            DeviceDataWarning,
+            stacklevel=3,
+        )
     if errors:
         raise ValueError(f"Invalid {table}:\n" + "\n".join(f"  - {e}" for e in errors))
     if infeasible:
