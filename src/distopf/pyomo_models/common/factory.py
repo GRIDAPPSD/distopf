@@ -8,8 +8,10 @@ from distopf.api import Case
 from distopf.pyomo_models.devices.battery import BatteryProvider
 from distopf.pyomo_models.devices.capacitor import CapacitorProvider
 from distopf.pyomo_models.devices.generator import GeneratorProvider
+from distopf.pyomo_models.devices.line_charging import LineChargingProvider
 from distopf.pyomo_models.devices.load import LoadProvider
 from distopf.pyomo_models.devices.regulator import RegulatorProvider
+from distopf.pyomo_models.devices.transformer_shunt import TransformerShuntProvider
 from distopf.pyomo_models.common.registry import DeviceRegistry
 from distopf.pyomo_models.network.bfm import BFMProvider
 from distopf.pyomo_models.common.protocol import LindistModelProtocol
@@ -61,6 +63,8 @@ def create_lindist_model(
         CapacitorProvider(),
         BatteryProvider(),
         RegulatorProvider(),
+        LineChargingProvider(),
+        TransformerShuntProvider(),
     ]
     return create_model(
         case=case,
@@ -86,6 +90,8 @@ def create_nl_branchflow_model(
         CapacitorProvider(),
         BatteryProvider(),
         RegulatorProvider(),
+        LineChargingProvider(),
+        TransformerShuntProvider(),
     ]
     return create_model(
         case=case,

@@ -4,8 +4,10 @@ from distopf.pyomo_models.network.bfm import BFMProvider
 from distopf.pyomo_models.devices.battery import BatteryProvider
 from distopf.pyomo_models.devices.capacitor import CapacitorProvider
 from distopf.pyomo_models.devices.generator import GeneratorProvider
+from distopf.pyomo_models.devices.line_charging import LineChargingProvider
 from distopf.pyomo_models.devices.load import LoadProvider
 from distopf.pyomo_models.devices.regulator import RegulatorProvider
+from distopf.pyomo_models.devices.transformer_shunt import TransformerShuntProvider
 from distopf.api import Case
 from distopf.pyomo_models.common.protocol import LindistModelProtocol
 
@@ -23,6 +25,8 @@ def create_mpssd_lindist_model(
         CapacitorProvider(),
         BatteryProvider(),
         RegulatorProvider(),
+        LineChargingProvider(),
+        TransformerShuntProvider(),
         MpssdProvider(),
     ]
     return create_model(

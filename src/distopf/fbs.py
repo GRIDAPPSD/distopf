@@ -251,6 +251,22 @@ class FBS:
         z[rows, 4, 3] = -mutual
         self._z = z
 
+        # Pi model: half of each branch's b sits at both of its ends.
+        half_b = np.zeros((n, 5))
+        for k, phase in enumerate("abc"):
+            half_b[rows, k] = np.nan_to_num(_column(branch, f"b_{phase}")[sel]) / 2
+        shunt_b = half_b.copy()
+        np.add.at(shunt_b, self.parent[rows], half_b[rows])
+        self._shunt_b = shunt_b
+
+        # Transformer no-load loss and magnetizing admittance (pu on s_base) at the from-bus.
+        shunt_y = np.zeros((n, 5), dtype=complex)
+        for k, phase in enumerate("abc"):
+            g = np.nan_to_num(_column(branch, f"g_sh_{phase}")[sel])
+            b = np.nan_to_num(_column(branch, f"b_sh_{phase}")[sel])
+            np.add.at(shunt_y[:, k], self.parent[rows], g - 1j * b)
+        self._shunt_y = shunt_y
+
         self._levels = []
         for start, end in self._bounds:
             par = self.parent[start:end]
@@ -742,6 +758,8 @@ class FBS:
             q = st.ql + self._cvr_q[:, None] * st.ql / 2 * dv2
             s = p + 1j * q
             inj = -np.where(cn & nz & (np.abs(s) > _EPS), np.conj(s / v), 0)
+            inj -= 1j * self._shunt_b * v * cn
+            inj -= self._shunt_y * v * cn
 
             gn = self._gen_nodes
             if gn.size:

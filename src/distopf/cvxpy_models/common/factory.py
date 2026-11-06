@@ -13,6 +13,8 @@ from distopf.cvxpy_models.devices.generator import GeneratorProvider
 from distopf.cvxpy_models.devices.load import LoadProvider
 from distopf.cvxpy_models.devices.regulator import RegulatorProvider
 from distopf.cvxpy_models.network.bfm import BFMProvider
+from distopf.pyomo_models.devices.line_charging import LineChargingProvider
+from distopf.pyomo_models.devices.transformer_shunt import TransformerShuntProvider
 
 
 def create_model(
@@ -51,6 +53,8 @@ def _standard_devices() -> list:
         CapacitorProvider(),
         BatteryProvider(),
         RegulatorProvider(),
+        LineChargingProvider(),  # model-agnostic, shared with pyomo_models
+        TransformerShuntProvider(),  # model-agnostic, shared with pyomo_models
     ]
 
 

@@ -9,8 +9,12 @@ from distopf.cvxpy_models_performance.common.registry import DeviceRegistry
 from distopf.cvxpy_models_performance.devices.battery import BatteryProvider
 from distopf.cvxpy_models_performance.devices.capacitor import CapacitorProvider
 from distopf.cvxpy_models_performance.devices.generator import GeneratorProvider
+from distopf.cvxpy_models_performance.devices.line_charging import LineChargingProvider
 from distopf.cvxpy_models_performance.devices.load import LoadProvider
 from distopf.cvxpy_models_performance.devices.regulator import RegulatorProvider
+from distopf.cvxpy_models_performance.devices.transformer_shunt import (
+    TransformerShuntProvider,
+)
 from distopf.cvxpy_models_performance.network.bfm import BFMProvider
 
 
@@ -54,6 +58,8 @@ def _standard_devices() -> list:
         CapacitorProvider(),
         BatteryProvider(),
         RegulatorProvider(),
+        LineChargingProvider(),
+        TransformerShuntProvider(),
     ]
 
 

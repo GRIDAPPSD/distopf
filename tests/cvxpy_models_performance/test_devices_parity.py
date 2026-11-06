@@ -80,6 +80,27 @@ def test_battery_multiperiod_matches_scalar():
     )
 
 
+def test_line_charging_matches_scalar():
+    case = load("ieee13")
+    for phase in "abc":
+        case.branch_data[f"b_{phase}"] = np.where(
+            case.branch_data.phases.str.contains(phase), 1e-3, np.nan
+        )
+    run(case, "loss_objective_rule", compare_vars=())
+
+
+def test_transformer_shunt_matches_scalar():
+    case = load("ieee13")
+    for phase in "abc":
+        case.branch_data[f"g_sh_{phase}"] = np.where(
+            case.branch_data.phases.str.contains(phase), 1e-3, np.nan
+        )
+        case.branch_data[f"b_sh_{phase}"] = np.where(
+            case.branch_data.phases.str.contains(phase), 2e-3, np.nan
+        )
+    run(case, "loss_objective_rule", compare_vars=())
+
+
 def test_capacitor_and_regulator_mi_structure():
     case = load("ieee13")
     kw = dict(control_capacitors=True, control_regulators=True)
