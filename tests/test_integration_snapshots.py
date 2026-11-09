@@ -27,9 +27,11 @@ REFERENCE_FILE = Path(__file__).parent / "integration_references.json"
 # np.isclose tolerance: |actual - expected| <= ATOL + RTOL * |expected|
 ATOL = 1e-6
 RTOL = 1e-6
-# Nonlinear (IPOPT) scenarios depend on the IPOPT build and platform: CI's conda
-# IPOPT differs from a local one by about 3e-6 on flat directions of the solution.
-ATOL_NLP = 1e-5
+# Nonlinear (IPOPT) scenarios depend on the IPOPT build and platform. The optimum is
+# nearly flat in some directions, so CI's conda IPOPT lands up to ~7e-5 away from a
+# local build in individual flows while the objective agrees. The objective keeps
+# the tight tolerance; the other metrics get ATOL_NLP.
+ATOL_NLP = 1e-4
 
 # ---------------------------------------------------------------------------
 # Scenario definitions
@@ -395,7 +397,8 @@ def test_integration_snapshot(scenario, references):
         if key == "converged":
             continue
         assert key in actual, f"[{sid}] missing metric '{key}' in actual results"
-        atol = ATOL_NLP if "nlp" in sid else ATOL
+        is_loose = "nlp" in sid and key != "objective_value"
+        atol = ATOL_NLP if is_loose else ATOL
         assert np.isclose(actual[key], ref[key], atol=atol, rtol=RTOL), (
             f"[{sid}] metric '{key}' differs: "
             f"actual={actual[key]:.10g}, expected={ref[key]:.10g}, "
