@@ -714,7 +714,6 @@ requires-dist = [
     { name = "pyscipopt", specifier = ">=6.0.0" },
     { name = "rich-click", specifier = ">=1.9.9" },
     { name = "scipy", specifier = ">=1.15.3" },
-    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" },
 ]
 provides-extras = ["nlp", "cim"]
 

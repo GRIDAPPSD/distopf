@@ -834,22 +834,25 @@ class Case:
         Parameters
         ----------
         **kwargs
-            Additional arguments passed to ``cvxpy_models.create_lindist_model``
+            Additional arguments passed to
+            ``cvxpy_models_performance.create_lindist_model``
 
         Returns
         -------
-        distopf.cvxpy_models.CvxModel
+        distopf.cvxpy_models_performance.common.model.CvxModel
             CVXPY optimization model
 
         Examples
         --------
         >>> case = create_case(CASES_DIR / "csv" / "ieee13")
         >>> model = case.to_cvxpy_model()
-        >>> from distopf.cvxpy_models import solve, set_objective, loss_objective_rule
+        >>> from distopf.cvxpy_models_performance import (
+        ...     solve, set_objective, loss_objective_rule
+        ... )
         >>> set_objective(model, loss_objective_rule)
         >>> results = solve(model)
         """
-        from distopf.cvxpy_models import create_lindist_model
+        from distopf.cvxpy_models_performance import create_lindist_model
 
         return create_lindist_model(self, **kwargs)
 

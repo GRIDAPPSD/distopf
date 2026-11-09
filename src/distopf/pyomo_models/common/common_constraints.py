@@ -168,6 +168,14 @@ def add_capacitor_z_bounds(m: LindistModelProtocol) -> None:
 # ======================================================================================
 
 
+def _has_thermal_limit(m, fb, tb, ph) -> bool:
+    """Check if a branch phase has a positive thermal limit."""
+    if (fb, tb, ph) not in m.s_branch_max:
+        return False
+    limit = pyo.value(m.s_branch_max[fb, tb, ph])
+    return limit is not None and limit > 0
+
+
 def add_octagonal_thermal_constraints(m: LindistModelProtocol) -> None:
     """
     Add octagonal thermal limit constraints for branch power flows.
@@ -192,11 +200,6 @@ def add_octagonal_thermal_constraints(m: LindistModelProtocol) -> None:
         return
 
     c = sqrt2 - 1  # ≈ 0.4142
-
-    def _has_thermal_limit(m, fb, tb, ph):
-        """Check if branch has a valid thermal limit."""
-        limit = pyo.value(m.s_branch_max.get((fb, tb, ph), None))
-        return limit is not None and limit > 0
 
     # Quadrant 1: +P, +Q
     def thermal_1(m: LindistModelProtocol, fb, tb, ph, t):
@@ -294,13 +297,6 @@ def add_circular_thermal_constraints(m: LindistModelProtocol) -> None:
     if not hasattr(m, "s_branch_max"):
         return
 
-    def _has_thermal_limit(m, fb, tb, ph):
-        """Check if branch has a valid thermal limit."""
-        if (fb, tb, ph) not in m.s_branch_max:
-            return False
-        limit = pyo.value(m.s_branch_max[fb, tb, ph])
-        return limit is not None and limit > 0
-
     def thermal_circle(m: LindistModelProtocol, fb, tb, ph, t):
         if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
@@ -341,15 +337,15 @@ def add_thermal_slack_constraints(m, derate_factor=1) -> None:
     )
 
     # Add constraint that allows violations via slack variables
-    def thermal_slack_rule(m, _id, ph, t):
-        """Allow apparent power to exceed limit by slack amount"""
-        s_max = m.s_branch_max[_id, ph]
-        if s_max is None or s_max <= 0:
+    def thermal_slack_rule(m, fb, tb, ph, t):
+        """Allow active power to exceed the limit by the slack amount."""
+        if not _has_thermal_limit(m, fb, tb, ph):
             return pyo.Constraint.Skip
         # P <= S_max + slack
         return (
-            m.p_flow[_id, ph, t]
-            <= m.s_branch_max[_id, ph] * derate_factor + m.thermal_slack[_id, ph, t]
+            m.p_flow[fb, tb, ph, t]
+            <= m.s_branch_max[fb, tb, ph] * derate_factor
+            + m.thermal_slack[fb, tb, ph, t]
         )
 
     m.thermal_slack_constraint = pyo.Constraint(

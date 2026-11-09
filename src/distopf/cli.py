@@ -54,10 +54,8 @@ def _load_config(config_path: Path) -> dict[str, Any]:
     try:
         with config_path.open("rb") as stream:
             if config_path.suffix.lower() == ".toml":
-                try:
-                    import tomllib
-                except ModuleNotFoundError:  # pragma: no cover - Python 3.10
-                    import tomli as tomllib
+                import tomllib
+
                 config = tomllib.load(stream)
             else:
                 config = json.load(stream)

@@ -136,5 +136,7 @@ uv run pytest tests/cvxpy_models_performance
 uv run python benchmarks/bench_cvxpy_models_performance.py ieee13 ieee123_30der
 ```
 
-Not covered: wrapper integration (`run_opf`), `Case.to_*` helper, solving exact
-BranchFlow (needs `cyipopt`; only `is_dnlp()` is tested).
+`run_opf(wrapper="cvxpy")`, `formulation="sdp"` and `Case.to_cvxpy_model()` use
+this package. Not covered: solving exact BranchFlow (needs `cyipopt`; only
+`is_dnlp()` is tested). The benchmark script lives in the gitignored
+`benchmarks/` directory, so it is only available in local checkouts.

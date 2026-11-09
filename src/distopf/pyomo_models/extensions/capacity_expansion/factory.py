@@ -14,7 +14,7 @@ from distopf.api import Case
 from distopf.pyomo_models.common.protocol import LindistModelProtocol
 
 
-def create_mpssd_lindist_model(
+def create_capacity_expansion_lindist_model(
     case: Case,
     control_capacitors: bool = False,
     control_regulators: bool = False,

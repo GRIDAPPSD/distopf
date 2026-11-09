@@ -2,8 +2,7 @@
 
 Mirror of ``pyomo_models.extensions.capacity_expansion.capacity_expansion_constraints``.
 ``add_der_capacity_injection_constraints`` uses the number of phases of the
-bus (``phase_map``) where the Pyomo version references an undefined
-``m.bus_phases``.
+bus (``phase_map``).
 """
 
 from __future__ import annotations

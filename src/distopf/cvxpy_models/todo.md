@@ -3,25 +3,25 @@
 Running list of work to do or fix later. Add new items as they are found.
 
 ## Status
-Port complete: network, load, generator, capacitor (incl. MI), battery, regulator (incl. MI), MPSSD, capacity expansion, objectives, solve/results, `CvxpyWrapper`, api registry, `Case.to_cvxpy_model()`, lazy `distopf.cvxpy_models` export, `AGENTS.md` update.
+Port complete: network, load, generator, capacitor (incl. MI), battery, regulator (incl. MI), MPSSD, capacity expansion, objectives, solve/results, lazy `distopf.cvxpy_models` export. `CvxpyWrapper` (`run_opf(wrapper="cvxpy")`, `formulation="sdp"`) and `Case.to_cvxpy_model()` now use the vectorized `cvxpy_models_performance` package; this scalar package is the readable reference it is parity-tested against.
 
 `tests/cvxpy_models/` (51 tests: 49 pass, 2 skipped) passes:
 - Structure parity (constraint names, variable names, index sets) on ieee13, ieee123_30der, MI cap/reg, BranchFlow, SOCP.
 - Numeric parity vs Pyomo/IPOPT on ieee13, ieee123_30der, ieee13_battery, minimal_triplex, triplex_pv, SOCP, MPSSD, and `run_opf(wrapper="cvxpy")`.
 - Duals match Pyomo up to sign.
 
-Regression check (cvxpy 1.9.3, non-slow suite): 610 passed, 2 skipped, 9 failed. The 9 failures are the 8 `test_integration_snapshots.py` cases and the stale `test_capacity_provider_registers_virtual_active_injection`; all 9 fail identically without these changes (verified for the 8 snapshots with the changes stashed, before the cvxpy bump).
+The snapshot references were regenerated after this port, and the stale capacity-provider test was fixed, so the earlier regression-check failures no longer apply.
 
 Tooling: `mypy` and `ruff` (CI rule set plus unused imports/variables) are clean on `cvxpy_models`, `cvxpy_wrapper.py` and `tests/cvxpy_models`.
 
 ## Next phases
 - [x] Numeric parity for MI cap/reg (HiGHS on both sides; cap only, reg only, both), cost and total-cost objectives (multi-period, 3 steps), multi-period batteries with schedules (4 steps), penalized objectives with `equality_only`, voltage and swing slacks, ADMM rho terms, thermal circle (synthesized limits on ieee13), `free_boundary_loads` and `reg_tap_change_limit` structure. See `tests/cvxpy_models/test_cvxpy_parity_extended.py`.
-- [ ] Thermal octagon cannot be compared with Pyomo: `pyomo_models.common_constraints.add_octagonal_thermal_constraints` calls `m.s_branch_max.get(...)` on an `IndexedParam`, which has no `.get` (AttributeError). The CVXPY octagon is tested against the CVXPY circle instead (octagon is an inner approximation, objective >= circle). Fix in Pyomo or leave.
+- [ ] Thermal octagon parity with Pyomo: the Pyomo `.get` bug in `pyomo_models.common.common_constraints.add_octagonal_thermal_constraints` is fixed, so a direct parity test can now be added. The CVXPY octagon is currently tested against the CVXPY circle (octagon is an inner approximation, objective >= circle).
 - [ ] Penalized objectives: Pyomo uses a smooth max(0, x) approximation, CVXPY the exact `cp.pos`; the test tolerance is 5e-2 on the objective.
 - [ ] Case data: no built-in case has usable branch thermal limits (`ieee123_bat` and `ieee33` columns are empty or the case fails load validation), so tests synthesize limits on ieee13. Consider adding limits to a built-in case.
 - [ ] Curtailment and loss objectives on ieee123_30der have non-unique optima: objectives agree (~2e-7) but flows can differ (q_flow up to ~5e-4). The loss test uses a looser tolerance and the curtail test compares objectives only.
-- [ ] Vectorize variables/constraints (currently one scalar `cp.Variable` per index, by design, for 1:1 mirroring). Work with the user on this; the parity suite is the safety net.
-- [ ] Add CVXPY-only formulations after parity is validated.
+- [x] Vectorize variables/constraints: done in `cvxpy_models_performance`.
+- [x] Add CVXPY-only formulations: SDP relaxation and iterative rank penalty.
 
 ## Known gaps and decisions
 - [x] Exact NL BranchFlow: pin bumped to `cvxpy>=1.9.0` (native DNLP, `solve(nlp=True, solver=cp.IPOPT)`), `requires-python` raised to `>=3.11` (cvxpy 1.9 needs it), new `nlp` extra (`cyipopt`). `cvxpy_models.solve` routes non-DCP, DNLP models to IPOPT and raises `NotImplementedError` with install guidance when `cyipopt` is missing. `uv.lock` regenerated (large diff: the 3.10 resolution branches were dropped).
@@ -48,19 +48,13 @@ Tooling: `mypy` and `ruff` (CI rule set plus unused imports/variables) are clean
 - `common/results.py` DataFrame helpers (`get_values`, `get_voltages`, `get_constraint_duals_tidy`) rely on `VarDict`/`ConstraintDict` mimicking the Pyomo Var/Constraint interface (`name`, `local_name`, `dim`, `model`, `extract_values`).
 - [ ] Move these into a neutral package if `pyomo_models` should become removable.
 
-## Pyomo bugs found (left alone in pyomo_models)
-- `add_thermal_slack_constraints` uses 2-tuple keys on 3-tuple sets (CVXPY port uses correct `(fb, tb, ph, t)` keys).
-- `add_der_capacity_injection_constraints` references undefined `m.bus_phases` (CVXPY port uses `phase_map`).
-- `generation_cost_with_substation_quadratic_penalty_objective_rule` ignores `substation_penalty_weight` (hard-coded 1e6) and prints; CVXPY port honors the argument (default 1e6).
-- `demand_charge_objective_rule` uses invalid `pyo.maximize(...)`; CVXPY port uses `cp.max`.
-- `net_discharge` constraint name is defined by two different battery helpers.
-- `capacity_expansion/factory.py` function is misnamed `create_mpssd_lindist_model` (CVXPY port: `create_capacity_expansion_lindist_model`).
-- `tests/test_capacity_expansion_provider.py::test_capacity_provider_registers_virtual_active_injection` is stale (provider takes no constructor arguments).
-- `devices/generator_original.py` is dead code; intentionally not ported (already deleted in the working tree).
-- Capacity expansion cannot be built with Pyomo at all because of the `m.bus_phases` bug, so it has no Pyomo parity test; the CVXPY tests check structure and the budget constraint instead.
+## Pyomo bugs found
+Fixed in `pyomo_models`: thermal-slack keys, `m.bus_phases` in capacity expansion, the quadratic-penalty weight and print, `demand_charge` (now a peak epigraph variable), the octagon `.get`, and the capacity-expansion factory name (`create_capacity_expansion_lindist_model`). Pyomo results now report `p_max`/`p_zr` by zone and resource.
+- [ ] `net_discharge` constraint name is defined by two different battery helpers.
+- [ ] Add Pyomo-vs-CVXPY parity tests for capacity expansion and demand charge (a manual check on ieee13 agreed to ~1e-4).
 
 ## Integration
-- [x] `CvxpyWrapper` (`wrappers/cvxpy_wrapper.py`), registry entries in `api.py`, `Case.to_cvxpy_model()`, lazy `distopf.cvxpy_models` export.
+- [x] `CvxpyWrapper` (`wrappers/cvxpy_wrapper.py`), registry entries in `api.py`, `Case.to_cvxpy_model()`, lazy `distopf.cvxpy_models` export. The wrapper and `to_cvxpy_model()` later moved to `cvxpy_models_performance`.
 - [x] Naming clash: `cvxpy_solve` already exists in `matrix_models`; this package exposes `solve` only.
 - [x] Update `AGENTS.md` (layout and cvxpy_models section).
 - [x] FBS warm start for NL model (`CvxpyWrapper._initialize_from_fbs`, `set_current_angles`).
@@ -75,4 +69,4 @@ Tooling: `mypy` and `ruff` (CI rule set plus unused imports/variables) are clean
 - [ ] Port the validation-error tests from `tests/test_pyomo_refactor_foundation.py` for the CVXPY providers (battery, capacitor, regulator, load, generator). Validation is shared code, so most are already covered; add tests that the CVXPY providers call it (for example a bad battery table raises through `create_lindist_model`).
 - [x] Multi-period (`n_steps > 1`) parity with schedules and batteries.
 - [x] `equality_only` constraint-set parity.
-- [ ] Mark the slower parity tests with `@pytest.mark.slow` (ieee123_30der runs take ~10 s each; the extended file takes ~60 s).
+- [x] Mark the slower parity tests with `@pytest.mark.slow` (both CVXPY test packages are marked in their `conftest.py`).

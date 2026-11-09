@@ -1002,3 +1002,80 @@ def test_substation_cost_objective_uses_branch_endpoints():
     model.schedule_price = pyo.Param(model.time_set, initialize={0: 3})
 
     assert pyo.value(substation_cost_objective_rule(model)) == 6
+
+
+def test_quadratic_penalty_objective_uses_its_weight(named_generator_model):
+    rule = objectives.generation_cost_with_substation_quadratic_penalty_objective_rule
+    # p_flow is 2 at both steps, so the penalty sum is 8; generation cost is 0.975.
+    assert pyo.value(rule(named_generator_model, 2.0)) == pytest.approx(16.975)
+
+
+def test_demand_charge_uses_peak_epigraph(named_generator_model):
+    model = named_generator_model
+    model.demand_charge = 3.0
+    objectives.set_objective(model, objectives.demand_charge_objective_rule)
+    assert len(model.peak_substation_power_constraint) == 2  # one branch, two steps
+    model.peak_substation_power.set_value(2)
+    assert pyo.value(model.objective) == pytest.approx(6.0)
+
+
+def _ieee13_with_branch_limits():
+    case = create_case(CASES_DIR / "csv" / "ieee13")
+    for phase in "abc":
+        case.branch_data[f"s_{phase}_max"] = 0.05
+    return case
+
+
+def test_thermal_slacks_build_with_branch_limits():
+    model = create_lindist_model(_ieee13_with_branch_limits(), thermal_slacks=True)
+    assert len(model.thermal_slack_constraint) > 0
+    assert pyo.value(objectives.thermal_slack_penalty(model)) == 0
+
+
+def test_octagonal_thermal_constraints_build():
+    model = create_lindist_model(
+        _ieee13_with_branch_limits(), circular_constraints=False
+    )
+    assert len(model.thermal_limit_1) > 0
+
+
+def test_capacity_expansion_builds_and_reports_zone_results():
+    from distopf.pyomo_models.extensions.capacity_expansion.factory import (
+        create_capacity_expansion_lindist_model,
+    )
+    from distopf.pyomo_models.common.results import get_values
+
+    case = create_case(CASES_DIR / "csv" / "ieee13")
+    edge = str(case.branch_data["name"].iloc[len(case.branch_data) // 2])
+    model = create_capacity_expansion_lindist_model(
+        case, zone_edges=[edge], new_pv=0.2, new_bess=0.1
+    )
+    assert len(model.der_inj_map) > 0
+    frame = get_values(model.p_max)
+    assert frame.columns.tolist() == ["zone", "resource", "value"]
+    assert set(frame.resource) == {"PV", "BESS"}
+
+
+def test_bus_level_device_states_are_weighted_means():
+    wrapper = PyomoWrapper(case=None)
+    wrapper.case = SimpleNamespace(
+        cap_data=pd.DataFrame(
+            {"device_name": ["c1", "c2"], "bus_name": ["7", "7"], "q_a": [0.1, 0.3]}
+        ),
+        bat_data=pd.DataFrame(
+            {
+                "device_name": ["b1", "b2"],
+                "bus_name": ["7", "7"],
+                "energy_capacity": [1.0, 3.0],
+            }
+        ),
+    )
+    lead = {"id": [7, 7], "name": ["7", "7"], "t": [0, 0]}
+    wrapper.result = SimpleNamespace(
+        u_cap=pd.DataFrame({"device_name": ["c1", "c2"], **lead, "a": [1.0, 0.0]}),
+        soc=pd.DataFrame({"device_name": ["b1", "b2"], **lead, "value": [0.2, 0.6]}),
+        q_cap=pd.DataFrame({"device_name": ["c1", "c2"], **lead, "a": [0.1, 0.0]}),
+    )
+    assert wrapper._get_bus_values("u_cap").a.tolist() == pytest.approx([0.25])
+    assert wrapper._get_bus_values("soc").value.tolist() == pytest.approx([0.5])
+    assert wrapper._get_bus_values("q_cap").a.tolist() == pytest.approx([0.1])

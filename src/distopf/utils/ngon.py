@@ -46,12 +46,6 @@ def get_ngon_info(n, theta0=0):
     print(f"Percent of circle area: {percent_of_circle:.2f}%")
     print(f"Side length: {side_length:.6f}")
     print(f"Apothem (distance from center to side): {apothem:.6f}")
-    import time
-
-    start_time = time.perf_counter()
-    ngon_line_equations(n, theta0)
-    time_to_compute = time.perf_counter() - start_time
-    print(f"time to compute: {time_to_compute:.6f} seconds")
 
 
 # Example usage
@@ -73,5 +67,3 @@ if __name__ == "__main__":
     print("=" * 50)
     print_table(16, theta0=0)
     get_ngon_info(16, theta0=0)
-    print("=" * 50)
-    get_ngon_info(1e3, theta0=0)

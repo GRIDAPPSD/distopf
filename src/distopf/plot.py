@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 from distopf.matrix_models.base import LinDistBase
 from distopf.api import Case
 from distopf.results import PowerFlowResult
+from distopf.utils.input_handlers import legacy_device_case
 
 
 def _get_id_name_cols(df: pd.DataFrame) -> tuple[str, str]:
@@ -1324,6 +1325,8 @@ def plot_network(
     -------
     fig: plotly.graph_objects.Figure
     """
+    # The drawing code looks devices up by bus id, and results are per bus.
+    model = legacy_device_case(model, include_gen_shape=False)
     if result is not None:
         # Extract data from result
         v = result.voltages

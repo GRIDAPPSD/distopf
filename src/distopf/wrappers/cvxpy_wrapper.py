@@ -1,12 +1,15 @@
-"""CVXPY wrapper for OPF built on ``distopf.cvxpy_models``.
+"""CVXPY wrapper for OPF built on ``distopf.cvxpy_models_performance``.
 
 Mirror of :class:`distopf.wrappers.pyomo_wrapper.PyomoWrapper`. Supports
 LinDistFlow (default), and BranchFlow via ``model_type``:
 
 - ``"lindist"``: LinDistFlow (convex).
 - ``"socp"``: SOCP relaxation of BranchFlow (convex).
-- ``"branchflow"``: exact BranchFlow. The model is built but is not DCP, so
-  solving raises ``NotImplementedError``.
+- ``"sdp"``: SDP relaxation of BranchFlow (convex); ``iterative_rank=True``
+  adds the iterative rank penalty.
+- ``"branchflow"``: exact BranchFlow. The model is not DCP; it is solved as an
+  NLP with IPOPT, which needs ``cyipopt`` (``pip install distopf[nlp]``).
+  Without ``cyipopt`` solving raises ``NotImplementedError``.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from distopf.wrappers.pyomo_wrapper import PyomoWrapper
 
 
 class CvxpyWrapper(PyomoWrapper):
-    """CVXPY wrapper for OPF optimization (provider-based scalar model)."""
+    """CVXPY wrapper for OPF optimization (vectorized provider-based model)."""
 
     def solve(
         self,
@@ -39,13 +42,14 @@ class CvxpyWrapper(PyomoWrapper):
         """
         model_type = kwargs.pop("model_type", "lindist")
         if model_type in ("branchflow", "socp", "sdp"):
+            sdp_relaxation = kwargs.pop("sdp_relaxation", False) or model_type == "sdp"
             return self._solve_branchflow(
                 objective=objective,
                 control_regulators=control_regulators,
                 control_capacitors=control_capacitors,
                 raw_result=raw_result,
                 socp_relaxation=model_type == "socp",
-                sdp_relaxation=model_type == "sdp" or kwargs.pop("sdp_relaxation", False),
+                sdp_relaxation=sdp_relaxation,
                 **kwargs,
             )
         return self._solve_lindist(

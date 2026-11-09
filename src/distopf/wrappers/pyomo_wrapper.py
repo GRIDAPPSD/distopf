@@ -66,10 +66,12 @@ class PyomoWrapper(Wrapper):
             - reg_tap_change_limit : int or None (lindist only)
                 Max tap change per timestep (only if control_regulators=True)
             - initialize : str, PowerFlowResult or None (branchflow/socp only)
-                Warm-start strategy: 'fbs' to initialize from FBS results, or a
-                PowerFlowResult from another solve. If that result lacks
-                voltages, flows, currents or current angles, its setpoints are
-                run through FBS and the FBS values are used.
+                Warm-start strategy: 'fbs' (default) to initialize from an FBS
+                solve of the case, None to skip the warm start, or a
+                PowerFlowResult from another solve. By default the result's
+                setpoints are run through FBS and the FBS values are used; with
+                direct_initialize=True its own voltages, flows, currents and
+                current angles are used as-is (all four are required).
             - solver : str, default 'ipopt'
                 Solver to use. 'ipopt' for continuous, 'bonmin'/'couenne' for MINLP.
             - duals : bool, default False
@@ -400,11 +402,12 @@ class PyomoWrapper(Wrapper):
         """
         from distopf.fbs import fbs_solve, run_fbs_with_opf_setpoints
         from distopf.results import PowerFlowResult
+        from distopf.utils.input_handlers import legacy_device_case
 
         if source is None or isinstance(source, str):
-            return fbs_solve(self.case)
+            return fbs_solve(legacy_device_case(self.case))
         if not direct:
-            return run_fbs_with_opf_setpoints(self.case, source)
+            return run_fbs_with_opf_setpoints(legacy_device_case(self.case), source)
         if not isinstance(source, PowerFlowResult):
             raise TypeError("direct_initialize requires a PowerFlowResult")
         missing = [
@@ -713,16 +716,46 @@ class PyomoWrapper(Wrapper):
         return self._get_bus_values("q_cap")
 
     def _get_bus_values(self, variable: str) -> pd.DataFrame:
-        """Aggregate device-level injections to the bus-level result contract."""
+        """Aggregate device-level values to the bus-level result contract.
+
+        Powers are summed. States (``soc``, ``u_cap``, ``z_cap``) are averaged,
+        weighted by battery energy capacity or capacitor rating, so that a bus
+        state times the bus total matches the sum over its devices.
+        """
         frame = getattr(self.result, variable)
         if "device_name" not in frame.columns:
             return frame
+        keys = ["id", "name", "t"]
         phases = [
             phase for phase in ("a", "b", "c", "s1", "s2", "value") if phase in frame
         ]
-        return frame.groupby(["id", "name", "t"], as_index=False)[phases].sum(
-            min_count=1
-        )
+        if variable not in ("soc", "u_cap", "z_cap"):
+            return frame.groupby(keys, as_index=False)[phases].sum(min_count=1)
+        weights = self._device_state_weights(variable, frame, phases)
+        weights = weights.where(frame[phases].notna())
+        numerator = (frame[phases] * weights).groupby([frame[k] for k in keys]).sum()
+        denominator = weights.groupby([frame[k] for k in keys]).sum()
+        return (numerator / denominator).reset_index()
+
+    def _device_state_weights(
+        self, variable: str, frame: pd.DataFrame, phases: list[str]
+    ) -> pd.DataFrame:
+        """Per-row weights for averaging device states over a bus.
+
+        Uses ``energy_capacity`` for batteries and ``q_{phase}`` for capacitors.
+        Legacy tables (no ``device_name``) have one device per bus, so equal
+        weights are used.
+        """
+        table = self.case.bat_data if variable == "soc" else self.case.cap_data
+        weights = pd.DataFrame(1.0, index=frame.index, columns=phases)
+        if table is None or "device_name" not in table.columns:
+            return weights
+        devices = table.set_index("device_name")
+        for phase in phases:
+            column = "energy_capacity" if variable == "soc" else f"q_{phase}"
+            if column in devices.columns:
+                weights[phase] = frame["device_name"].map(devices[column]).abs()
+        return weights
 
     def get_all_results(self) -> dict[str, pd.DataFrame]:
         """Get all variable results from the solved model.

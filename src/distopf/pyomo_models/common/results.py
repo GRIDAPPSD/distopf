@@ -167,8 +167,17 @@ class PyoResult:
 # ============================================================================
 
 
+# Capacity-expansion variables are indexed by zone and resource, not by bus.
+_ZONE_VARS = {"p_max": ["zone", "resource"], "p_zr": ["zone", "resource", "t"]}
+
+
 def get_values(var: pyo.Var) -> pd.DataFrame:
     """Extract variable values and pivot to wide format."""
+    if var.local_name in _ZONE_VARS:
+        return pd.DataFrame(
+            [[*key, value] for key, value in var.extract_values().items()],
+            columns=[*_ZONE_VARS[var.local_name], "value"],
+        )
     df = get_values_tidy(var)
     if var.name == "u_reg":
         return df

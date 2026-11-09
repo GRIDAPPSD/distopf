@@ -154,11 +154,7 @@ def generation_cost_with_substation_quadratic_penalty_objective_rule(
     model: CvxModel,
     substation_penalty_weight: float = 1e6,
 ):
-    """Generation cost plus a quadratic penalty on substation active power.
-
-    The Pyomo version ignores ``substation_penalty_weight`` and hard-codes
-    ``1e6``; the default here is also ``1e6`` so results agree at defaults.
-    """
+    """Generation cost plus a quadratic penalty on substation active power."""
     substation_penalty = 0
     for fb, tb, ph in model.branch_phase_set:
         for t in model.time_set:

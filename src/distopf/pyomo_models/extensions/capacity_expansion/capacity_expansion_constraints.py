@@ -267,7 +267,7 @@ def add_der_capacity_injection_constraints(m):
         if z is None:
             return m.p_der_inj[_id, ph, t] == 0
         inj = sum(m.alpha[_id, r] * m.p_zr[z, r, t] for r in m.resource_set)
-        return m.p_der_inj[_id, ph, t] == inj / len(m.bus_phases[_id])
+        return m.p_der_inj[_id, ph, t] == inj / len(m.phase_map[_id])
 
     m.der_inj_map = pyo.Constraint(m.bus_phase_set, m.time_set, rule=_der_inj)
 

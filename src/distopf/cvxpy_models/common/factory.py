@@ -84,8 +84,9 @@ def create_nl_branchflow_model(
     """Build the BranchFlow model.
 
     With ``socp_relaxation=True`` the model is convex and solvable with CVXPY.
-    Without it the current equalities are non-convex; the model can be built
-    and inspected but ``solve`` raises ``NotImplementedError``.
+    Without it the current equalities are non-convex; ``solve`` treats the model
+    as an NLP and uses IPOPT, which needs ``cyipopt`` (``NotImplementedError``
+    with install guidance if it is missing).
     """
     return create_model(
         case=case,

@@ -215,13 +215,11 @@ def generation_cost_with_substation_quadratic_penalty_objective_rule(
     substation_penalty_weight: float = 1e6,
 ):
     """
-    Minimize generation energy cost plus quadratic penalty on substation load.
+    Minimize generation cost plus a quadratic penalty on substation load.
 
-    Generation energy cost uses ``schedule_price[t]`` when available and
-    falls back to a unit price of 1.0 when price data is not defined.
-
-    The substation term penalizes nonzero active power exchange at the swing
-    bus by summing squared substation active power flows across phases/time.
+    Generation cost is :func:`gen_cost_rule`. The substation term penalizes
+    nonzero active power exchange at the swing bus by summing squared
+    substation active power flows across phases/time.
 
     Parameters
     ----------
@@ -234,30 +232,23 @@ def generation_cost_with_substation_quadratic_penalty_objective_rule(
     -------
     Pyomo expression for total generation cost + substation penalty.
     """
-    print(f"Substation penalty weight: {substation_penalty_weight}")
-    generation_cost = 0
-    for device, ph in model.gen_device_phase_set:
-        for t in model.time_set:
-            energy_price = (
-                model.schedule_price[t] if hasattr(model, "schedule_price") else 1.0
-            )
-            generation_cost += model.p_gen[device, ph, t] * energy_price
-
     substation_penalty = 0
     for fb, tb, ph in model.branch_phase_set:
         for t in model.time_set:
             if fb in model.swing_bus_set:
                 substation_penalty += model.p_flow[fb, tb, ph, t] ** 2
 
-    return gen_cost_rule(model) + 1e6 * substation_penalty
+    return gen_cost_rule(model) + substation_penalty_weight * substation_penalty
 
 
 def demand_charge_objective_rule(model: LindistModelProtocol):
     """
     Minimize demand charge based on peak substation power.
 
-    Penalizes the maximum active power flow from the substation across all time steps.
-    This is a nonlinear objective due to the max() operation.
+    Penalizes the maximum active power flow from the substation across all time
+    steps and phases. The maximum is modeled with an epigraph variable
+    ``peak_substation_power`` and constraints ``peak_substation_power >= p_flow``,
+    which are added to the model the first time this rule runs.
 
     Parameters
     ----------
@@ -270,12 +261,22 @@ def demand_charge_objective_rule(model: LindistModelProtocol):
     """
     if not hasattr(model, "demand_charge"):
         return 0
-    peak_power = 0
-    for fb, tb, ph in model.branch_phase_set:
-        for t in model.time_set:
-            if fb in model.swing_bus_set:
-                peak_power = pyo.maximize(peak_power, model.p_flow[fb, tb, ph, t])
-    return peak_power * model.demand_charge
+    swing_flows = [
+        (fb, tb, ph, t)
+        for fb, tb, ph in model.branch_phase_set
+        if fb in model.swing_bus_set
+        for t in model.time_set
+    ]
+    if not swing_flows:
+        return 0
+    if not hasattr(model, "peak_substation_power"):
+        model.peak_substation_power = pyo.Var()
+        model.peak_substation_power_constraint = pyo.Constraint(
+            swing_flows,
+            rule=lambda m, fb, tb, ph, t: m.peak_substation_power
+            >= m.p_flow[fb, tb, ph, t],
+        )
+    return model.peak_substation_power * model.demand_charge
 
 
 # Combined energy and demand charge minimization objective
