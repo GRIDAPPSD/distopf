@@ -37,5 +37,6 @@ def create_mpssd_lindist_model(
         control_regulators=control_regulators,
         linear=True,
         mpssd=True,
+        extra_options=("mpssd",),
         **kwargs,
     )

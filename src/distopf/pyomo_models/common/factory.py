@@ -17,15 +17,43 @@ from distopf.pyomo_models.network.bfm import BFMProvider
 from distopf.pyomo_models.common.protocol import LindistModelProtocol
 
 
+# Options the providers read from the config; anything else is rejected.
+BUILDER_OPTIONS = frozenset(
+    {
+        "linear",
+        "circular_constraints",
+        "thermal_constraints",
+        "equality_only",
+        "socp_relaxation",
+        "free_swing_voltage",
+        "free_boundary_loads",
+        "voltage_slacks",
+        "thermal_slacks",
+        "reg_tap_change_limit",
+    }
+)
+
+
 def create_model(
     case: Case,
     core=None,
     devices=(),
     control_capacitors: bool = False,
     control_regulators: bool = False,
+    extra_options=(),
     **kwargs,
 ) -> LindistModelProtocol:
-    """Build a LinDistFlow model from organized network and device modules."""
+    """Build a LinDistFlow model from organized network and device modules.
+
+    ``kwargs`` must be in ``BUILDER_OPTIONS`` or ``extra_options`` (options added
+    by an extension's providers); unknown names raise ``TypeError``.
+    """
+    unknown = sorted(set(kwargs) - BUILDER_OPTIONS - set(extra_options))
+    if unknown:
+        raise TypeError(
+            f"Unknown model option(s) {unknown}. "
+            f"Valid options: {sorted(BUILDER_OPTIONS | set(extra_options))}"
+        )
     model = pyo.ConcreteModel()
     model.cap_mi_enabled = control_capacitors
     model.reg_mi_enabled = control_regulators

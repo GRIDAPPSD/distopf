@@ -13,6 +13,19 @@ from distopf.pyomo_models.devices.transformer_shunt import TransformerShuntProvi
 from distopf.api import Case
 from distopf.pyomo_models.common.protocol import LindistModelProtocol
 
+_EXTENSION_OPTIONS = (
+    "zone_edges",
+    "new_pv",
+    "new_bess",
+    "pv_curtailment_max",
+    "pv_capacity_factor",
+    "pv_shape",
+    "bess_energy_capacity",
+    "bess_soc",
+    "bess_discharge_derate",
+    "bess_charge_derate",
+)
+
 
 def create_capacity_expansion_lindist_model(
     case: Case,
@@ -62,5 +75,6 @@ def create_capacity_expansion_lindist_model(
         bess_soc=bess_soc,
         bess_discharge_derate=bess_discharge_derate,
         bess_charge_derate=bess_charge_derate,
+        extra_options=_EXTENSION_OPTIONS,
         **kwargs,
     )

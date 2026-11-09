@@ -185,7 +185,7 @@ Existing exported CSVs will change in these ways:
 
 ## 15. IEEE 9500 validation additions
 
-Validated against OpenDSS on `ieee9500_dss` (no controls; exact FBS replay and LinDist compared with OpenDSS). Full log: `scratch/9500_delta_investigation.md`.
+Validated against OpenDSS on `ieee9500_dss` (no controls; exact FBS replay and LinDist compared with OpenDSS). The investigation log is not kept in the repository.
 
 - **`delta_to_wye` flag** on `DSSToCSVConverter`, `create_case` and `create_case_from_dss` (default `False`). Rewrites every 3-phase transformer winding to `conn=wye`, drops a trailing `.4` neutral, and re-solves, so OpenDSS and DistOPF model the same network. LinDist has no delta model; without it voltage errors were 1.06 pu on B/C. A floating `.4` primary neutral (not grounding it) was also the cause of 1.124 pu at `m1069-mt1` in the hand-made wye case. **(feature)**
 - **Open-switch phases**: `_energized_phases` limits bus phases to those carried by non-open branches. Before, a bus behind an open single-phase switch inherited phases B/C from the OpenDSS node list and was solved at about 1.06 pu while OpenDSS had 0. **(bug fix)**
@@ -210,7 +210,7 @@ Validation (FBS vs OpenDSS, max abs diff in p.u.):
 
 On 9500, P flow diff is now 0.5-1.2e-2 and voltage diff 0.6-2.1e-3. The remaining EPRI J1 Q gap (about 0.25 pu at the substation) has another cause and is not yet diagnosed.
 
-### Single-transformer validation (`scratch/validate_transformer_shunt*.py`)
+### Single-transformer validation
 
 Test feeder: source, 0.2 mi line, 0.01 mi line (switch stand-in), 6 MVA wye-wye transformer (12.47/4.16 kV), 0.05 mi line, 3-phase load. Source impedance is 1e-6 and `%Rs` is equal on both windings, so FBS and OpenDSS agree with no shunt (dV 7.7e-7). All bus voltages are 0.957-1.000 pu. Eight variants sweep `%noloadloss` (0-5), `%imag` (0-10), `Xhl`/`%R`, and load. Errors are FBS minus OpenDSS in p.u. on 1 MVA.
 

@@ -40,11 +40,11 @@ review"). Items not read in detail are called out at the end.
   `thermal_constraints` to True (was False). It only matters when `branch_data`
   has `s_*_max` columns. `run_opf` still passes False, so only direct callers see
   a change.
-- **Builder options are not validated.** Every extra keyword argument is stored
-  on the model (`setattr`), so a misspelled option is silently kept as an unused
-  attribute, and a name that matches a model component triggers a Pyomo
-  "Reassigning" warning. On `develop` the builders had fixed signatures and a typo
-  raised `TypeError`.
+- **Builder options are validated.** The builders accept only the options in
+  `BUILDER_OPTIONS` (`pyomo_models/common/factory.py`) plus those of the MPSSD and
+  capacity-expansion extensions. An unknown name raises `TypeError`, as on
+  `develop`'s fixed signatures. Options are still stored on the model as
+  attributes.
 - **Component renames.** Generator, capacitor and battery components are indexed
   by `device_name` instead of bus id. Examples: `p_gen_nom` became
   `gen_p_available`, `q_gen_nom` became `gen_q_setpoint`, `s_rated` became
@@ -379,10 +379,8 @@ Compared with `develop`, with tolerances tightened from 1e-4 / 1e-5 to 1e-6 / 1e
   MPSSD / capacity-expansion readmes.
 
 ## Before merging
-1. Remove the `scratch` gitlink: `scratch` is recorded as a submodule entry with
-   no `.gitmodules` (commit `c3bb29f`). Use `git rm --cached scratch`.
-   `docs/dss_converter_old_vs_new.md` §15–16 cite files under `scratch/`, which
-   become dead references.
+1. ~~Remove the `scratch` gitlink~~ Done: `git rm --cached scratch`; the dead
+   `scratch/` references in `docs/dss_converter_old_vs_new.md` were removed.
 2. Local `develop` has 4 commits that are not on `origin/develop` (the Oct 30
    regulator-tap and capacitor-results commits). They are already in this branch;
    pushing `develop` publishes them.
@@ -413,11 +411,9 @@ Compared with `develop`, with tolerances tightened from 1e-4 / 1e-5 to 1e-6 / 1e
    - The snapshots do not record `s1`/`s2` voltages or flows.
    - The full suite was run locally on Python 3.14 only (3.11–3.13 were only
      checked for compilation).
-8. Builder options are not validated (see "Builder options are not validated").
-   Consider replacing the `setattr` loop in `pyomo_models/common/factory.py` with
-   an explicit option list that raises on unknown keys.
-9. The CVXPY wrapper reports a user-supplied `solver=` name in the result even when
-   IPOPT actually ran (non-DCP problems).
+8. ~~Builder options are not validated~~ Done (see "Builder options are validated").
+9. ~~The CVXPY wrapper reports a user-supplied `solver=` name~~ Done: the result now
+   reports `problem.solver_stats.solver_name` (IPOPT for non-DCP problems).
 
 ## What was not read in detail
 The full `plot.py` body, MPSSD constraint math, capacity-expansion constraint

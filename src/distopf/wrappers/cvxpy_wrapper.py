@@ -179,7 +179,7 @@ class CvxpyWrapper(PyomoWrapper):
         self.result = solve(self.model, solver=solver, duals=duals, verbose=verbose)
         if raw_result:
             return self.result
-        return self._build_result(solver_name=self._solver_name(solver))
+        return self._build_result(solver_name=self._solver_name())
 
     def _solve_branchflow(
         self, objective, control_regulators, control_capacitors, raw_result, **kwargs
@@ -250,7 +250,7 @@ class CvxpyWrapper(PyomoWrapper):
                 solver=solver or "CLARABEL",
                 verbose=verbose,
                 update_angles=(
-                    (lambda: self._update_angles_from_iterate(solver))
+                    self._update_angles_from_iterate
                     if update_angles
                     else None
                 ),
@@ -260,13 +260,11 @@ class CvxpyWrapper(PyomoWrapper):
             self.result = solve(self.model, solver=solver, duals=duals, verbose=verbose)
         if raw_result:
             return self.result
-        return self._build_result(solver_name=self._solver_name(solver))
+        return self._build_result(solver_name=self._solver_name())
 
-    @staticmethod
-    def _solver_name(solver: Optional[str]) -> str:
-        if solver is None:
-            return "cvxpy"
-        return str(solver).upper()
+    def _solver_name(self) -> str:
+        """Name of the solver CVXPY actually ran (IPOPT for non-DCP models)."""
+        return self.result.problem.solver_stats.solver_name
 
     def _initialize_from_fbs(self, source: Any = None, direct: bool = False) -> None:
         """Warm start BranchFlow variables and current angles from FBS or a result."""
@@ -350,7 +348,7 @@ class CvxpyWrapper(PyomoWrapper):
         model.set_values("l_flow", l_arr)
         self._set_current_angles(fbs_results.current_angles)
 
-    def _update_angles_from_iterate(self, solver: Optional[str]) -> None:
+    def _update_angles_from_iterate(self) -> None:
         """Set current angles from FBS run with the model's current iterate as setpoints."""
         from distopf.cvxpy_models_performance.common.results import CvxResult
         from distopf.fbs import run_fbs_with_opf_setpoints
@@ -364,7 +362,8 @@ class CvxpyWrapper(PyomoWrapper):
             objective_value=0.0,  # unused: only the variable values are read
             extract_duals=False,
         )
-        iterate = self._build_result(solver_name=self._solver_name(solver))
+        # The iterate is not a finished solve, so there is no solver name yet.
+        iterate = self._build_result(solver_name="iterate")
         fbs_results = run_fbs_with_opf_setpoints(self.case, iterate)
         self._set_current_angles(fbs_results.current_angles)
 
