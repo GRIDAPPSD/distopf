@@ -286,6 +286,9 @@ These were found while checking these notes and are fixed on the branch:
   if devices at one bus have different `gen_shape`s; pass `initialize=None` in
   that case.
 - `plot_network` crashed on `device_name` tables (it looked up `gen_data.id`).
+- `plot_pq` and `plot_polar` raised `KeyError: 't'` when `t=None` and the data had
+  several time steps (the column filter dropped `t` before the animation). The bug
+  also exists on `develop`.
 - Pyomo `thermal_slacks=True` crashed whenever branch limits existed: the
   constraint rule used `(id, ph, t)` keys on `(fb, tb, ph, t)` sets.
 - Pyomo `demand_charge` called `pyo.maximize(...)` and raised `TypeError`. It now
@@ -388,11 +391,9 @@ Compared with `develop`, with tolerances tightened from 1e-4 / 1e-5 to 1e-6 / 1e
    this branch.
 4. The version is still `1.1.0.dev5`. Dropping Python 3.10 and removing APIs
    argue for at least a minor bump and a migration note.
-5. Notebooks: `examples/notebooks/build_your_own_opf.ipynb` imports the removed
-   `pyomo_models.lindist`, `constraints` and `results`, and the markdown in
-   `distopf_pesgm2026_tutorial.ipynb` still documents `p_gen_nom[i,p,t]`,
-   `p_gen[i,p,t]` and `gen_phase_set`. The `examples/*.py` `pyomo_models` imports
-   all resolve.
+5. ~~Notebooks~~ Done: `build_your_own_opf.ipynb` now composes the model with
+   `create_model` and providers and solves with `solve`; the tutorial's curtailment
+   markdown uses `gen_p_available[d, p, t]` and `gen_device_phase_set`.
 6. Regenerate `csv/epri_j1` (and probably `ieee9500_wye` and `smartds_small_v2`)
    with the final converter, or document that they predate the shunt and tap-range
    columns. The DSS doc also has stale line counts.

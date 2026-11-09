@@ -539,9 +539,10 @@ def plot_pq(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
             q = q.drop("t", axis=1)
 
     id_col, name_col = _get_id_name_cols(p)
-    keep = [id_col, name_col] + [c for c in ("a", "b", "c") if c in p.columns]
-    p = p[keep]
-    q = q[[id_col, name_col] + [c for c in ("a", "b", "c") if c in q.columns]]
+    time_cols = ["t"] if animate else []  # animation frames need the t column
+    phase_cols = [c for c in ("a", "b", "c") if c in p.columns]
+    p = p[[id_col, name_col] + time_cols + phase_cols]
+    q = q[[id_col, name_col] + time_cols + [c for c in phase_cols if c in q.columns]]
 
     animation_frame = None
     id_vars = [id_col, name_col]
@@ -753,9 +754,10 @@ def plot_polar(p: pd.DataFrame, q: pd.DataFrame, t=None) -> go.Figure:
             q = q.drop("t", axis=1)
 
     id_col, name_col = _get_id_name_cols(p)
-    keep = [id_col, name_col] + [c for c in ("a", "b", "c") if c in p.columns]
-    p = p[keep]
-    q = q[[id_col, name_col] + [c for c in ("a", "b", "c") if c in q.columns]]
+    time_cols = ["t"] if animate else []  # animation frames need the t column
+    phase_cols = [c for c in ("a", "b", "c") if c in p.columns]
+    p = p[[id_col, name_col] + time_cols + phase_cols]
+    q = q[[id_col, name_col] + time_cols + [c for c in phase_cols if c in q.columns]]
 
     animation_frame = None
     id_vars = [id_col, name_col]

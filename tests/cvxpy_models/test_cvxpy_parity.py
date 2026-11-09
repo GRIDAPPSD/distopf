@@ -9,6 +9,9 @@ import pytest
 import distopf as opf
 from distopf import cvxpy_models as cvx
 from distopf import pyomo_models as pyo_models
+from distopf.cvxpy_models_performance.common.model import (
+    CvxModel as CvxModelPerformance,
+)
 from distopf.cvxpy_models.common import objectives as cvx_obj
 from distopf.pyomo_models.common import objectives as pyo_obj
 from distopf.pyomo_models.common.solvers import solve as pyo_solve
@@ -297,8 +300,9 @@ def test_formulation_registry_includes_cvxpy():
 
 
 def test_case_to_cvxpy_model():
+    # Case.to_cvxpy_model() builds the vectorized cvxpy_models_performance model.
     case = load("ieee13")
-    assert isinstance(case.to_cvxpy_model(), cvx.CvxModel)
+    assert isinstance(case.to_cvxpy_model(), CvxModelPerformance)
 
 
 def test_voltage_min_objective_string_alias():
