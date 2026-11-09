@@ -4,8 +4,11 @@ Static network data is prepared once, sweeps run level by level on arrays, and e
 time step only refreshes the schedule-dependent injections. Each step starts from the
 previous step's converged voltages. Schedules follow the Pyomo OPF conventions.
 
-Saved OPF decisions (generator, battery, ``OUT`` boundary-load setpoints, regulator
-taps and capacitor switch states) can be
+MPSSD ports (``case.mpssd_data``) are constant-PQ injections from ``p_<phase>`` /
+``q_<phase>`` (positive is injection).
+
+Saved OPF decisions (generator, battery, MPSSD, ``OUT`` boundary-load setpoints,
+regulator taps and capacitor switch states) can be
 replayed through the exact power flow with :func:`run_fbs_with_opf_setpoints`,
 :func:`replay_exact_power_flow_from_opf_result`, :func:`run_fbs_from_saved_results`
 and :func:`replay_exact_power_flow`.
@@ -90,6 +93,7 @@ class _Step(NamedTuple):
     sec_load: np.ndarray
     gen: np.ndarray
     bat: np.ndarray
+    mpssd: np.ndarray
     v_swing: np.ndarray
     tap: np.ndarray
     has_tap: bool
@@ -340,6 +344,33 @@ class FBS:
             -1, n_phase
         )
 
+        # MPSSD ports: one row per device, several devices may share a bus.
+        mpssd = getattr(case, "mpssd_data", None)
+        names, nodes, values, legs_mask = [], [], [], []
+        if mpssd is not None and len(mpssd):
+            bus_id = dict(zip(case.bus_data["name"].astype(str), case.bus_data["id"]))
+            for rec in mpssd.to_dict("records"):
+                k = node_pos.get_indexer([int(bus_id[str(rec["bus_name"])])])[0]
+                if k < 0:
+                    continue
+                s = np.zeros(n_phase, dtype=complex)
+                mask = np.zeros(n_phase, dtype=bool)
+                for p in _parse_phases(str(rec.get("phases", "abc")).lower()):
+                    if p not in _PHASE_IDX:
+                        continue
+                    p_pu = pd.to_numeric(rec.get(f"p_{p}", 0.0), errors="coerce")
+                    q_pu = pd.to_numeric(rec.get(f"q_{p}", 0.0), errors="coerce")
+                    s[_PHASE_IDX[p]] = complex(np.nan_to_num(p_pu), np.nan_to_num(q_pu))
+                    mask[_PHASE_IDX[p]] = True
+                names.append(str(rec["device_name"]))
+                nodes.append(int(k))
+                values.append(s)
+                legs_mask.append(mask)
+        self._mpssd_names = names
+        self._mpssd_nodes = np.array(nodes, dtype=np.int64)
+        self._mpssd = np.array(values, dtype=complex).reshape(-1, n_phase)
+        self._mpssd_legs = np.array(legs_mask, dtype=bool).reshape(-1, n_phase)
+
         cap = case.cap_data
         cap_nodes: dict[int, np.ndarray] = {}
         if cap is not None and len(cap):
@@ -438,6 +469,7 @@ class FBS:
         self._gen_p_t = self._gen_p[None] * self._gen_mult[:, :, None]
         self._gen_q_t = np.repeat(self._gen_q[None], n_steps, axis=0)
         self._bat_t = np.repeat(self._bat[None], n_steps, axis=0)
+        self._mpssd_t = np.repeat(self._mpssd[None], n_steps, axis=0)
         # Bus-ordered (n_steps, n_bus, 6) fixed loads; NaN means "use the schedule".
         self._pl_fixed: Optional[np.ndarray] = None
         self._ql_fixed: Optional[np.ndarray] = None
@@ -470,11 +502,14 @@ class FBS:
         q_bats: Optional[pd.DataFrame] = None,
         p_loads: Optional[pd.DataFrame] = None,
         q_loads: Optional[pd.DataFrame] = None,
+        p_mpssd: Optional[pd.DataFrame] = None,
+        q_mpssd: Optional[pd.DataFrame] = None,
     ) -> None:
         """Overwrite per-step injections with saved OPF decisions.
 
-        Frames use the result layout: an ``id`` column, an optional ``t`` column and
-        phase columns ``a, b, c, s1, s2``. Frames without ``t`` apply to every step.
+        Frames use the result layout: an ``id`` column (``device_name`` for MPSSD),
+        an optional ``t`` column and phase columns ``a, b, c, s1, s2``. Frames
+        without ``t`` apply to every step.
         NaN entries keep the case/schedule value. Generator setpoints replace the
         scheduled values, so the generator schedule is not applied on top of them.
         Loads are applied only at ``OUT`` buses, which are free variables in a
@@ -482,11 +517,16 @@ class FBS:
         Call this before :meth:`solve`.
         """
         loads_applied = False
+        bat_ids = [int(self.node_ids[k]) for k in self._bat_nodes]
+        bats = ("id", bat_ids, self._bat_legs, self._bat_t)
+        mpssds = ("device_name", self._mpssd_names, self._mpssd_legs, self._mpssd_t)
         for ti, t in enumerate(self.times):
             self._override_gens(ti, _at_period(p_gens, t), self._gen_p_t, "active")
             self._override_gens(ti, _at_period(q_gens, t), self._gen_q_t, "reactive")
-            self._override_bats(ti, _at_period(p_bats, t), real=True)
-            self._override_bats(ti, _at_period(q_bats, t), real=False)
+            self._override_ports(ti, _at_period(p_bats, t), *bats, real=True)
+            self._override_ports(ti, _at_period(q_bats, t), *bats, real=False)
+            self._override_ports(ti, _at_period(p_mpssd, t), *mpssds, real=True)
+            self._override_ports(ti, _at_period(q_mpssd, t), *mpssds, real=False)
             for frame, prefix in ((p_loads, "pl"), (q_loads, "ql")):
                 applied = self._override_out_loads(ti, _at_period(frame, t), prefix)
                 loads_applied = applied or loads_applied
@@ -661,28 +701,35 @@ class FBS:
         step = target[ti]  # view into the per-step array
         step[:, cols] = np.where(np.isnan(values), step[:, cols], values)
 
-    def _override_bats(
-        self, ti: int, frame: Optional[pd.DataFrame], real: bool
+    def _override_ports(
+        self,
+        ti: int,
+        frame: Optional[pd.DataFrame],
+        key: str,
+        keys: Sequence,
+        legs_mask: np.ndarray,
+        target: np.ndarray,
+        real: bool,
     ) -> None:
-        if frame is None or not len(frame) or not self._bat_nodes.size:
+        """Write saved battery/MPSSD values of device ``keys[j]`` into ``target[ti, j]``."""
+        if frame is None or not len(frame) or not len(keys):
             return
-        if "id" not in frame.columns:
-            raise ValueError("Saved battery setpoints must contain an 'id' column")
+        if key not in frame.columns:
+            raise ValueError(f"Saved setpoints must contain a {key!r} column")
         prefix = "p" if real else "q"
-        saved = frame.drop_duplicates("id", keep="first").set_index("id")
-        part = self._bat_t.real if real else self._bat_t.imag  # writable views
-        for j, k in enumerate(self._bat_nodes):
-            bat_id = int(self.node_ids[k])
-            if bat_id not in saved.index:
+        saved = frame.drop_duplicates(key, keep="first").set_index(key)
+        part = target.real if real else target.imag  # writable views
+        for j, name in enumerate(keys):
+            if name not in saved.index:
                 continue
-            row = saved.loc[bat_id]
+            row = saved.loc[name]
             values = np.full(len(_PHASES), np.nan)
             for phase in _PHASES:
                 for column in (phase, f"{prefix}_{phase}"):
                     if column in row.index and pd.notna(row[column]):
                         values[_PHASE_IDX[phase]] = float(row[column])
                         break
-            legs = self._bat_legs[j]
+            legs = legs_mask[j]
             if np.isnan(values[legs]).all():
                 continue
             part[ti, j, legs] = np.nan_to_num(values[legs])
@@ -746,6 +793,7 @@ class FBS:
             sec_load=pl[sec, 3:6] + 1j * ql[sec, 3:6],
             gen=gen,
             bat=self._bat_t[ti],
+            mpssd=self._mpssd_t[ti],
             v_swing=self._v_swing[ti],
             tap=self._tap_t[ti],
             has_tap=bool(np.any(self._tap_t[ti] != 1)),
@@ -774,6 +822,10 @@ class FBS:
             if bn.size:
                 ok = cn[bn] & nz[bn] & (np.abs(st.bat) > _EPS)
                 inj[bn] += np.where(ok, np.conj(st.bat / v[bn]), 0)
+            mn = self._mpssd_nodes
+            if mn.size:
+                ok = cn[mn] & nz[mn] & (np.abs(st.mpssd) > _EPS)
+                np.add.at(inj, mn, np.where(ok, np.conj(st.mpssd / v[mn]), 0))
             cp = self._cap_nodes
             if cp.size:
                 ok = cn[cp] & nz[cp] & (np.abs(st.cap) > _EPS)
@@ -1207,6 +1259,21 @@ _SETPOINT_FIELDS = (
     "reactive_power_loads",
 )
 _DEVICE_STATE_FIELDS = ("reg_taps", "u_caps", "capacitor_reactive_power", "voltages")
+_MPSSD_FIELDS = ("p_mpssd", "q_mpssd")
+
+
+def _opf_frames(opf_result) -> dict[str, Optional[pd.DataFrame]]:
+    """Setpoint and device-state frames of an OPF result; MPSSD frames may be on ``raw_result``."""
+    if opf_result is None:
+        return {}
+    fields = _SETPOINT_FIELDS + _DEVICE_STATE_FIELDS
+    frames = {name: getattr(opf_result, name, None) for name in fields}
+    raw = getattr(opf_result, "raw_result", None)
+    for name in _MPSSD_FIELDS:
+        frames[name] = getattr(opf_result, name, None)
+        if frames[name] is None:
+            frames[name] = getattr(raw, name, None)
+    return frames
 
 
 def _replay_times(case: Case, frames: Iterable[Optional[pd.DataFrame]]) -> list[int]:
@@ -1255,6 +1322,8 @@ def _solve_with_setpoints(
         q_bats=frames.get("battery_reactive_power"),
         p_loads=frames.get("active_power_loads"),
         q_loads=frames.get("reactive_power_loads"),
+        p_mpssd=frames.get("p_mpssd"),
+        q_mpssd=frames.get("q_mpssd"),
     )
     result = solver.solve(
         max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
@@ -1297,8 +1366,7 @@ def run_fbs_with_opf_setpoints(
     variables in a decomposed OPF. A supplied generator frame must cover every
     generator. Explicit ``p_gens`` / ``q_gens`` take precedence over ``opf_result``.
     """
-    fields = _SETPOINT_FIELDS + _DEVICE_STATE_FIELDS
-    frames = {name: getattr(opf_result, name, None) for name in fields}
+    frames = _opf_frames(opf_result)
     if p_gens is not None:
         frames["active_power_generation"] = p_gens
     if q_gens is not None:

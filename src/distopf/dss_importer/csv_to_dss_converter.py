@@ -15,6 +15,8 @@ Mapping
                       constant PQ, or ``model=4`` (CVR) when ``cvr_p``/``cvr_q`` are nonzero
 - capacitors       -> one single-phase Capacitor per bus phase
 - generators       -> one single-phase constant-PQ Generator per bus phase (p/q setpoints)
+- mpssd ports      -> one single-phase constant-PQ Generator ``mpssd_<device>_<phase>`` per
+                      port of ``case.mpssd_data`` (p/q setpoints, positive is injection)
 - batteries        -> one multi-phase Storage per battery; fixed kW/kvar from the summed
                       ``p_*``/``q_*`` or ``p``/``q`` (OpenDSS splits them equally over the
                       phases); positive is discharging
@@ -24,16 +26,26 @@ Mapping
                       load and generator setpoints are scaled by the schedule multipliers
                       exactly as FBS does, and the swing voltage uses the ``v_a`` column.
                       Convert each time step separately.
+- opf_result       -> optional OPF result replayed like ``run_fbs_with_opf_setpoints``:
+                      generator, battery and OUT-bus load setpoints replace the case values
+                      (CVR off at OUT buses), regulator taps come from ``reg_taps``,
+                      capacitors are switched from ``u_caps`` (else inferred from
+                      ``capacitor_reactive_power``), and MPSSD ports use ``p_mpssd``/
+                      ``q_mpssd`` (on the result or its ``raw_result``).
 """
 
 import re
+import tempfile
 from math import pi, sqrt
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
+import numpy as np
 import pandas as pd
 
 from distopf.api import Case, create_case
+from distopf.fbs import _opf_frames, _at_period, _replay_times
+from distopf.results import PowerFlowResult
 
 PHASE_NODE = {"a": 1, "b": 2, "c": 3, "s1": 1, "s2": 2}
 LOAD_PHASES = ("a", "b", "c", "s1", "s2", "s1s2")
@@ -230,30 +242,134 @@ def _load_line(
     )
 
 
-def _battery_setpoints(row: pd.Series) -> dict[str, tuple[float, float]]:
-    """Per-phase (p, q) of a battery row: ``p_*``/``q_*`` columns, else ``p``/``q`` split equally."""
+def _generator_line(
+    name: str, bus: str, phase: str, kv: float, p_kw: float, q_kvar: float
+) -> str:
+    return (
+        f"New Generator.{name}_{phase} phases=1 bus1={_node(bus, phase)} "
+        f"kV={kv:.12g} kW={p_kw:.12g} kvar={q_kvar:.12g} model=1"
+    )
+
+
+def _battery_setpoints(
+    row: pd.Series, saved_p: pd.DataFrame, saved_q: pd.DataFrame
+) -> dict[str, tuple[float, float]]:
+    """Per-phase (p, q) of a battery row: ``p_*``/``q_*`` columns, else ``p``/``q`` split equally.
+
+    Saved OPF values (phase or ``p_<phase>``/``q_<phase>`` columns, by ``id``) replace them.
+    """
     legs = _split_phases(row.get("phases", "abc"))
     if any(f"{k}_{p}" in row.index for k in "pq" for p in PHASE_NODE):
-        return {p: (row.get(f"p_{p}", 0.0), row.get(f"q_{p}", 0.0)) for p in legs}
-    share = (row.get("p", 0.0) / len(legs), row.get("q", 0.0) / len(legs))
-    return {p: share for p in legs}
+        case_values = {
+            p: (row.get(f"p_{p}", 0.0), row.get(f"q_{p}", 0.0)) for p in legs
+        }
+    else:
+        share = (row.get("p", 0.0) / len(legs), row.get("q", 0.0) / len(legs))
+        case_values = {p: share for p in legs}
+    return {
+        p: (
+            _saved(saved_p, row["id"], p, f"p_{p}", default=pq[0]),
+            _saved(saved_q, row["id"], p, f"q_{p}", default=pq[1]),
+        )
+        for p, pq in case_values.items()
+    }
+
+
+def _result_frames(opf_result: Any, t: int) -> dict[str, Optional[pd.DataFrame]]:
+    """OPF result frames for period ``t``."""
+    return {name: _at_period(f, t) for name, f in _opf_frames(opf_result).items()}
+
+
+def _indexed(frame: Optional[pd.DataFrame], key: str) -> pd.DataFrame:
+    """Rows of a result frame indexed by ``key`` (first row wins); empty without a frame."""
+    if frame is None or not len(frame):
+        return pd.DataFrame()
+    if key not in frame.columns:
+        raise ValueError(f"OPF result frame must contain a {key!r} column")
+    return frame.drop_duplicates(key, keep="first").set_index(key)
+
+
+def _saved(saved: pd.DataFrame, key: Any, *columns: str, default=None):
+    """First non-NaN value of ``columns`` in row ``key`` of ``saved``, else ``default``."""
+    if key not in saved.index:
+        return default
+    for column in columns:
+        if column in saved.columns:
+            value = pd.to_numeric(saved.at[key, column], errors="coerce")
+            if pd.notna(value):
+                return float(value)
+    return default
+
+
+def _bus_load(
+    row: pd.Series, phase: str, kind: str, mult: _Multipliers, saved: pd.DataFrame
+) -> float:
+    """Load ``kind`` ('p'/'q') in pu; saved OPF loads replace the load at OUT buses."""
+    shape = _text(row, "load_shape") or "default"
+    value = row.get(f"{kind}l_{phase}", 0.0) * mult.load(shape, phase, kind)
+    if row["bus_type"] != "OUT":
+        return value
+    if phase == "s1s2":
+        # Result s1/s2 loads already include half of the s1s2 load.
+        split = [_saved(saved, row["id"], s) for s in ("s1", "s2")]
+        return value if split == [None, None] else 0.0
+    return _saved(saved, row["id"], phase, default=value)
+
+
+def _capacitor_on(
+    cap_id: Any,
+    phase: str,
+    nominal: float,
+    v_min: float,
+    u_caps: pd.DataFrame,
+    q_caps: pd.DataFrame,
+    voltages: pd.DataFrame,
+) -> bool:
+    """Switch state from ``u_caps``, else on when q >= half of nominal * v^2 (FBS rule)."""
+    if len(u_caps):
+        state = _saved(u_caps, cap_id, phase)
+        return state is None or state > 0.5
+    q = _saved(q_caps, cap_id, phase)
+    if q is None:
+        return True
+    v = _saved(voltages, cap_id, phase, default=v_min)
+    return q / nominal > 0.5 * v**2
 
 
 def case_to_dss(
-    case: Case, output_path: Union[str, Path], t: Optional[int] = None
+    case: Case,
+    output_path: Union[str, Path],
+    t: Optional[int] = None,
+    opf_result: Any = None,
 ) -> Path:
-    """Write ``case`` at time step ``t`` (default ``case.start_step``) to an OpenDSS file."""
+    """Write ``case`` at time step ``t`` (default ``case.start_step``) to an OpenDSS file.
+
+    With ``opf_result`` the OPF setpoints and device states are written instead of the
+    case values, as in :func:`distopf.fbs.run_fbs_with_opf_setpoints`.
+    """
     bus = case.bus_data
     bus_name = dict(zip(bus["id"], bus["name"].astype(str)))
     bus_kv = dict(zip(bus["id"], bus["v_ln_base"] / 1e3))
     bus_s_base = dict(zip(bus["id"], bus["s_base"]))
     swing = bus[bus["bus_type"] == "SWING"].iloc[0]
-    mult = _Multipliers(case, case.start_step if t is None else t)
+    t = case.start_step if t is None else t
+    mult = _Multipliers(case, t)
+    frames = _result_frames(opf_result, t)
+    p_loads = _indexed(frames.get("active_power_loads"), "id")
+    q_loads = _indexed(frames.get("reactive_power_loads"), "id")
+    loads_given = bool(len(p_loads) or len(q_loads))
 
-    reg_ratio = {
-        (r["fb"], r["tb"]): {p: r[f"ratio_{p}"] for p in "abc" if f"ratio_{p}" in r}
-        for _, r in case.reg_data.iterrows()
-    }
+    reg_taps = _indexed(frames.get("reg_taps"), "tb")
+    reg_ratio = {}
+    for _, r in case.reg_data.iterrows():
+        step = (r["ratio_max"] - r["ratio_min"]) / r["num_taps"] if len(reg_taps) else 0
+        ratios = {}
+        for p in "abc":
+            if f"ratio_{p}" not in r:
+                continue
+            tap = _saved(reg_taps, r["tb"], f"tap_{p}", p)
+            ratios[p] = r[f"ratio_{p}"] if tap is None else 1 + step * tap
+        reg_ratio[(r["fb"], r["tb"])] = ratios
 
     out = [
         "Clear",
@@ -273,9 +389,10 @@ def case_to_dss(
     for _, row in bus.iterrows():
         if row["bus_type"] == "SWING":
             continue  # FBS ignores load at the source bus
-        shape = _text(row, "load_shape") or "default"
+        cvr_off = loads_given and row["bus_type"] == "OUT"
         for p in LOAD_PHASES:
-            pl, ql = row.get(f"pl_{p}", 0.0), row.get(f"ql_{p}", 0.0)
+            pl = _bus_load(row, p, "p", mult, p_loads)
+            ql = _bus_load(row, p, "q", mult, q_loads)
             if pl != 0 or ql != 0:
                 scale = row["s_base"] / 1e3
                 out.append(
@@ -284,36 +401,86 @@ def case_to_dss(
                         bus_name[row["id"]],
                         p,
                         row["v_ln_base"] / 1e3,
-                        pl * scale * mult.load(shape, p, "p"),
-                        ql * scale * mult.load(shape, p, "q"),
-                        row.get("cvr_p", 0.0),
-                        row.get("cvr_q", 0.0),
+                        pl * scale,
+                        ql * scale,
+                        0.0 if cvr_off else row.get("cvr_p", 0.0),
+                        0.0 if cvr_off else row.get("cvr_q", 0.0),
                     )
                 )
 
+    u_caps = _indexed(frames.get("u_caps"), "id")
+    q_caps = _indexed(frames.get("capacitor_reactive_power"), "id")
+    voltages = _indexed(frames.get("voltages"), "id")
+    v_min = dict(zip(bus["id"], bus["v_min"])) if "v_min" in bus else {}
     for _, row in case.cap_data.iterrows():
         for p in "abc":
-            if row[f"q_{p}"] != 0:
+            nominal = row[f"q_{p}"]
+            if nominal != 0 and _capacitor_on(
+                row["id"],
+                p,
+                nominal,
+                v_min.get(row["id"], 1.0),
+                u_caps,
+                q_caps,
+                voltages,
+            ):
                 out.append(
                     f"New Capacitor.{row['name']}_{p} phases=1 bus1={_node(bus_name[row['id']], p)} "
-                    f"kV={bus_kv[row['id']]:.12g} kvar={row[f'q_{p}'] * bus_s_base[row['id']] / 1e3:.12g}"
+                    f"kV={bus_kv[row['id']]:.12g} kvar={nominal * bus_s_base[row['id']] / 1e3:.12g}"
                 )
 
+    p_gens = _indexed(frames.get("active_power_generation"), "id")
+    q_gens = _indexed(frames.get("reactive_power_generation"), "id")
     for _, row in case.gen_data.iterrows():
         p_scale = mult.generator(_text(row, "gen_shape"))
+        scale = bus_s_base[row["id"]] / 1e3
         for p in PHASE_NODE:
-            p_pu, q_pu = row.get(f"p_{p}", 0.0), row.get(f"q_{p}", 0.0)
+            # Saved setpoints replace the scheduled values; no schedule on top.
+            p_pu = _saved(
+                p_gens, row["id"], p, default=row.get(f"p_{p}", 0.0) * p_scale
+            )
+            q_pu = _saved(q_gens, row["id"], p, default=row.get(f"q_{p}", 0.0))
             if p_pu != 0 or q_pu != 0:
                 out.append(
-                    f"New Generator.{row['name']}_{p} phases=1 bus1={_node(bus_name[row['id']], p)} "
-                    f"kV={bus_kv[row['id']]:.12g} kW={p_pu * p_scale * bus_s_base[row['id']] / 1e3:.12g} "
-                    f"kvar={q_pu * bus_s_base[row['id']] / 1e3:.12g} model=1"
+                    _generator_line(
+                        row["name"],
+                        bus_name[row["id"]],
+                        p,
+                        bus_kv[row["id"]],
+                        p_pu * scale,
+                        q_pu * scale,
+                    )
                 )
 
+    mpssd = getattr(case, "mpssd_data", None)
+    if mpssd is not None and len(mpssd):
+        bus_id = dict(zip(bus["name"].astype(str), bus["id"]))
+        p_mpssd = _indexed(frames.get("p_mpssd"), "device_name")
+        q_mpssd = _indexed(frames.get("q_mpssd"), "device_name")
+        for _, row in mpssd.iterrows():
+            device = _text(row, "device_name")
+            i = bus_id[_text(row, "bus_name")]
+            scale = bus_s_base[i] / 1e3
+            for p in _split_phases(row["phases"]):
+                p_pu = _saved(p_mpssd, device, p, default=_value(row, f"p_{p}"))
+                q_pu = _saved(q_mpssd, device, p, default=_value(row, f"q_{p}"))
+                out.append(
+                    _generator_line(
+                        f"mpssd_{device}",
+                        bus_name[i],
+                        p,
+                        bus_kv[i],
+                        p_pu * scale,
+                        q_pu * scale,
+                    )
+                )
+
+    p_bats = _indexed(frames.get("battery_active_power"), "id")
+    q_bats = _indexed(frames.get("battery_reactive_power"), "id")
     if case.bat_data is not None:
         for _, row in case.bat_data.iterrows():
             scale = bus_s_base[row["id"]] / 1e3
-            setpoints = _battery_setpoints(row)
+            setpoints = _battery_setpoints(row, p_bats, q_bats)
             nodes = ".".join(str(PHASE_NODE[p]) for p in setpoints)
             kv = bus_kv[row["id"]] * (sqrt(3) if len(setpoints) > 1 else 1)
             p_total = sum(p for p, _ in setpoints.values())
@@ -343,7 +510,49 @@ def case_to_dss(
 
 
 def csv_to_dss(
-    csv_dir: Union[str, Path], output_path: Union[str, Path], t: Optional[int] = None
+    csv_dir: Union[str, Path],
+    output_path: Union[str, Path],
+    t: Optional[int] = None,
+    opf_result: Any = None,
 ) -> Path:
     """Load a DistOPF CSV case directory and write it as an OpenDSS file."""
-    return case_to_dss(create_case(Path(csv_dir)), output_path, t)
+    return case_to_dss(create_case(Path(csv_dir)), output_path, t, opf_result)
+
+
+def run_opendss(case: Case, opf_result: Any = None) -> PowerFlowResult:
+    """Solve each time step of ``case`` (or each period of ``opf_result``) in OpenDSS.
+
+    Returns per-unit voltage magnitudes in the FBS ``voltages`` layout.
+    """
+    from opendssdirect import dss
+
+    frames = _opf_frames(opf_result)
+    times = _replay_times(case, [f for n, f in frames.items() if n != "voltages"])
+    bus = case.bus_data
+    secondary = bus["phases"].astype(str).str.contains("s").to_numpy()
+    rows, converged = [], True
+    with tempfile.TemporaryDirectory() as tmp:
+        for t in times:
+            path = case_to_dss(case, Path(tmp) / f"case_{t}.dss", t, opf_result)
+            dss.Text.Command("Clear")
+            dss.Text.Command(f"Redirect {path}")
+            converged = converged and bool(dss.Solution.Converged())
+            for (i, name), is_sec in zip(bus[["id", "name"]].values, secondary):
+                row = {"id": i, "name": name, "t": t}
+                row.update({p: np.nan for p in PHASE_NODE})
+                dss.Circuit.SetActiveBus(str(name))
+                nodes = dss.Bus.Nodes()
+                vmag = dss.Bus.puVmagAngle()[0::2]
+                phases = ("s1", "s2") if is_sec else ("a", "b", "c")
+                for node, value in zip(nodes, vmag):
+                    if 1 <= node <= len(phases):
+                        row[phases[node - 1]] = value
+                rows.append(row)
+    return PowerFlowResult(
+        voltages=pd.DataFrame(rows),
+        solver="opendss",
+        backend="opendss",
+        result_type="opendss",
+        converged=converged,
+        case=case,
+    )

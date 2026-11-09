@@ -12,6 +12,7 @@ logger = logging.getLogger("distopf")
 # These are only imported when actually needed to improve startup time
 if TYPE_CHECKING:
     from distopf.matrix_models.base import LinDistBase
+    from distopf.results import PowerFlowResult
 
 from distopf.utils.input_handlers import (
     handle_branch_input,
@@ -380,38 +381,58 @@ class Case:
     # Analysis Methods
     # -------------------------------------------------------------------------
     @record_call
-    def run_pf(self, raw_result: bool = False):
+    def run_pf(
+        self,
+        raw_result: bool = False,
+        *,
+        solver: str = "fbs",
+        opf_result: Optional["PowerFlowResult"] = None,
+    ):
         """
         Run unconstrained power flow analysis.
 
         This runs power flow without any optimization constraints (wide voltage
         limits, no control variables). Use this to check the base case before
-        optimization.
+        optimization, or to check an OPF result with an exact power flow.
 
         Parameters
         ----------
         raw_result : bool, default False
-            If True, return the raw FBS result object instead of PowerFlowResult.
+            Unused; kept for backward compatibility.
+        solver : {"fbs", "opendss"}, default "fbs"
+            Power flow solver. ``"opendss"`` writes the case with
+            :func:`distopf.dss_importer.csv_to_dss_converter.case_to_dss` and solves
+            it in OpenDSS (needs ``opendssdirect``); it returns voltages only.
+        opf_result : PowerFlowResult, optional
+            OPF result whose generator, battery, MPSSD, OUT-bus load, regulator
+            and capacitor decisions replace the case values (see
+            :func:`distopf.fbs.run_fbs_with_opf_setpoints`). MPSSD setpoints are
+            read from ``opf_result.raw_result`` when not on the result.
 
         Returns
         -------
-        PowerFlowResult or FBS result
-            If raw_result=False: PowerFlowResult with voltages, active_power_flows, reactive_power_flows, etc.
-            If raw_result=True: FBS result object
+        PowerFlowResult
 
         Examples
         --------
         >>> case = create_case(CASES_DIR / "csv" / "ieee13")
         >>> result = case.run_pf()
+        >>> dss_result = case.run_pf(solver="opendss")
         >>> print(result.voltages.head())
-        >>> # Backward-compatible tuple unpacking still works if needed:
-        >>> voltages, p_flows, q_flows = case.run_pf()  # (same as unpacking result)
         """
-        from distopf.fbs import FBS
+        if solver == "fbs":
+            from distopf.fbs import FBS, run_fbs_with_opf_setpoints
 
-        # Use FBS for power flow analysis
-        fbs = FBS(self)
-        return fbs.solve(max_iterations=100, tolerance=1e-6, verbose=False)
+            if opf_result is not None:
+                return run_fbs_with_opf_setpoints(self, opf_result)
+            return FBS(self).solve(max_iterations=100, tolerance=1e-6, verbose=False)
+        if solver == "opendss":
+            from distopf.dss_importer.csv_to_dss_converter import run_opendss
+
+            return run_opendss(self, opf_result)
+        raise ValueError(
+            f"Unknown power flow solver {solver!r}; use 'fbs' or 'opendss'"
+        )
 
     @record_call
     def run_fbs(
