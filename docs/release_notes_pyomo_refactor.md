@@ -169,6 +169,21 @@ review"). Items not read in detail are called out at the end.
 - Solver failures raise `ValueError` with the status, termination condition and
   the last 3,000 characters of the solver log.
 
+## Migration guide
+Code written against `develop` needs these changes:
+
+| Before | After |
+|--------|-------|
+| `from distopf.pyomo_models.lindist import LinDistModel`, then `add_*_constraints(model)` | `create_lindist_model(case, **options)` builds the whole model; to choose devices, `create_model(case, core=BFMProvider(), devices=[...])` (see `examples/notebooks/build_your_own_opf.ipynb`) |
+| `create_nl_branchflow_model` via `NLBranchFlow` | `create_nl_branchflow_model(case, **options)` |
+| `from distopf.pyomo_models import objectives, results, solvers` | `distopf.pyomo_models.common.objectives`, `.results`, `.solvers`; use `set_objective(model, rule)` |
+| `model.p_gen[bus_id, ph, t]`, `p_gen_nom`, `gen_phase_set` | `model.p_gen[device_name, ph, t]`, `gen_p_available`, `gen_device_phase_set`; map to buses with `gen_bus_by_device` |
+| `gen_data` with `id`/`name` | `device_name`, `bus_name`, `phases` (old tables are translated automatically on the Pyomo and CVXPY paths) |
+| `reg_data` with `ratio_*` only | integer `tap_*` columns; `ratio_min`, `ratio_max`, `num_taps` set the step |
+| Misspelled builder keyword silently ignored | raises `TypeError` |
+| `loss_min` meaning P²+Q² | now I²R when `l_flow` exists; use `loss_pq` for the old meaning |
+| Python 3.10, `cvxpy` 1.7 | Python 3.11+, `cvxpy` 1.9+ |
+
 ## New features
 
 ### Pyomo layer
@@ -384,34 +399,39 @@ Compared with `develop`, with tolerances tightened from 1e-4 / 1e-5 to 1e-6 / 1e
 ## Before merging
 1. ~~Remove the `scratch` gitlink~~ Done: `git rm --cached scratch`; the dead
    `scratch/` references in `docs/dss_converter_old_vs_new.md` were removed.
-2. Local `develop` has 4 commits that are not on `origin/develop` (the Oct 30
-   regulator-tap and capacitor-results commits). They are already in this branch;
-   pushing `develop` publishes them.
-3. `main` is 72 commits behind `develop`, so a merge to `main` carries more than
-   this branch.
-4. The version is still `1.1.0.dev5`. Dropping Python 3.10 and removing APIs
-   argue for at least a minor bump and a migration note.
+2. ~~Local `develop` has 4 commits that are not on `origin/develop`~~ Done: they were
+   already in this branch, so pushing `develop` published nothing new.
+3. `main` (1.0.2) is 68 commits behind `develop`, so a merge to `main` carries more
+   than this branch.
+4. ~~Version~~ Now `1.1.0.dev6` (was `dev5`). Against `main` (1.0.2) this release is
+   already a minor bump. See "Migration guide" for the removed APIs.
 5. ~~Notebooks~~ Done: `build_your_own_opf.ipynb` now composes the model with
    `create_model` and providers and solves with `solve`; the tutorial's curtailment
    markdown uses `gen_p_available[d, p, t]` and `gen_device_phase_set`.
-6. Regenerate `csv/epri_j1` (and probably `ieee9500_wye` and `smartds_small_v2`)
-   with the final converter, or document that they predate the shunt and tap-range
-   columns. The DSS doc also has stale line counts.
+6. ~~Regenerate cases~~ Done where the converter reproduces the committed case:
+   - `epri_j1`: regenerated. It gains the `b_*`/`g_sh_*`/`b_sh_*` and tap-range
+     columns, and its impedances and regulator taps change (tap-squared fix).
+   - `smartds_small_v2`: regenerated; identical except for the new columns. The new
+     transformer no-load shunts raise the FBS-versus-OpenDSS voltage difference
+     from 1e-6 to 1.1e-4, so that test tolerance is now 2e-4.
+   - `ieee9500`: regenerated through `create_case_from_dss(n_steps=1)`; only the
+     triplex load values in `bus_data.csv` changed.
+   - `ieee9500_wye` is NOT regenerated. The committed case does not come from the
+     bundled `ieee9500_wye` DSS master (5293 branches versus 5304, 4 capacitors
+     versus 3), so it carries hand edits that regeneration would lose.
 7. Test coverage gaps:
-   - No `cyipopt` in CI.
-   - The vectorized CVXPY package is compared against Pyomo only on ieee13 LinDist
-     (through the wrapper). Batteries, multi-period, triplex and MPSSD are compared
-     only against the scalar package.
-   - The SDP test compares the two CVXPY packages' objective values only. Nothing
-     outside CVXPY checks it, and no variables are compared.
-   - No Pyomo parity tests for capacity expansion or demand charge.
-   - No tests for `delta_to_wye` or the 9500/EPRI conversions. FBS MPSSD ports and
-  `run_pf(solver="opendss")` are checked against each other in
-  `tests/dss_converter/unit/test_csv_to_dss.py` only (ieee123_30der, plus ieee13
-  cases for the exporter).
-   - The snapshots do not record `s1`/`s2` voltages or flows.
-   - The full suite was run locally on Python 3.14 only (3.11–3.13 were only
-     checked for compilation).
+   - Added: `delta_to_wye` test (`tests/dss_converter/integration/test_delta_to_wye.py`),
+     triplex `s1`/`s2` voltage agreement between Pyomo LinDist and FBS
+     (`tests/test_triplex_secondary_voltages.py`), plot animation tests. The
+     "not slow" suite passes on Python 3.11 (631 passed) and 3.12.
+   - `cyipopt` is now installed in the CI workflow (`conda install ipopt cyipopt`).
+     This is untested: the exact-BranchFlow CVXPY tests will run on CI for the first
+     time and may need fixes.
+   - Still open: the vectorized CVXPY package is compared against Pyomo only on ieee13
+     LinDist (batteries, multi-period, triplex and MPSSD are compared against the
+     scalar package only); the SDP test compares objective values only; no Pyomo
+     parity test for capacity expansion; no test for the 9500/EPRI conversions;
+     Python 3.13 was not run locally.
 8. ~~Builder options are not validated~~ Done (see "Builder options are validated").
 9. ~~The CVXPY wrapper reports a user-supplied `solver=` name~~ Done: the result now
    reports `problem.solver_stats.solver_name` (IPOPT for non-DCP problems).
