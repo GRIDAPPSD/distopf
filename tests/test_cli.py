@@ -12,6 +12,11 @@ from click.testing import CliRunner
 from distopf.cli import distopf
 
 
+def _plain(output: str) -> str:
+    """Strip ANSI styling; rich-click colors option names when CI forces color."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", output)
+
+
 def _config(tmp_path, **overrides):
     config = {
         "schema_version": 1,
@@ -829,7 +834,7 @@ def test_compare_exact_batch_rejects_threads_with_multiple_workers(tmp_path):
         ],
     )
     assert result.exit_code == 2
-    assert "--threads and --workers cannot be used together" in result.output
+    assert "--threads and --workers cannot be used together" in _plain(result.output)
 
 
 def test_compare_exact_rejects_right_folder_in_batch_mode(tmp_path):
@@ -838,7 +843,7 @@ def test_compare_exact_rejects_right_folder_in_batch_mode(tmp_path):
         ["compare-exact", str(tmp_path), str(tmp_path), "--batch"],
     )
     assert result.exit_code == 2
-    assert "RIGHT_FOLDER cannot be used with --batch" in result.output
+    assert "RIGHT_FOLDER cannot be used with --batch" in _plain(result.output)
 
 
 def test_compare_exact_ignores_non_directories_in_batch_mode(tmp_path):
