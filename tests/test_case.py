@@ -4,7 +4,6 @@ describe/metadata, ignore flags, verbose logging, and backward compatibility."""
 import json
 import logging
 
-import numpy as np
 import pytest
 import pyomo.environ as pyo
 
@@ -23,6 +22,19 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 
 class TestCaseValidation:
     """Test Case._validate_case() method."""
+
+    def test_csv_preserves_numeric_bus_names_with_blank_cells(self, tmp_path):
+        case = create_case(CASES_DIR / "csv" / "ieee13")
+        case.bus_data["name"] = ["00151", ""] + [
+            str(300 + index) for index in range(len(case.bus_data) - 2)
+        ]
+        case.bus_data.to_csv(tmp_path / "bus_data.csv", index=False)
+        case.branch_data.to_csv(tmp_path / "branch_data.csv", index=False)
+
+        loaded = create_case(tmp_path)
+
+        assert loaded.bus_data.iloc[0]["name"] == "00151"
+        assert loaded.bus_data.iloc[2]["name"] == "300"
 
     def test_valid_case_passes(self):
         """A valid case should pass validation without errors."""
@@ -217,6 +229,9 @@ class TestCaseMethods:
         assert result.currents is not None
         assert result.current_angles is not None
         assert result.solver == "fbs"
+        assert result.iterations > 0
+        assert result.solve_time is not None
+        assert result.solve_time >= 0
 
         assert len(result.voltages) > 0
         assert len(result.currents) > 0
@@ -465,9 +480,7 @@ class TestIgnoreData:
 
     def test_ignore_bat_empties_bat_data(self):
         """ignore_bat=True should result in empty bat_data DataFrame."""
-        case = opf.create_case(
-            opf.CASES_DIR / "csv" / "ieee123_30der_bat", ignore_bat=True
-        )
+        case = opf.create_case(opf.CASES_DIR / "csv" / "ieee123_bat", ignore_bat=True)
         assert case.bat_data.empty
         assert case.ignore_bat is True
 

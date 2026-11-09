@@ -12,8 +12,6 @@ import pandas as pd
 import pyomo.environ as pyo
 
 import distopf as opf
-from distopf.pyomo_models import solve, add_constraints, loss_objective
-from distopf.pyomo_models.results import PyoResult
 
 _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 

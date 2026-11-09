@@ -16,10 +16,43 @@ from distopf.utils.input_handlers import (
     handle_reg_input,
     handle_schedules_input,
 )
+from distopf.utils.topology import find_unconstrained_bus_phases
 
 
 class TestUtilityFunctions:
     """Test the handle_*_input utility functions."""
+
+    def test_find_unconstrained_bus_phases(self):
+        """Report bus phases absent from their incoming branch phases."""
+        buses = pd.DataFrame(
+            {
+                "id": [1, 2, 3],
+                "name": ["source", "single", "mismatch"],
+                "phases": ["a", "a", "ab"],
+                "bus_type": ["SWING", "PQ", "PQ"],
+            }
+        )
+        branches = pd.DataFrame({"fb": [1, 2], "tb": [2, 3], "phases": ["a", "a"]})
+
+        result = find_unconstrained_bus_phases(buses, branches)
+
+        assert result[["id", "phase"]].to_dict("records") == [{"id": 3, "phase": "b"}]
+
+    def test_find_unconstrained_bus_phases_keeps_triplex_phases(self):
+        """Treat s1 and s2 as phase labels rather than characters."""
+        buses = pd.DataFrame(
+            {
+                "id": [1, 2],
+                "name": ["source", "triplex"],
+                "phases": ["a", "s1s2"],
+                "bus_type": ["SWING", "PQ"],
+            }
+        )
+        branches = pd.DataFrame({"fb": [1], "tb": [2], "phases": ["s1"]})
+
+        result = find_unconstrained_bus_phases(buses, branches)
+
+        assert result[["id", "phase"]].to_dict("records") == [{"id": 2, "phase": "s2"}]
 
     def test_get_existing_key(self):
         """get() should return value at existing index."""
@@ -136,8 +169,8 @@ class TestUtilityFunctions:
         assert "ratio_a" in result.columns
         assert abs(result.loc[result.tb == 2, "ratio_a"].iloc[0] - 1.0) < 1e-6
 
-    def test_handle_reg_input_ratio_to_tap_conversion(self):
-        """handle_reg_input should compute tap from ratio."""
+    def test_handle_reg_input_rejects_ratio_without_tap(self):
+        """Regulator ratios are derived from taps, not accepted as input."""
         reg = pd.DataFrame(
             {
                 "fb": [1],
@@ -148,9 +181,21 @@ class TestUtilityFunctions:
                 "ratio_c": [1.0],
             }
         )
+        with pytest.raises(ValueError, match="tap_a is required"):
+            handle_reg_input(reg)
+
+    def test_handle_reg_input_tap_overrides_supplied_ratio(self):
+        reg = pd.DataFrame(
+            {
+                "fb": [1],
+                "tb": [2],
+                "phases": ["a"],
+                "tap_a": [4],
+                "ratio_a": [1.5],
+            }
+        )
         result = handle_reg_input(reg)
-        assert "tap_a" in result.columns
-        assert abs(result.loc[result.tb == 2, "tap_a"].iloc[0]) < 1e-6
+        assert result.loc[result.tb == 2, "ratio_a"].iloc[0] == pytest.approx(1.025)
 
     def test_handle_schedules_input_none(self):
         """handle_schedules_input(None) returns empty DataFrame."""

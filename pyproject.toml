@@ -1,6 +1,6 @@
 [project]
 name = "distopf"
-version = "1.0.2"
+version = "1.1.0.dev6"
 description = "A package for solving unbalanced three-phase distribution system optimal power flow problems."
 readme = "README.md"
 authors = [
@@ -8,9 +8,9 @@ authors = [
   {  name="Rabayet Sadnan", email="rabayet.sadnan@pnnl.gov"},
   {  name="Abodh Poudyal"},
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "cvxpy>=1.7.2",
+    "cvxpy>=1.9.0",
     "networkx>=3.4.2",
     "numpy>=2.2.6",
     "opendssdirect-py>=0.9.4",
@@ -21,9 +21,13 @@ dependencies = [
     "altdss[all]>=0.2.4",
     "pyscipopt>=6.0.0",
     "highspy>=1.13.0",
+    "rich-click>=1.9.9",
 ]
 
 [project.optional-dependencies]
+nlp = [
+    "cyipopt>=1.5.0",
+]
 cim = [
     "cim-graph==0.4.1a2",
     "gridappsd-python==2025.3.2a13",
@@ -36,7 +40,7 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "jupyter>=1.1.1",
-    "marimo>=0.15.2",
+    "marimo>=0.23.3",
     "mypy>=1.18.2",
     "pandas-stubs>=2.3.2.250926",
     "pytest>=8.4.2",
@@ -53,6 +57,8 @@ gurobi = [
     "gurobipy>=13.0.2",
 ]
 
+[project.scripts]
+distopf = "distopf.cli:distopf"
 
 [tool.mypy]
 [[tool.mypy.overrides]]

@@ -1,25 +1,33 @@
 """Pyomo wrapper for OPF (IPOPT solver).
 
-Supports both LinDistFlow (linear) and BranchFlow (nonlinear) models
-via the `model_type` parameter.
+Supports LinDistFlow plus the nonlinear BranchFlow and SOCP-relaxed
+BranchFlow models via the `model_type` parameter.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional, Union
+
+import numpy as np
+import pandas as pd
 from distopf.wrappers.base import Wrapper
+from distopf.pyomo_models.common import objectives
+from distopf.pyomo_models.common.data import parse_phases
 
 if TYPE_CHECKING:
-    import pandas as pd
     from distopf.results import PowerFlowResult
+
+# Squared-current floor for the start point (pu^2); keeps l_ab^2 = l_aa*l_bb rows non-degenerate.
+_MIN_START_L = 1e-4
 
 
 class PyomoWrapper(Wrapper):
     """Pyomo/IPOPT wrapper for OPF optimization.
 
-    Supports two model types:
+    Supports three model types:
     - "lindist" (default): LinDistFlow linear approximation
     - "branchflow": Nonlinear BranchFlow model (NLP)
+    - "socp": SOCP relaxation of the BranchFlow model
     """
 
     def solve(
@@ -46,17 +54,24 @@ class PyomoWrapper(Wrapper):
         **kwargs
             Additional options:
             - model_type : str, default "lindist"
-                "lindist" for LinDistFlow, "branchflow" for nonlinear BranchFlow.
+                "lindist" for LinDistFlow, "branchflow" for nonlinear BranchFlow,
+                or "socp" for its SOCP relaxation.
             - circular_constraints : bool
-                Use circular (quadratic) constraints. Default False for lindist, True for branchflow.
+                Use circular (quadratic) constraints. Default False for lindist,
+                True for branchflow and socp.
             - thermal_constraints : bool, default False
                 Add thermal limit constraints on branch power flows.
             - equality_only : bool, default False (lindist only)
                 Only add equality constraints (power flow, voltage drop).
             - reg_tap_change_limit : int or None (lindist only)
                 Max tap change per timestep (only if control_regulators=True)
-            - initialize : str or None (branchflow only)
-                Warm-start strategy: 'fbs' to initialize from FBS results.
+            - initialize : str, PowerFlowResult or None (branchflow/socp only)
+                Warm-start strategy: 'fbs' (default) to initialize from an FBS
+                solve of the case, None to skip the warm start, or a
+                PowerFlowResult from another solve. By default the result's
+                setpoints are run through FBS and the FBS values are used; with
+                direct_initialize=True its own voltages, flows, currents and
+                current angles are used as-is (all four are required).
             - solver : str, default 'ipopt'
                 Solver to use. 'ipopt' for continuous, 'bonmin'/'couenne' for MINLP.
             - duals : bool, default False
@@ -71,12 +86,13 @@ class PyomoWrapper(Wrapper):
 
         model_type = kwargs.pop("model_type", "lindist")
 
-        if model_type == "branchflow":
+        if model_type in ("branchflow", "socp"):
             return self._solve_branchflow(
                 objective=objective,
                 control_regulators=control_regulators,
                 control_capacitors=control_capacitors,
                 raw_result=raw_result,
+                socp_relaxation=model_type == "socp",
                 **kwargs,
             )
         return self._solve_lindist(
@@ -96,11 +112,9 @@ class PyomoWrapper(Wrapper):
         **kwargs,
     ):
         """Solve using LinDistFlow model."""
-        from distopf.pyomo_models import (
+        from distopf.pyomo_models.common import (
             create_lindist_model,
-            add_constraints,
             solve,
-            create_penalized_objective,
             set_objective,
         )
         import pyomo.environ as pyo  # type: ignore[import-untyped]
@@ -109,6 +123,22 @@ class PyomoWrapper(Wrapper):
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         equality_only = kwargs.pop("equality_only", False)
         reg_tap_change_limit = kwargs.pop("reg_tap_change_limit", None)
+
+        rho_v_up = kwargs.pop("rho_v_up", None)
+        rho_s_dn = kwargs.pop("rho_s_dn", None)
+        rho_v_dn = kwargs.pop("rho_v_dn", None)
+        rho_s_up = kwargs.pop("rho_s_up", None)
+
+        free_swing_voltage = kwargs.pop("free_swing_voltage", False)
+        swing_voltage_slack_penalty = kwargs.pop("swing_voltage_slack_penalty", 0)
+        free_boundary_loads = kwargs.pop("free_boundary_loads", False)
+
+        boundary_voltage_slack_penalty = kwargs.pop(
+            "boundary_voltage_slack_penalty", 0.0
+        )
+        boundary_load_slack_penalty = kwargs.pop("boundary_load_slack_penalty", 0.0)
+        swing_power_slack_penalty = kwargs.pop("swing_power_slack_penalty", 0.0)
+
         duals = kwargs.pop("duals", False)
         verbose = kwargs.pop("verbose", False)
 
@@ -123,31 +153,54 @@ class PyomoWrapper(Wrapper):
             self.case,
             control_capacitors=control_capacitors,
             control_regulators=control_regulators,
-        )
-
-        add_constraints(
-            self.model,
             circular_constraints=circular_constraints,
             thermal_constraints=thermal_constraints,
             equality_only=equality_only,
-            control_capacitors=control_capacitors,
-            control_regulators=control_regulators,
             reg_tap_change_limit=reg_tap_change_limit,
+            free_swing_voltage=free_swing_voltage,
+            free_boundary_loads=free_boundary_loads,
         )
 
         obj_rule = self._resolve_objective(objective)
-        if equality_only:
-            obj = create_penalized_objective(
-                obj_rule,
-                voltage_weight=voltage_weight,
-                thermal_weight=thermal_weight,
-                generator_weight=generator_weight,
-                battery_weight=battery_weight,
-                soc_weight=soc_weight,
-            )
-            set_objective(self.model, obj)
-        else:
-            self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
+
+        def combined_objective_rule(_m):
+            value = obj_rule(_m)
+
+            if free_swing_voltage and swing_voltage_slack_penalty > 0:
+                value += objectives.swing_voltage_slack_penalty(
+                    _m,
+                    weight=swing_voltage_slack_penalty,
+                )
+
+            if rho_v_up is not None:
+                value += objectives.admm_v_up_penalty(_m, rho=rho_v_up)
+            if rho_s_up is not None:
+                value += objectives.admm_s_up_penalty(_m, rho=rho_s_up)
+            if rho_v_dn is not None:
+                value += objectives.admm_v_down_penalty(_m, rho=rho_v_dn)
+            if rho_s_dn is not None:
+                value += objectives.admm_s_down_penalty(_m, rho=rho_s_dn)
+
+            if equality_only:
+                if voltage_weight is not None:
+                    value += objectives.voltage_violation_penalty(_m, voltage_weight)
+                if thermal_weight is not None:
+                    value += objectives.thermal_violation_penalty(_m, thermal_weight)
+                if generator_weight is not None:
+                    value += objectives.generator_violation_penalty(
+                        _m, generator_weight
+                    )
+                if battery_weight is not None:
+                    value += objectives.battery_violation_penalty(_m, battery_weight)
+                if soc_weight is not None:
+                    value += objectives.soc_violation_penalty(_m, soc_weight)
+
+            return value
+
+        set_objective(
+            self.model,
+            pyo.Objective(rule=combined_objective_rule, sense=pyo.minimize),
+        )
 
         self.result = solve(self.model, solver=solver, duals=duals, verbose=verbose)
 
@@ -164,39 +217,76 @@ class PyomoWrapper(Wrapper):
         raw_result,
         **kwargs,
     ):
-        """Solve using nonlinear BranchFlow model."""
-        from distopf.pyomo_models.nl_branchflow import create_nl_branchflow_model
-        from distopf.pyomo_models.constraints_nlp import add_nlp_constraints
-        from distopf.pyomo_models.solvers import solve
+        """Solve using nonlinear BranchFlow or its SOCP relaxation."""
+        from distopf.pyomo_models.common.factory import create_nl_branchflow_model
+        from distopf.pyomo_models.common.solvers import solve
         import pyomo.environ as pyo  # type: ignore[import-untyped]
 
+        socp_relaxation = kwargs.pop("socp_relaxation", False)
         circular_constraints = kwargs.pop("circular_constraints", True)
         thermal_constraints = kwargs.pop("thermal_constraints", False)
         initialize = kwargs.pop("initialize", "fbs")
+        direct_initialize = kwargs.pop("direct_initialize", False)
         solver_name = kwargs.pop("solver", "ipopt")
         verbose = kwargs.pop("verbose", False)
 
+        rho_v_up = kwargs.pop("rho_v_up", None)
+        rho_s_dn = kwargs.pop("rho_s_dn", None)
+        rho_v_dn = kwargs.pop("rho_v_dn", None)
+        rho_s_up = kwargs.pop("rho_s_up", None)
+
+        free_swing_voltage = kwargs.pop("free_swing_voltage", False)
+        swing_voltage_slack_penalty = kwargs.pop("swing_voltage_slack_penalty", 0)
+        free_boundary_loads = kwargs.pop(
+            "free_boundary_loads", kwargs.pop("free_boundary_load", False)
+        )
         if (control_regulators or control_capacitors) and solver_name == "ipopt":
             raise ValueError(
-                "Discrete controls (control_regulators/control_capacitors) require a MINLP solver. "
-                "Use solver='bonmin' or solver='couenne', or disable discrete controls."
+                "Discrete controls (control_regulators/control_capacitors) "
+                "require a MINLP solver. Use solver='bonmin' or "
+                "solver='couenne', or disable discrete controls."
             )
 
-        self.model = create_nl_branchflow_model(self.case)
-
-        add_nlp_constraints(
-            self.model,
+        self.model = create_nl_branchflow_model(
+            self.case,
+            control_capacitors=control_capacitors,
+            control_regulators=control_regulators,
             circular_constraints=circular_constraints,
             thermal_constraints=thermal_constraints,
-            control_regulators=control_regulators,
-            control_capacitors=control_capacitors,
+            socp_relaxation=socp_relaxation,
+            free_swing_voltage=free_swing_voltage,
+            free_boundary_loads=free_boundary_loads,
         )
 
-        if initialize == "fbs":
-            self._initialize_from_fbs()
+        if self._wants_initialization(initialize):
+            self._initialize_from_fbs(initialize, direct=direct_initialize)
 
         obj_rule = self._resolve_objective(objective)
-        self.model.objective = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
+
+        def combined_objective_rule(_m):
+            value = obj_rule(_m)
+
+            if free_swing_voltage and swing_voltage_slack_penalty > 0:
+                value += objectives.swing_voltage_slack_penalty(
+                    _m,
+                    weight=swing_voltage_slack_penalty,
+                )
+
+            if rho_v_up is not None:
+                value += objectives.admm_v_up_penalty(_m, rho=rho_v_up)
+            if rho_s_up is not None:
+                value += objectives.admm_s_up_penalty(_m, rho=rho_s_up)
+            if rho_v_dn is not None:
+                value += objectives.admm_v_down_penalty(_m, rho=rho_v_dn)
+            if rho_s_dn is not None:
+                value += objectives.admm_s_down_penalty(_m, rho=rho_s_dn)
+
+            return value
+
+        self.model.objective = pyo.Objective(
+            rule=combined_objective_rule,
+            sense=pyo.minimize,
+        )
 
         self.result = solve(self.model, solver=solver_name, verbose=verbose)
 
@@ -209,15 +299,41 @@ class PyomoWrapper(Wrapper):
         """Build PowerFlowResult from solved pyomo model."""
         from distopf.results import PowerFlowResult
 
-        q_caps = getattr(self.result, "q_cap", None)
-        tap_ratios = getattr(self.result, "reg_ratio", None)
+        q_caps = self.get_q_caps() if hasattr(self.result, "q_cap") else None
+        reg_taps = getattr(self.result, "reg_taps", None)
+        tap_ratios = None
+        if reg_taps is not None:
+            tap_ratios = reg_taps.copy()
+            reg = self.case.reg_data.set_index(["fb", "tb"])
+            step = (reg["ratio_max"] - reg["ratio_min"]) / reg["num_taps"]
+            step = step.reindex(pd.MultiIndex.from_frame(reg_taps[["fb", "tb"]]))
+            for ph in "abc":
+                tap_ratios[ph] = 1 + step.to_numpy() * reg_taps[ph]
+        u_caps = (
+            self._get_bus_values("u_cap") if hasattr(self.result, "u_cap") else None
+        )
+        z_caps = (
+            self._get_bus_values("z_cap") if hasattr(self.result, "z_cap") else None
+        )
         p_loads = getattr(self.result, "p_load", None)
         q_loads = getattr(self.result, "q_load", None)
-        p_bats = getattr(self.result, "p_bat", None)
-        q_bats = getattr(self.result, "q_bat", None)
-        p_charge = getattr(self.result, "p_charge", None)
-        p_discharge = getattr(self.result, "p_discharge", None)
-        soc = getattr(self.result, "soc", None)
+        p_bats = (
+            self._get_bus_values("p_bat") if hasattr(self.result, "p_bat") else None
+        )
+        q_bats = (
+            self._get_bus_values("q_bat") if hasattr(self.result, "q_bat") else None
+        )
+        p_charge = (
+            self._get_bus_values("p_charge")
+            if hasattr(self.result, "p_charge")
+            else None
+        )
+        p_discharge = (
+            self._get_bus_values("p_discharge")
+            if hasattr(self.result, "p_discharge")
+            else None
+        )
+        soc = self._get_bus_values("soc") if hasattr(self.result, "soc") else None
 
         objective_value = getattr(self.result, "objective_value", None)
         solve_time = getattr(self.result, "solve_time", None)
@@ -237,12 +353,17 @@ class PyomoWrapper(Wrapper):
             voltages=self.get_voltages(),
             active_power_flows=self.get_p_flows(),
             reactive_power_flows=self.get_q_flows(),
+            currents=self.get_currents(),
+            current_angles=getattr(self, "_initial_current_angles", None),
             active_power_generation=self.get_p_gens(),
             reactive_power_generation=self.get_q_gens(),
             active_power_loads=p_loads,
             reactive_power_loads=q_loads,
             capacitor_reactive_power=q_caps,
             tap_ratios=tap_ratios,
+            reg_taps=reg_taps,
+            u_caps=u_caps,
+            z_caps=z_caps,
             battery_active_power=p_bats,
             battery_reactive_power=q_bats,
             p_charge=p_charge,
@@ -264,13 +385,122 @@ class PyomoWrapper(Wrapper):
             log=log,
         )
 
-    def _initialize_from_fbs(self) -> None:
-        """Initialize BranchFlow model variables from FBS power flow solution."""
-        from distopf.fbs import fbs_solve
-        import numpy as np
+    @staticmethod
+    def _wants_initialization(initialize: Any) -> bool:
+        from distopf.results import PowerFlowResult
+
+        return initialize == "fbs" or isinstance(initialize, PowerFlowResult)
+
+    def _resolve_initial_result(self, source: Any = None, direct: bool = False):
+        """Return the result used to warm start BranchFlow.
+
+        ``source`` is None/'fbs' (plain FBS) or a PowerFlowResult. By default a
+        supplied result is never used directly: its generator, battery and
+        boundary-load setpoints are run through FBS and the FBS values are used.
+        With ``direct=True`` the supplied result's own fields are used and it
+        must contain voltages, flows, currents and current angles.
+        """
+        from distopf.fbs import fbs_solve, run_fbs_with_opf_setpoints
+        from distopf.results import PowerFlowResult
+        from distopf.utils.input_handlers import legacy_device_case
+
+        if source is None or isinstance(source, str):
+            return fbs_solve(legacy_device_case(self.case))
+        if not direct:
+            return run_fbs_with_opf_setpoints(legacy_device_case(self.case), source)
+        if not isinstance(source, PowerFlowResult):
+            raise TypeError("direct_initialize requires a PowerFlowResult")
+        missing = [
+            name
+            for name in (
+                "voltages",
+                "active_power_flows",
+                "reactive_power_flows",
+                "currents",
+                "current_angles",
+            )
+            if getattr(source, name, None) is None
+        ]
+        if missing:
+            raise ValueError(
+                f"direct_initialize: result is missing {', '.join(missing)}"
+            )
+        return source
+
+    def _collect_start_values(self, source: Any) -> dict[str, dict[tuple, float]]:
+        """Start values for device variables taken from a supplied PowerFlowResult.
+
+        Returns ``{variable_name: {index_without_time + (t,): value}}``. Bus
+        quantities shared by several devices at one bus are split equally.
+        Variables missing from the result or the model are left out.
+        """
+        from distopf.results import PowerFlowResult
+
+        values: dict[str, dict[tuple, float]] = {}
+        if not isinstance(source, PowerFlowResult):
+            return values
+        model = self.model
+
+        def devices_at(bus_map_name):
+            by_bus: dict[Any, list] = {}
+            for device, bus in getattr(model, bus_map_name, {}).items():
+                by_bus.setdefault(bus, []).append(device)
+            return by_bus
+
+        def phase_frame(var_name, frame, devices=None):
+            if frame is None or not hasattr(model, var_name):
+                return
+            out = values.setdefault(var_name, {})
+            for row in frame.itertuples(index=False):
+                bus, t = row.id, row.t
+                targets = [bus] if devices is None else devices.get(bus, [])
+                for target in targets:
+                    for ph in ("a", "b", "c"):
+                        val = getattr(row, ph, None)
+                        if val is None or val != val:
+                            continue
+                        scale = len(targets) if devices is not None else 1
+                        out[(target, ph, t)] = float(val) / scale
+
+        def device_frame(var_name, frame, devices):
+            if frame is None or not hasattr(model, var_name):
+                return
+            out = values.setdefault(var_name, {})
+            for row in frame.itertuples(index=False):
+                targets = devices.get(row.id, [])
+                for target in targets:
+                    out[(target, row.t)] = float(row.value) / len(targets)
+
+        gens = devices_at("gen_bus_by_device")
+        caps = devices_at("cap_bus_by_device")
+        bats = devices_at("bat_bus_by_device")
+        phase_frame("p_load", source.active_power_loads)
+        phase_frame("q_load", source.reactive_power_loads)
+        phase_frame("p_gen", source.active_power_generation, gens)
+        phase_frame("q_gen", source.reactive_power_generation, gens)
+        phase_frame("q_cap", source.capacitor_reactive_power, caps)
+        phase_frame("p_bat", source.battery_active_power, bats)
+        phase_frame("q_bat", source.battery_reactive_power, bats)
+        device_frame("p_charge", source.p_charge, bats)
+        device_frame("p_discharge", source.p_discharge, bats)
+        device_frame("soc", source.soc, bats)
+        return values
+
+    def _initialize_from_fbs(self, source: Any = None, direct: bool = False) -> None:
+        """Initialize BranchFlow model variables from an FBS or supplied result."""
         from math import pi
 
-        fbs_results = fbs_solve(self.case)
+        fbs_results = self._resolve_initial_result(source, direct)
+        for var_name, data in self._collect_start_values(source).items():
+            var = getattr(self.model, var_name)
+            for key, value in data.items():
+                if key in var:
+                    lower, upper = var[key].lb, var[key].ub
+                    if lower is not None:
+                        value = max(value, lower)
+                    if upper is not None:
+                        value = min(value, upper)
+                    var[key].value = value
         assert fbs_results.voltages is not None
         assert fbs_results.active_power_flows is not None
         assert fbs_results.reactive_power_flows is not None
@@ -283,7 +513,8 @@ class PyomoWrapper(Wrapper):
         active_power_flows = fbs_results.active_power_flows
         reactive_power_flows = fbs_results.reactive_power_flows
         currents = fbs_results.currents
-        current_angles = fbs_results.current_angles
+        current_angles = fbs_results.current_angles.copy()
+        self._initial_current_angles = fbs_results.current_angles.copy()
 
         def _lookup_branch_phase(df, fb, tb, ph):
             mask = df.tb == tb
@@ -333,21 +564,20 @@ class PyomoWrapper(Wrapper):
         self.model.p_flow.set_values(p_data)
         self.model.q_flow.set_values(q_data)
 
-        # Initialize current magnitudes (squared)
+        # Initialize current magnitudes (squared); zero start makes l_ab^2 = l_aa*l_bb rows degenerate
         l_data: dict[tuple[Any, ...], float] = {}
         if branch_dimen == 3:
             for fb, tb, ph, t in self.model.branch_phase_set * self.model.time_set:
                 i_mag = _lookup_branch_phase(currents, fb, tb, ph)
-                l_data[(fb, tb, ph + ph, t)] = i_mag**2
+                l_data[(fb, tb, ph + ph, t)] = max(i_mag**2, _MIN_START_L)
         else:
             for _id, ph, t in self.model.branch_phase_set * self.model.time_set:
                 i_mag = currents.loc[(currents.tb == _id), ph].to_numpy()[0]
-                l_data[(_id, ph + ph, t)] = i_mag**2
+                l_data[(_id, ph + ph, t)] = max(i_mag**2, _MIN_START_L)
 
         # Initialize cross-phase current magnitudes
         for fb, tb, phases in self.model.branch_phase_pair_set:
-            ph1 = phases[0]
-            ph2 = phases[1]
+            ph1, ph2 = parse_phases(phases)
             if ph1 == ph2:
                 continue
             for t in self.model.time_set:
@@ -390,16 +620,18 @@ class PyomoWrapper(Wrapper):
 
     def _resolve_objective(self, objective: Any) -> Any:
         """Resolve objective string to Pyomo objective function."""
-        from distopf.pyomo_models.objectives import (
-            none_rule,
-            loss_objective_rule,
-            substation_power_objective_rule,
-            voltage_deviation_objective_rule,
-            generation_curtailment_objective_rule,
-        )
+        # from distopf.pyomo_models.objectives import (
+        #     none_rule,
+        #     loss_objective_rule,
+        #     substation_power_objective_rule,
+        #     voltage_deviation_objective_rule,
+        #     generation_curtailment_objective_rule,
+        #     generation_cost_with_substation_quadratic_penalty_objective_rule,
+        #     cost_minimization_rule,
+        # )
 
         if objective is None:
-            return none_rule
+            return objectives.none_rule
 
         if callable(objective):
             return objective
@@ -407,14 +639,26 @@ class PyomoWrapper(Wrapper):
         obj_lower = objective.lower().strip()
 
         objective_map = {
-            "loss": loss_objective_rule,
-            "loss_min": loss_objective_rule,
-            "substation": substation_power_objective_rule,
-            "substation_power": substation_power_objective_rule,
-            "voltage_deviation": voltage_deviation_objective_rule,
-            "curtail": generation_curtailment_objective_rule,
-            "curtail_min": generation_curtailment_objective_rule,
-            "curtailment": generation_curtailment_objective_rule,
+            "loss": objectives.loss_objective_auto_rule,
+            "loss_min": objectives.loss_objective_auto_rule,
+            "loss_pq": objectives.loss_objective_rule,
+            "loss_i2r": objectives.loss_objective_i2r_rule,
+            "substation": objectives.substation_power_objective_rule,
+            "substation_power": objectives.substation_power_objective_rule,
+            "voltage_deviation": objectives.voltage_deviation_objective_rule,
+            "voltage_min": objectives.voltage_min_objective_rule,
+            "min_voltage": objectives.voltage_min_objective_rule,
+            "curtail": objectives.generation_curtailment_objective_rule,
+            "curtail_min": objectives.generation_curtailment_objective_rule,
+            "curtailment": objectives.generation_curtailment_objective_rule,
+            "generation_cost_substation_penalty": (
+                objectives.generation_cost_with_substation_quadratic_penalty_objective_rule
+            ),
+            "gen_cost_substation_penalty": (
+                objectives.generation_cost_with_substation_quadratic_penalty_objective_rule
+            ),
+            "cost": objectives.cost_minimization_rule,
+            "cost_min": objectives.cost_minimization_rule,
         }
 
         if obj_lower in objective_map:
@@ -441,13 +685,77 @@ class PyomoWrapper(Wrapper):
         """Extract reactive power flow results from solved model."""
         return self.result.q_flow
 
+    def get_currents(self) -> Optional[pd.DataFrame]:
+        """Branch current magnitudes ``sqrt(L)`` from the squared-current variable.
+
+        Returns None when the model has no ``l_flow`` variable (e.g. LinDistFlow).
+        """
+        l_flow = getattr(self.result, "l_flow", None)
+        if l_flow is None:
+            return None
+        diagonal = {"aa": "a", "bb": "b", "cc": "c", "s1s1": "s1", "s2s2": "s2"}
+        id_cols = [
+            col for col in ("fb", "tb", "from_name", "to_name", "t") if col in l_flow
+        ]
+        currents = l_flow[id_cols].copy()
+        for pair, phase in diagonal.items():
+            if pair in l_flow:
+                currents[phase] = np.sqrt(l_flow[pair].clip(lower=0.0))
+        return currents
+
     def get_p_gens(self) -> pd.DataFrame:
         """Extract active power generation results from solved model."""
-        return self.result.p_gen
+        return self._get_bus_values("p_gen")
 
     def get_q_gens(self) -> pd.DataFrame:
         """Extract reactive power generation results from solved model."""
-        return self.result.q_gen
+        return self._get_bus_values("q_gen")
+
+    def get_q_caps(self) -> pd.DataFrame:
+        """Extract bus-level capacitor reactive power."""
+        return self._get_bus_values("q_cap")
+
+    def _get_bus_values(self, variable: str) -> pd.DataFrame:
+        """Aggregate device-level values to the bus-level result contract.
+
+        Powers are summed. States (``soc``, ``u_cap``, ``z_cap``) are averaged,
+        weighted by battery energy capacity or capacitor rating, so that a bus
+        state times the bus total matches the sum over its devices.
+        """
+        frame = getattr(self.result, variable)
+        if "device_name" not in frame.columns:
+            return frame
+        keys = ["id", "name", "t"]
+        phases = [
+            phase for phase in ("a", "b", "c", "s1", "s2", "value") if phase in frame
+        ]
+        if variable not in ("soc", "u_cap", "z_cap"):
+            return frame.groupby(keys, as_index=False)[phases].sum(min_count=1)
+        weights = self._device_state_weights(variable, frame, phases)
+        weights = weights.where(frame[phases].notna())
+        numerator = (frame[phases] * weights).groupby([frame[k] for k in keys]).sum()
+        denominator = weights.groupby([frame[k] for k in keys]).sum()
+        return (numerator / denominator).reset_index()
+
+    def _device_state_weights(
+        self, variable: str, frame: pd.DataFrame, phases: list[str]
+    ) -> pd.DataFrame:
+        """Per-row weights for averaging device states over a bus.
+
+        Uses ``energy_capacity`` for batteries and ``q_{phase}`` for capacitors.
+        Legacy tables (no ``device_name``) have one device per bus, so equal
+        weights are used.
+        """
+        table = self.case.bat_data if variable == "soc" else self.case.cap_data
+        weights = pd.DataFrame(1.0, index=frame.index, columns=phases)
+        if table is None or "device_name" not in table.columns:
+            return weights
+        devices = table.set_index("device_name")
+        for phase in phases:
+            column = "energy_capacity" if variable == "soc" else f"q_{phase}"
+            if column in devices.columns:
+                weights[phase] = frame["device_name"].map(devices[column]).abs()
+        return weights
 
     def get_all_results(self) -> dict[str, pd.DataFrame]:
         """Get all variable results from the solved model.

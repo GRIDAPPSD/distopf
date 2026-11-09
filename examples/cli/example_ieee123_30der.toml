@@ -1,0 +1,14 @@
+# Minimal user-authored DistOPF scenario.
+# Paths are resolved relative to this file.
+
+[case]
+path = "../../src/distopf/cases/csv/ieee123_30der"
+
+[analysis]
+type = "opf"
+objective = "loss"
+
+# Optional: save results and the generated run_config.json here.
+[output]
+directory = "../../scratch/example_results_ieee123_30der"
+

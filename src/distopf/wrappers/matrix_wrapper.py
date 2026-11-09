@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 import numpy as np
 from typing import TYPE_CHECKING, Any, Optional, Union, Callable
 from distopf.wrappers.base import Wrapper
@@ -227,6 +228,9 @@ class MatrixWrapper(Wrapper):
             If raw_result=True: Raw scipy OptimizeResult object
         """
         from distopf.results import PowerFlowResult
+        from distopf.utils.input_handlers import require_legacy_device_schema
+
+        require_legacy_device_schema(self.case, "the matrix wrapper")
 
         # Pop model_type injected by formulation= routing (not a solver kwarg)
         model_type = kwargs.pop("model_type", None)
@@ -252,10 +256,11 @@ class MatrixWrapper(Wrapper):
                 control_capacitors=control_capacitors,
                 **case_kwargs,
             )
-
+        tic = perf_counter()
         # Solve
         self.result = auto_solve(self.model, objective, **kwargs)
-
+        toc = perf_counter()
+        solve_time = toc - tic
         if raw_result:
             return self.result
 
@@ -274,6 +279,7 @@ class MatrixWrapper(Wrapper):
         u_caps = None
         if hasattr(self.model, "get_uc"):
             u_caps = self.model.get_uc(self.result.x)
+        q_caps = self.get_q_caps()
 
         # Normalize: add time column to single-period results
         voltages_with_time = self._add_time_column(voltages_df, position=2)
@@ -300,6 +306,7 @@ class MatrixWrapper(Wrapper):
             reactive_power_flows=q_flows_df,
             active_power_generation=p_gens,
             reactive_power_generation=q_gens,
+            capacitor_reactive_power=q_caps,
             reg_taps=reg_taps,
             z_caps=z_caps,
             u_caps=u_caps,
@@ -310,6 +317,7 @@ class MatrixWrapper(Wrapper):
             raw_result=self.result,
             model=self.model,
             case=self.case,
+            solve_time=solve_time,
         )
 
     def _infer_control_variable(self) -> str:

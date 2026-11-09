@@ -16,7 +16,7 @@ CSV format (CASES_DIR / "csv" / name):
 - ieee123 : IEEE 123-bus test feeder
 - ieee123_30der : IEEE 123-bus with 30 DERs
 - ieee13_battery : IEEE 13-bus with battery storage
-- ieee123_30der_bat : IEEE 123-bus with 30 DERs and battery
+- ieee123_bat : IEEE 123-bus with 5 DERs and 2 batteries
 - 9500 : Large 9500-node network
 
 OpenDSS format (CASES_DIR / "dss" / name):

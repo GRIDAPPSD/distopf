@@ -34,7 +34,7 @@ jobs:
         add-pip-as-python-dependency: true
     - name: Install IPOPT
       run: |
-        conda install -y ipopt
+        conda install -y ipopt cyipopt
     - name: Install dependencies
       run: |
         conda install -y pip

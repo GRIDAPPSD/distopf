@@ -6,7 +6,7 @@ alters numerical results, the affected scenario will fail with a clear diff.
 
 Reference data is stored in tests/integration_references.json.
 
-To regenerate after intentional changes:
+To regenerate after intentional changes, delete the reference file, then run:
     uv run python tests/test_integration_snapshots.py
 """
 
@@ -25,8 +25,13 @@ _ipopt_available = pyo.SolverFactory("ipopt").available(exception_flag=False)
 REFERENCE_FILE = Path(__file__).parent / "integration_references.json"
 
 # np.isclose tolerance: |actual - expected| <= ATOL + RTOL * |expected|
-ATOL = 1e-4
-RTOL = 1e-5
+ATOL = 1e-6
+RTOL = 1e-6
+# Nonlinear (IPOPT) scenarios depend on the IPOPT build and platform. The optimum is
+# nearly flat in some directions, so CI's conda IPOPT lands up to ~7e-5 away from a
+# local build in individual flows while the objective agrees. The objective keeps
+# the tight tolerance; the other metrics get ATOL_NLP.
+ATOL_NLP = 1e-4
 
 # ---------------------------------------------------------------------------
 # Scenario definitions
@@ -162,19 +167,21 @@ SCENARIOS = [
         "n_steps": 1,
     },
     # ── Nonlinear branchflow (Pyomo / IPOPT) ──
-    # {
-    #     "id": "minimal_triplex_nlp_loss",
-    #     "case": "minimal_triplex",
-    #     "method": "opf",
-    #     "objective": "loss_min",
-    #     "formulation": "branchflow",
-    #     "requires_ipopt": True,
-    # },
+    {
+        "id": "minimal_triplex_nlp_loss",
+        "case": "minimal_triplex",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "pyomo",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
     {
         "id": "triplex_pv_nlp_loss",
         "case": "triplex_pv",
         "method": "opf",
         "objective": "loss_min",
+        "wrapper": "pyomo",
         "formulation": "branchflow",
         "requires_ipopt": True,
     },
@@ -183,6 +190,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
+        "wrapper": "pyomo",
         "formulation": "branchflow",
         "requires_ipopt": True,
     },
@@ -191,6 +199,7 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "loss_min",
+        "wrapper": "pyomo",
         "formulation": "branchflow",
         "control_variable": "Q",
         "requires_ipopt": True,
@@ -200,17 +209,19 @@ SCENARIOS = [
         "case": "ieee123_30der",
         "method": "opf",
         "objective": "voltage_deviation",
+        "wrapper": "pyomo",
         "formulation": "branchflow",
         "requires_ipopt": True,
     },
-    # {
-    #     "id": "ieee123_bat_nlp_loss",
-    #     "case": "ieee123_30der_bat",
-    #     "method": "opf",
-    #     "objective": "loss_min",
-    #     "formulation": "branchflow",
-    #     "requires_ipopt": True,
-    # },
+    {
+        "id": "ieee123_bat_nlp_loss",
+        "case": "ieee123_bat",
+        "method": "opf",
+        "objective": "loss_min",
+        "wrapper": "pyomo",
+        "formulation": "branchflow",
+        "requires_ipopt": True,
+    },
     # ── Edge cases ──
     {
         "id": "ieee123_nosched_mat_Q",
@@ -386,7 +397,9 @@ def test_integration_snapshot(scenario, references):
         if key == "converged":
             continue
         assert key in actual, f"[{sid}] missing metric '{key}' in actual results"
-        assert np.isclose(actual[key], ref[key], atol=ATOL, rtol=RTOL), (
+        is_loose = "nlp" in sid and key != "objective_value"
+        atol = ATOL_NLP if is_loose else ATOL
+        assert np.isclose(actual[key], ref[key], atol=atol, rtol=RTOL), (
             f"[{sid}] metric '{key}' differs: "
             f"actual={actual[key]:.10g}, expected={ref[key]:.10g}, "
             f"diff={abs(actual[key] - ref[key]):.2e}"
@@ -401,6 +414,10 @@ def test_integration_snapshot(scenario, references):
 def generate_all_references():
     """Run every scenario and write reference metrics to JSON."""
     refs = {}
+    if REFERENCE_FILE.exists():
+        raise RuntimeError(
+            f"Reference file {REFERENCE_FILE} already exists. Delete or rename it first if you want to regenerate references."
+        )
     for scenario in SCENARIOS:
         sid = scenario["id"]
         if scenario.get("requires_ipopt") and not _ipopt_available:

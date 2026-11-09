@@ -1,8 +1,6 @@
-import numpy as np
-import pandas as pd
 import distopf as opf
 from distopf.matrix_models.matrix_bess.objectives import cp_obj_cost_min
-from distopf.spatial_decomposition.enapp import solve_enapp
+from distopf.distributed.spatial.enapp import solve_enapp
 from distopf.api import create_case
 from distopf import CASES_DIR
 import cvxpy as cp
@@ -64,30 +62,23 @@ def main():
         cost_curve=case.schedules.price.to_numpy(),
     )
 
-    # result_enapp is an OptimizeResult wrapper from solve_enapp; area_results stored in result_enapp.area_results
-    print("enapp objective (OptimizeResult.fun):", result_enapp.fun)
+    print("enapp objective:", result_enapp.objective_value)
 
     # Compare voltages if available
     v_c = result_c.voltages if hasattr(result_c, "voltages") else None
-    # solve_enapp returns OptimizeResult; area_results contains per-area PowerFlowResult objects. We attempt to reconstruct a voltage view by concatenating area results when available.
-    v_enapp = None
-    if isinstance(result_enapp.area_results, dict):
-        v_list = []
-        for ar in result_enapp.area_results.values():
-            if hasattr(ar, "voltages") and ar.voltages is not None:
-                v_list.append(ar.voltages)
-        if v_list:
-            v_enapp = pd.concat(v_list, ignore_index=True)
+    v_enapp = result_enapp.voltages
 
     if v_c is not None and v_enapp is not None:
         opf.compare_voltages(v_c, v_enapp, t=12).show(renderer="browser")
         opf.compare_voltages(v_c, v_enapp, t=13).show(renderer="browser")
 
     # Print generator reactive outputs if present
-    if hasattr(result_enapp, "area_results") and isinstance(
-        result_enapp.area_results, dict
-    ):
-        for area, ar in result_enapp.area_results.items():
+    enapp_meta = (
+        result_enapp.raw_result if isinstance(result_enapp.raw_result, dict) else {}
+    )
+    area_results = enapp_meta.get("area_results", {})
+    if isinstance(area_results, dict):
+        for area, ar in area_results.items():
             print(area, "q_gens:")
             if hasattr(ar, "q_gens"):
                 print(ar.q_gens)

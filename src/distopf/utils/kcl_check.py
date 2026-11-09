@@ -82,7 +82,7 @@ def check_kcl(
                 load_by_phase[bid]["s2"] = (
                     load_by_phase[bid].get("s2", 0.0) + p_s1s2 / 2.0
                 )
-        if str(row.get("bus_type", "")).upper() == "SWING":
+        if str(row.get("bus_type", "")).upper() in {"SWING", "SWING_FREE", "IN"}:
             swing_buses.add(bid)
 
     # Aggregate active-power generation by bus and phase from provided results.

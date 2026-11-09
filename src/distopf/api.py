@@ -2,7 +2,7 @@ from pathlib import Path
 import logging
 import warnings
 import pandas as pd
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 from collections.abc import Callable
 from distopf.utils.call_recorder import record_call
 
@@ -12,6 +12,7 @@ logger = logging.getLogger("distopf")
 # These are only imported when actually needed to improve startup time
 if TYPE_CHECKING:
     from distopf.matrix_models.base import LinDistBase
+    from distopf.results import PowerFlowResult
 
 from distopf.utils.input_handlers import (
     handle_branch_input,
@@ -40,12 +41,14 @@ def _get_wrapper_registry() -> dict:
             MatrixWrapper,
             MatrixBessWrapper,
             PyomoWrapper,
+            CvxpyWrapper,
         )
 
         _WRAPPER_REGISTRY = {
             "matrix": MatrixWrapper,
             "matrix_bess": MatrixBessWrapper,
             "pyomo": PyomoWrapper,
+            "cvxpy": CvxpyWrapper,
         }
     return _WRAPPER_REGISTRY
 
@@ -57,13 +60,25 @@ _FORMULATION_REGISTRY: dict[str, dict] = {
     "branchflow": {
         "default_wrapper": "pyomo",
         "model_type": "branchflow",
-        "compatible_wrappers": ["pyomo"],
+        "compatible_wrappers": ["pyomo", "cvxpy"],
+    },
+    # Pyomo SOCP relaxation of BranchFlow (NLP/IPOPT path)
+    "socp": {
+        "default_wrapper": "pyomo",
+        "model_type": "socp",
+        "compatible_wrappers": ["pyomo", "cvxpy"],
+    },
+    # CVXPY SDP relaxation of BranchFlow
+    "sdp": {
+        "default_wrapper": "cvxpy",
+        "model_type": "sdp",
+        "compatible_wrappers": ["cvxpy"],
     },
     # LinDistFlow — supported by both pyomo (default) and matrix
     "lindist": {
         "default_wrapper": "pyomo",
         "model_type": "lindist",
-        "compatible_wrappers": ["pyomo", "matrix"],
+        "compatible_wrappers": ["pyomo", "matrix", "cvxpy"],
     },
     # Matrix single-step formulations
     "lindist_cap_mi": {
@@ -111,7 +126,7 @@ def _resolve_wrapper(wrapper: Optional[str], formulation: Optional[str]) -> tupl
     Parameters
     ----------
     wrapper : str or None
-        Wrapper name: "pyomo", "matrix", or "matrix_bess". If None, the wrapper
+        Wrapper name: "pyomo", "cvxpy", "matrix", or "matrix_bess". If None, the wrapper
         is auto-selected from the formulation (or defaults to "pyomo").
     formulation : str or None
         Formulation name (e.g., "lindist", "branchflow", "lindist_cap_mi").
@@ -277,6 +292,12 @@ class Case:
         self.n_steps = n_steps
         self.delta_t = delta_t  # hours per step
 
+        # Replay provenance and scenario modifications. The saved input snapshot
+        # contains the already-modified data; these fields describe how it was
+        # produced without changing replay behavior for that snapshot.
+        self._source_path: Optional[str] = None
+        self._modifications: dict = {}
+
         # Result storage (populated after running analysis)
         self._model: Optional["LinDistBase"] = None
         self._result = None
@@ -360,42 +381,67 @@ class Case:
     # Analysis Methods
     # -------------------------------------------------------------------------
     @record_call
-    def run_pf(self, raw_result: bool = False):
+    def run_pf(
+        self,
+        raw_result: bool = False,
+        *,
+        solver: str = "fbs",
+        opf_result: Optional["PowerFlowResult"] = None,
+    ):
         """
         Run unconstrained power flow analysis.
 
         This runs power flow without any optimization constraints (wide voltage
         limits, no control variables). Use this to check the base case before
-        optimization.
+        optimization, or to check an OPF result with an exact power flow.
 
         Parameters
         ----------
         raw_result : bool, default False
-            If True, return the raw FBS result object instead of PowerFlowResult.
+            Unused; kept for backward compatibility.
+        solver : {"fbs", "opendss"}, default "fbs"
+            Power flow solver. ``"opendss"`` writes the case with
+            :func:`distopf.dss_importer.csv_to_dss_converter.case_to_dss` and solves
+            it in OpenDSS (needs ``opendssdirect``); it returns voltages only.
+        opf_result : PowerFlowResult, optional
+            OPF result whose generator, battery, MPSSD, OUT-bus load, regulator
+            and capacitor decisions replace the case values (see
+            :func:`distopf.fbs.run_fbs_with_opf_setpoints`). MPSSD setpoints are
+            read from ``opf_result.raw_result`` when not on the result.
 
         Returns
         -------
-        PowerFlowResult or FBS result
-            If raw_result=False: PowerFlowResult with voltages, active_power_flows, reactive_power_flows, etc.
-            If raw_result=True: FBS result object
+        PowerFlowResult
 
         Examples
         --------
         >>> case = create_case(CASES_DIR / "csv" / "ieee13")
         >>> result = case.run_pf()
+        >>> dss_result = case.run_pf(solver="opendss")
         >>> print(result.voltages.head())
-        >>> # Backward-compatible tuple unpacking still works if needed:
-        >>> voltages, p_flows, q_flows = case.run_pf()  # (same as unpacking result)
         """
-        from distopf.fbs import FBS
+        if solver == "fbs":
+            from distopf.fbs import FBS, run_fbs_with_opf_setpoints
 
-        # Use FBS for power flow analysis
-        fbs = FBS(self)
-        return fbs.solve(max_iterations=100, tolerance=1e-6, verbose=False)
+            if opf_result is not None:
+                return run_fbs_with_opf_setpoints(self, opf_result)
+            return FBS(self).solve(max_iterations=100, tolerance=1e-6, verbose=False)
+        if solver == "opendss":
+            from distopf.dss_importer.csv_to_dss_converter import run_opendss
+
+            return run_opendss(self, opf_result)
+        raise ValueError(
+            f"Unknown power flow solver {solver!r}; use 'fbs' or 'opendss'"
+        )
 
     @record_call
     def run_fbs(
-        self, max_iterations: int = 100, tolerance: float = 1e-6, verbose: bool = False
+        self,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+        verbose: bool = False,
+        initial_voltages: Optional[dict[int, Any]] = None,
+        initial_currents: Optional[dict[int, Any]] = None,
     ):
         """
         Run Forward-Backward Sweep (FBS) power flow analysis.
@@ -412,6 +458,10 @@ class Case:
             Convergence tolerance (voltage change in p.u.)
         verbose : bool, default False
             Print iteration information
+        initial_voltages : dict, optional
+            Initial voltage state, such as the previous time step's solution.
+        initial_currents : dict, optional
+            Initial branch-current state, used with ``initial_voltages``.
 
         Returns
         -------
@@ -443,7 +493,11 @@ class Case:
             self._log_schedule_summary()
             fbs = FBS(self)
             result = fbs.solve(
-                max_iterations=max_iterations, tolerance=tolerance, verbose=verbose
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                verbose=verbose,
+                initial_voltages=initial_voltages,
+                initial_currents=initial_currents,
             )
             logger.info("FBS completed")
             return result
@@ -472,7 +526,9 @@ class Case:
         ----------
         objective : str or Callable, optional
             Objective function for optimization. String options (case-insensitive):
-            - "loss_min" or "loss": Minimize total line losses (quadratic)
+            - "loss_min" or "loss": Minimize total line losses (I^2*R when the
+              model has a current variable, otherwise quadratic P^2+Q^2)
+            - "loss_pq" / "loss_i2r": Force the (P^2+Q^2)*r or l*r loss form
             - "curtail_min" or "curtail": Minimize DER curtailment (quadratic)
             - "gen_max": Maximize generator output (linear)
             - "load_min": Minimize substation power (linear)
@@ -494,13 +550,16 @@ class Case:
             Solver wrapper to use:
             - "matrix": CVXPY/CLARABEL (fast, convex problems only)
             - "matrix_bess": Multi-period matrix model (supports batteries, schedules)
-            - "pyomo": Pyomo/IPOPT (NLP-capable, supports lindist and branchflow)
+            - "pyomo": Pyomo/IPOPT (NLP-capable, supports lindist, branchflow, and socp)
+            - "cvxpy": Provider-based CVXPY mirror of the pyomo models (lindist,
+              branchflow via DNLP/IPOPT, socp)
             - None: Auto-selected from ``formulation``, or defaults to "pyomo"
         formulation : str, optional
             Math formulation to use. Auto-selects the appropriate wrapper when
             ``wrapper`` is not specified. Options:
             - "lindist": Linear DistFlow (pyomo default; also in matrix)
             - "branchflow": Nonlinear BranchFlow (pyomo + IPOPT/MINLP)
+            - "socp": SOCP relaxation of BranchFlow (pyomo + IPOPT/MINLP)
             - "lindist_cap_mi": LinDist + capacitor MILP (matrix)
             - "lindist_reg_mi": LinDist + regulator MILP (matrix)
             - "lindist_cap_reg_mi": LinDist + capacitor+regulator MILP (matrix)
@@ -572,6 +631,86 @@ class Case:
         finally:
             if handler:
                 self._disable_verbose(handler)
+
+    @record_call
+    def run_enapp(
+        self,
+        area_info: dict[str, dict[str, list]],
+        objective: Optional[str | Callable] = "loss_min",
+        swing_voltage_slack_penalty: float = 1e6,
+        damping_factor: float = 1.0,
+        tol: float = 1e-6,
+        max_iterations: int = 100,
+        parallel: bool = True,
+        solve_callback: Optional[Callable] = None,
+        iteration_callback: Optional[Callable] = None,
+        verbose_enapp: bool = False,
+        **kwargs,
+    ):
+        """Run the spatial ENAPP solver with replayable call metadata.
+
+        ``area_info`` must contain JSON-safe area topology records with
+        ``up_buses``, ``up_areas``, and ``down_areas`` lists. Named objectives
+        produce replayable runs; custom objectives or callbacks are retained for
+        interactive use but are marked non-replayable by ``record_call``.
+        """
+        _validate_area_info(area_info)
+        from distopf.distributed.spatial.enapp_agents import solve_enapp
+
+        return solve_enapp(
+            self,
+            area_info=area_info,
+            objective=objective,
+            swing_voltage_slack_penalty=swing_voltage_slack_penalty,
+            damping_factor=damping_factor,
+            tol=tol,
+            max_iterations=max_iterations,
+            parallel=parallel,
+            solve_callback=solve_callback,
+            iteration_callback=iteration_callback,
+            verbose_enapp=verbose_enapp,
+            **kwargs,
+        )
+
+    @record_call
+    def run_admm(
+        self,
+        area_info: dict[str, dict[str, list]],
+        objective: Optional[str | Callable] = "loss_min",
+        scaled: bool = True,
+        rho_v_up: float = 1e6,
+        rho_s_dn: float = 1e6,
+        rho_v_dn: float = 1e6,
+        rho_s_up: float = 1e6,
+        tol: float = 1e-4,
+        max_iterations: int = 200,
+        parallel: bool = True,
+        solve_callback: Optional[Callable] = None,
+        iteration_callback: Optional[Callable] = None,
+        verbose_admm: bool = False,
+        **kwargs,
+    ):
+        """Run the spatial ADMM solver with replayable call metadata."""
+        _validate_area_info(area_info)
+        from distopf.distributed.spatial.admm_agents import solve_admm
+
+        return solve_admm(
+            self,
+            area_info=area_info,
+            objective=objective,
+            scaled=scaled,
+            rho_v_up=rho_v_up,
+            rho_s_dn=rho_s_dn,
+            rho_v_dn=rho_v_dn,
+            rho_s_up=rho_s_up,
+            tol=tol,
+            max_iterations=max_iterations,
+            parallel=parallel,
+            solve_callback=solve_callback,
+            iteration_callback=iteration_callback,
+            verbose_admm=verbose_admm,
+            **kwargs,
+        )
 
     # -------------------------------------------------------------------------
     # Model Creation Methods (for advanced users)
@@ -681,11 +820,39 @@ class Case:
         --------
         >>> case = create_case(CASES_DIR / "csv" / "ieee13")
         >>> model = case.to_pyomo_model()
-        >>> from distopf.pyomo_models import add_constraints, solve
-        >>> add_constraints(model)
+        >>> from distopf.pyomo_models import solve
         >>> results = solve(model)
         """
         from distopf.pyomo_models import create_lindist_model
+
+        return create_lindist_model(self, **kwargs)
+
+    def to_cvxpy_model(self, **kwargs):
+        """
+        Create a CVXPY model that mirrors :meth:`to_pyomo_model`.
+
+        Parameters
+        ----------
+        **kwargs
+            Additional arguments passed to
+            ``cvxpy_models_performance.create_lindist_model``
+
+        Returns
+        -------
+        distopf.cvxpy_models_performance.common.model.CvxModel
+            CVXPY optimization model
+
+        Examples
+        --------
+        >>> case = create_case(CASES_DIR / "csv" / "ieee13")
+        >>> model = case.to_cvxpy_model()
+        >>> from distopf.cvxpy_models_performance import (
+        ...     solve, set_objective, loss_objective_rule
+        ... )
+        >>> set_objective(model, loss_objective_rule)
+        >>> results = solve(model)
+        """
+        from distopf.cvxpy_models_performance import create_lindist_model
 
         return create_lindist_model(self, **kwargs)
 
@@ -714,6 +881,28 @@ class Case:
             show_phases=show_phases,
             show_reactive_power=show_reactive_power,
         )
+
+    def plot_schedules(self):
+        """Plot time-series schedules as faceted line plots.
+
+        Each schedule column is plotted as a separate facet row with its own
+        independent y-axis scale and colored line.
+
+        Returns
+        -------
+        fig : Plotly figure object
+            Faceted line plot with one row per schedule variable
+
+        Raises
+        ------
+        RuntimeError
+            If no schedules are available in the case
+        """
+        if self.schedules is None or self.schedules.empty:
+            raise RuntimeError("No schedules available in this case.")
+        from distopf.plot import plot_schedules
+
+        return plot_schedules(self.schedules)
 
     # -------------------------------------------------------------------------
     # Case Modification Methods
@@ -785,7 +974,7 @@ class Case:
         Case
             New Case with copied data
         """
-        return Case(
+        copied = Case(
             self.branch_data.copy(),
             self.bus_data.copy(),
             self.gen_data.copy() if self.gen_data is not None else None,
@@ -802,6 +991,9 @@ class Case:
             ignore_cap=self.ignore_cap,
             ignore_reg=self.ignore_reg,
         )
+        copied._source_path = self._source_path
+        copied._modifications = dict(self._modifications)
+        return copied
 
     def add_generator(
         self,
@@ -835,9 +1027,9 @@ class Case:
         q_phase = round(q / n_phases, 9)
         s_rated_phase = round(s_rated / n_phases, 9)
         gen.loc[i, "phases"] = phases
-        gen.loc[i, [f"s{ph}_max" for ph in phases]] = s_rated_phase  # unlimited
-        gen.loc[i, [f"p{ph}" for ph in phases]] = p_phase  # unlimited
-        gen.loc[i, [f"q{ph}" for ph in phases]] = q_phase  # unlimited
+        gen.loc[i, [f"s_{ph}_max" for ph in phases]] = s_rated_phase  # unlimited
+        gen.loc[i, [f"p_{ph}" for ph in phases]] = p_phase  # unlimited
+        gen.loc[i, [f"q_{ph}" for ph in phases]] = q_phase  # unlimited
         if q_max is None:
             q_max = s_rated
         if q_min is None:
@@ -850,8 +1042,8 @@ class Case:
             .astype(float)
             .fillna(0.0)
         )
-        gen.loc[:, [f"s{a}_max" for a in "abc"]] = (
-            gen.loc[:, [f"s{a}_max" for a in "abc"]].astype(float).fillna(0.0)
+        gen.loc[:, [f"s_{a}_max" for a in "abc"]] = (
+            gen.loc[:, [f"s_{a}_max" for a in "abc"]].astype(float).fillna(0.0)
         )
         self.gen_data = gen
 
@@ -870,9 +1062,9 @@ class Case:
         if _id in cap.loc[:, "id"].to_numpy():
             i = self.cap_data.loc[self.cap_data.id == _id, "id"].index[0]
         print(cap.name.dtype)
-        cap.at[i, "name"] = name
+        cap.at[i, "name"] = str(name)
         cap.at[i, "id"] = _id
-        bus_phases = self.bus_data.loc[self.bus_data.name == "13", "phases"].to_numpy()[
+        bus_phases = self.bus_data.loc[self.bus_data.name == name, "phases"].to_numpy()[
             0
         ]
         if phases is None:
@@ -880,9 +1072,9 @@ class Case:
         n_phases = len(phases)
         q_phase = round(q / n_phases, 9)
         cap.loc[i, "phases"] = phases
-        cap.loc[i, [f"q{ph}" for ph in phases]] = q_phase  # unlimited
-        cap.loc[i, [f"q{ph}" for ph in phases]] = (
-            cap.loc[i, [f"q{ph}" for ph in phases]].astype(float).fillna(0.0)
+        cap.loc[i, [f"q_{ph}" for ph in phases]] = q_phase  # unlimited
+        cap.loc[i, [f"q_{ph}" for ph in phases]] = (
+            cap.loc[i, [f"q_{ph}" for ph in phases]].astype(float).fillna(0.0)
         )
         self.cap_data = cap
 
@@ -935,6 +1127,13 @@ class Case:
             "generator_controls": gen_controls,
             "schedule_columns": sched_cols,
             "schedule_summary": sched_summary,
+        }
+
+    def _replay_metadata(self) -> dict:
+        """Return scenario metadata needed to reproduce this case."""
+        return {
+            "modifications": dict(self._modifications),
+            "replay_source": "snapshot",
         }
 
     def _construction_kwargs(self) -> dict:
@@ -1060,6 +1259,7 @@ def replay(run_config_path: Path | str):
         If the run was marked non-replayable (e.g. a custom Callable objective).
     """
     import json
+
     run_config_path = Path(run_config_path)
     with open(run_config_path) as f:
         config = json.load(f)
@@ -1074,7 +1274,8 @@ def replay(run_config_path: Path | str):
     call = config["call"]
     if not call.get("replayable", True):
         bad = [
-            k for k, v in call["arguments"].items()
+            k
+            for k, v in call["arguments"].items()
             if isinstance(v, dict) and v.get("__nonserializable__")
         ]
         raise ValueError(f"Run is not replayable (non-serializable args: {bad})")
@@ -1084,13 +1285,81 @@ def replay(run_config_path: Path | str):
     if not case_path.is_absolute():
         case_path = (run_config_path.parent / case_path).resolve()
 
+    # Explicit replay_source takes precedence. For hand-authored scenario
+    # configs (such as benchmarking configs) whose path is a base case, infer
+    # "base" when the field is absent. Legacy saved results point at their
+    # materialized ``input`` directory and therefore default to "snapshot".
+    replay_source = case_info.get("replay_source")
+    if replay_source is None:
+        replay_source = "snapshot" if case_path.name == "input" else "base"
+    if replay_source not in {"snapshot", "base"}:
+        raise ValueError(
+            f"Unsupported replay_source: {replay_source!r}; "
+            "expected 'snapshot' or 'base'"
+        )
+    if replay_source == "base":
+        # Hand-authored benchmark configs already use ``case.path`` as the
+        # immutable base case. Saved result configs may additionally provide a
+        # distinct ``base_path`` while keeping ``path`` pointed at ``input``.
+        base_path = case_info.get("base_path", case_info["path"])
+        case_path = Path(base_path)
+        if not case_path.is_absolute():
+            case_path = (run_config_path.parent / case_path).resolve()
+
     case = create_case(
         case_path,
         model_type=case_info.get("source"),
         **case_info.get("kwargs", {}),
     )
+    if replay_source == "base":
+        case.modify(**case_info.get("modifications", {}))
 
-    return getattr(case, call["method"])(**call["arguments"])
+    method = call["method"]
+    arguments = dict(call["arguments"])
+    if method in {"run_enapp", "run_admm"}:
+        if (
+            arguments.get("solve_callback") is not None
+            or arguments.get("iteration_callback") is not None
+        ):
+            raise ValueError(
+                "Distributed replay does not support solve_callback or "
+                "iteration_callback"
+            )
+    return getattr(case, method)(**arguments)
+
+
+def run(run_config_path: Path | str):
+    return replay(run_config_path)
+
+
+def _validate_area_info(area_info: dict[str, dict[str, list]]) -> None:
+    """Validate the JSON-safe topology contract used by spatial solvers."""
+    import json
+
+    if not isinstance(area_info, dict) or not area_info:
+        raise ValueError("area_info must be a non-empty dictionary")
+    try:
+        json.dumps(area_info)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("area_info must be JSON-serializable") from exc
+
+    required = {"up_buses", "up_areas", "down_areas"}
+    for area_name, info in area_info.items():
+        if not isinstance(area_name, str) or not isinstance(info, dict):
+            raise ValueError("area_info keys must be strings and values dictionaries")
+        missing = required.difference(info)
+        if missing:
+            raise ValueError(
+                f"area_info[{area_name!r}] is missing required fields: "
+                f"{sorted(missing)}"
+            )
+        for field in required:
+            if not isinstance(info[field], list):
+                raise ValueError(f"area_info[{area_name!r}][{field!r}] must be a list")
+        if len(info["up_buses"]) != 1:
+            raise ValueError(
+                f"area_info[{area_name!r}]['up_buses'] must contain exactly one bus"
+            )
 
 
 def create_case(
@@ -1104,6 +1373,7 @@ def create_case(
     ignore_bat: bool = False,
     ignore_cap: bool = False,
     ignore_reg: bool = False,
+    delta_to_wye: bool = False,
 ) -> Case:
     """
     Create a Case object from various input formats.
@@ -1124,6 +1394,9 @@ def create_case(
         - "dss" or "opendss": OpenDSS file
         - "cim": CIM XML file
         - None: Auto-detect based on path
+    delta_to_wye : bool
+        OpenDSS input only: rewrite 3-phase transformer windings as wye before
+        converting, since the OPF models have no delta model.
 
     Returns
     -------
@@ -1153,7 +1426,7 @@ def create_case(
 
     # Route to appropriate function based on model type
     if model_type == "csv":
-        return create_case_from_csv(
+        case = create_case_from_csv(
             data_path,
             start_step=start_step,
             n_steps=n_steps,
@@ -1165,7 +1438,7 @@ def create_case(
             ignore_reg=ignore_reg,
         )
     elif model_type in ["dss", "opendss"]:
-        return create_case_from_dss(
+        case = create_case_from_dss(
             data_path,
             start_step=start_step,
             n_steps=n_steps,
@@ -1175,9 +1448,10 @@ def create_case(
             ignore_bat=ignore_bat,
             ignore_cap=ignore_cap,
             ignore_reg=ignore_reg,
+            delta_to_wye=delta_to_wye,
         )
     elif model_type == "cim":
-        return create_case_from_cim(
+        case = create_case_from_cim(
             data_path,
             start_step=start_step,
             n_steps=n_steps,
@@ -1193,6 +1467,9 @@ def create_case(
             f"Unsupported model type: '{model_type}'. "
             f"Supported types are: 'csv', 'dss', 'opendss', 'cim'"
         )
+
+    case._source_path = str(data_path.resolve())
+    return case
 
 
 def _detect_model_type(data_path: Path) -> str:
@@ -1298,13 +1575,14 @@ def _validate_case_data(case: Case) -> None:
     if case.branch_data is None or len(case.branch_data) == 0:
         raise ValueError("Case must contain branch data")
 
-    # Check for swing bus
+    # Check for a real or decomposed input swing bus.
     if case.bus_data is not None:
-        swing_buses = case.bus_data[case.bus_data.bus_type == "SWING"]
+        swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
+        swing_buses = case.bus_data[swing_mask]
         if len(swing_buses) == 0:
-            raise ValueError("Case must contain at least one SWING bus")
+            raise ValueError("Case must contain at least one SWING or IN bus")
         elif len(swing_buses) > 1:
-            raise ValueError("Case cannot contain more than one SWING bus")
+            raise ValueError("Case cannot contain more than one SWING or IN bus")
 
 
 # Enhanced versions of existing functions with better error handling
@@ -1363,22 +1641,34 @@ def create_case_from_csv(
 
         # Load bus data (required)
         if csv_files["bus_data"].exists():
-            bus_data = pd.read_csv(csv_files["bus_data"], header=0)
+            bus_data = pd.read_csv(csv_files["bus_data"], header=0, dtype={"name": str})
         else:
             raise FileNotFoundError(f"Required file not found: {csv_files['bus_data']}")
 
         # Load optional files
         if csv_files["gen_data"].exists():
-            gen_data = pd.read_csv(csv_files["gen_data"], header=0)
+            gen_data = pd.read_csv(
+                csv_files["gen_data"],
+                header=0,
+                dtype={"device_name": str, "bus_name": str},
+            )
 
         if csv_files["cap_data"].exists():
-            cap_data = pd.read_csv(csv_files["cap_data"], header=0)
+            cap_data = pd.read_csv(
+                csv_files["cap_data"],
+                header=0,
+                dtype={"device_name": str, "bus_name": str},
+            )
 
         if csv_files["reg_data"].exists():
             reg_data = pd.read_csv(csv_files["reg_data"], header=0)
 
         if csv_files["bat_data"].exists():
-            bat_data = pd.read_csv(csv_files["bat_data"], header=0)
+            bat_data = pd.read_csv(
+                csv_files["bat_data"],
+                header=0,
+                dtype={"device_name": str, "bus_name": str},
+            )
 
         if csv_files["schedules"].exists():
             schedules = pd.read_csv(csv_files["schedules"], header=0)
@@ -1419,6 +1709,7 @@ def create_case_from_dss(
     ignore_bat: bool = False,
     ignore_cap: bool = False,
     ignore_reg: bool = False,
+    delta_to_wye: bool = False,
 ) -> Case:
     """Enhanced version with better error handling."""
 
@@ -1435,13 +1726,18 @@ def create_case_from_dss(
         # Lazy import to avoid loading opendssdirect at module load time
         from distopf.dss_importer import DSSToCSVConverter
 
-        dss_parser = DSSToCSVConverter(data_path)
+        dss_parser = DSSToCSVConverter(
+            data_path,
+            schedule_steps=start_step + n_steps,
+            delta_to_wye=delta_to_wye,
+        )
         case = Case(
             dss_parser.branch_data,
             dss_parser.bus_data,
             dss_parser.gen_data,
             dss_parser.cap_data,
             dss_parser.reg_data,
+            schedules=dss_parser.schedules,
             start_step=start_step,
             n_steps=n_steps,
             delta_t=delta_t,
@@ -1526,6 +1822,22 @@ def modify_case(
     cvr_p=None,
     cvr_q=None,
 ):
+    modifications = {
+        key: value
+        for key, value in {
+            "load_mult": load_mult,
+            "gen_mult": gen_mult,
+            "control_variable": control_variable,
+            "v_swing": v_swing,
+            "v_min": v_min,
+            "v_max": v_max,
+            "cvr_p": cvr_p,
+            "cvr_q": cvr_q,
+        }.items()
+        if value is not None
+    }
+    case._modifications.update(modifications)
+
     # Modify load multiplier
     if load_mult is not None:
         case.bus_data.loc[:, ["pl_a", "ql_a", "pl_b", "ql_b", "pl_c", "ql_c"]] *= (
@@ -1559,7 +1871,7 @@ def modify_case(
     # Modify control_variable
     if control_variable is not None and case.gen_data is not None:
         if control_variable == "":
-            case.gen_data.control_variable = "P"
+            case.gen_data.control_variable = ""
         if control_variable.upper() == "P":
             case.gen_data.control_variable = "P"
         if control_variable.upper() == "Q":
@@ -1569,9 +1881,10 @@ def modify_case(
 
     # Modify swing voltage
     if v_swing is not None:
-        case.bus_data.loc[case.bus_data.bus_type == "SWING", ["v_a", "v_b", "v_c"]] = (
-            v_swing
-        )
+        case.bus_data.loc[
+            case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"]),
+            ["v_a", "v_b", "v_c"],
+        ] = v_swing
 
     if v_min is not None:
         case.bus_data.loc[:, "v_min"] = v_min

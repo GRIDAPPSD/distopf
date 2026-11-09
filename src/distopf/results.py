@@ -82,6 +82,16 @@ class PowerFlowResult:
         Error details if solve failed
     case_name : str or None
         Case identifier for benchmarking and result tracking
+    area_results : dict[str, PowerFlowResult] or None
+        Per-area results for ENAPP/decomposed solves.
+    boundary_error_per_iter : list[float] or None
+        Boundary mismatch metric over ENAPP iterations.
+    enapp_iterations : int or None
+        Number of ENAPP coordination iterations.
+    enapp_runtime : float or None
+        Total ENAPP runtime in seconds.
+    enapp_parallel_used : bool or None
+        Whether ENAPP multiprocessing remained enabled throughout solve.
     raw_result : Any
         Raw result object from the underlying solver (for advanced access)
     model : Any
@@ -163,6 +173,15 @@ class PowerFlowResult:
     error_message: Optional[str] = None  # Error details if solve failed
     case_name: Optional[str] = None  # Case identifier for benchmarking
 
+    # Distributed solver metadata
+    area_results: Optional[dict[str, "PowerFlowResult"]] = None
+    boundary_error_per_iter: Optional[list[float]] = None
+    iteration_summaries: Optional[pd.DataFrame] = None
+    area_iteration_summaries: Optional[pd.DataFrame] = None
+    enapp_iterations: Optional[int] = None
+    enapp_runtime: Optional[float] = None
+    enapp_parallel_used: Optional[bool] = None
+
     # References (not included in repr for cleanliness)
     raw_result: Any = field(default=None, repr=False)
     model: Any = field(default=None, repr=False)
@@ -215,24 +234,46 @@ class PowerFlowResult:
 
         # 4. Unified run config — the single file replay needs
         if self.metadata and "call" in self.metadata:
+            case_config = {
+                "source": "csv",
+                "path": "input",
+                "replay_source": "snapshot",
+                "kwargs": (
+                    self.case._construction_kwargs() if self.case is not None else {}
+                ),
+                "modifications": (
+                    self.case._replay_metadata()["modifications"]
+                    if self.case is not None
+                    else {}
+                ),
+            }
+            if self.case is not None and self.case._source_path is not None:
+                try:
+                    import os
+
+                    case_config["base_path"] = os.path.relpath(
+                        self.case._source_path, output_dir.resolve()
+                    )
+                except ValueError:
+                    # On platforms with different filesystem drives, retaining
+                    # the absolute path is more useful than dropping provenance.
+                    case_config["base_path"] = self.case._source_path
+
             run_config = {
                 "schema_version": 1,
                 "provenance": self.metadata.get("provenance", {}),
-                "case": {
-                    "source": "csv",
-                    "path": "input",
-                    "kwargs": (
-                        self.case._construction_kwargs()
-                        if self.case is not None
-                        else {}
-                    ),
-                },
+                "case": case_config,
                 "call": self.metadata["call"],
             }
+            if self.metadata.get("distributed_solver"):
+                run_config["distributed"] = {
+                    "solver": self.metadata["distributed_solver"],
+                    "area_info": self.metadata.get("area_info", {}),
+                }
             with open(output_dir / "run_config.json", "w") as f:
                 json.dump(run_config, f, indent=2, default=str)
-        
-        #5. Log file
+
+        # 5. Log file
         if self.log:
             with open(output_dir / "solver.log", "w") as f:
                 f.write(self.log)
@@ -273,43 +314,56 @@ class PowerFlowResult:
     # Plotting methods (delegate to plot module)
     # -------------------------------------------------------------------------
 
-    def plot_voltages(self):
+    def plot_voltages(self, t=None):
         """Plot bus voltage profile."""
         if self.voltages is None:
             raise RuntimeError("No voltage results available.")
         from distopf.plot import plot_voltages
 
-        return plot_voltages(self.voltages)
+        return plot_voltages(self.voltages, t=t)
 
-    def plot_power_flows(self):
+    def plot_power_flows(self, t=None):
         """Plot branch power flows."""
-
         if self.active_power_flows is None or self.reactive_power_flows is None:
             raise RuntimeError("No results available.")
-
-        s = self.active_power_flows.copy()
-        s["a"] = s["a"] + 1j * self.reactive_power_flows["a"]
-        s["b"] = s["b"] + 1j * self.reactive_power_flows["b"]
-        s["c"] = s["c"] + 1j * self.reactive_power_flows["c"]
-        # Ensure expected shape
-        if "tb" not in s.columns and "id" in s.columns:
-            s["tb"] = s["id"]
-            from_bus_map = {
-                int(tb): int(fb)
-                for fb, tb in self.branch_data.loc[:, ["fb", "tb"]].to_numpy()
-            }
-            s["fb"] = s["tb"].map(from_bus_map)
         from distopf.plot import plot_power_flows
 
-        return plot_power_flows(s)
+        return plot_power_flows(self.active_power_flows, self.reactive_power_flows, t=t)
 
-    def plot_gens(self):
+    def plot_gens(self, t=None):
         """Plot generator outputs."""
         if self.active_power_generation is None:
             raise RuntimeError("No generator results available.")
         from distopf.plot import plot_gens
 
-        return plot_gens(self.active_power_generation, self.reactive_power_generation)
+        return plot_gens(
+            self.active_power_generation, self.reactive_power_generation, t=t
+        )
+
+    def plot_batteries(self):
+        """Plot battery power and state of charge over time."""
+        if self.battery_active_power is None or self.soc is None:
+            raise RuntimeError("No battery results available.")
+        from distopf.plot import plot_batteries
+
+        return plot_batteries(self.battery_active_power, self.soc)
+
+    def plot_schedules(self):
+        """Plot time-series schedules from the associated case.
+
+        Returns
+        -------
+        fig : Plotly figure object
+            Faceted line plot with one row per schedule variable
+
+        Raises
+        ------
+        RuntimeError
+            If no case reference available or case has no schedules
+        """
+        if self.case is None:
+            raise RuntimeError("No case reference available in result.")
+        return self.case.plot_schedules()
 
     def plot_network(
         self,
@@ -317,6 +371,7 @@ class PowerFlowResult:
         v_max: float = 1.05,
         show_phases: str = "abc",
         show_reactive_power: bool = False,
+        t: Optional[int] = None,
     ):
         """Plot network visualization with results."""
         if self.voltages is None:
@@ -325,15 +380,104 @@ class PowerFlowResult:
 
         return plot_network(
             self.case,
-            v=self.voltages,
-            p_flow=self.active_power_flows,
-            q_flow=self.reactive_power_flows,
-            p_gen=self.active_power_generation,
-            q_gen=self.reactive_power_generation,
+            result=self,
             v_min=v_min,
             v_max=v_max,
             show_phases=show_phases,
             show_reactive_power=show_reactive_power,
+            t=t,
+        )
+
+    def plot_voltage_vs_distance(
+        self,
+        title: str = "Voltage vs Distance from Source",
+        color_by: str = "algorithm",
+        include_secondary_phases: bool = True,
+        t=None,
+    ):
+        """Plot voltage magnitude vs nodal distance from source bus.
+
+        Parameters
+        ----------
+        title : str, optional
+            Plot title. Default: "Voltage vs Distance from Source"
+        color_by : str, optional
+            Column name to color by. Default: "algorithm"
+        include_secondary_phases : bool, optional
+            If False, only phases a, b, c are plotted. Default: True
+        t : int, optional
+            Time step to plot. Defaults to the first one.
+
+        Returns
+        -------
+        fig : Plotly figure object
+
+        Raises
+        ------
+        RuntimeError
+            If no case reference or voltage results available
+        """
+        if self.case is None:
+            raise RuntimeError("No case reference available in result.")
+        if self.voltages is None:
+            raise RuntimeError("No voltage results available.")
+        from distopf.plot import plot_voltage_vs_distance
+
+        return plot_voltage_vs_distance(
+            self.case,
+            self.voltages,
+            title=title,
+            color_by=color_by,
+            include_secondary_phases=include_secondary_phases,
+            t=t,
+        )
+
+    def plot_line_flow_vs_distance(
+        self,
+        power_type: str = "active",
+        title: str = "Line Flow vs Distance from Source",
+        color_by: str = "algorithm",
+        include_secondary_phases: bool = True,
+        t=None,
+    ):
+        """Plot line flow vs nodal distance from source bus.
+
+        Parameters
+        ----------
+        power_type : str, optional
+            Type of power to plot: "active" or "reactive". Default: "active"
+        title : str, optional
+            Plot title. Default: "Line Flow vs Distance from Source"
+        color_by : str, optional
+            Column name to color by. Default: "algorithm"
+        include_secondary_phases : bool, optional
+            If False, only phases a, b, c are plotted. Default: True
+        t : int, optional
+            Time step to plot. Defaults to the first one.
+
+        Returns
+        -------
+        fig : Plotly figure object
+
+        Raises
+        ------
+        RuntimeError
+            If no case reference or power flow results available
+        ValueError
+            If power_type is not 'active' or 'reactive'
+        """
+        if self.case is None:
+            raise RuntimeError("No case reference available in result.")
+        from distopf.plot import plot_line_flow_vs_distance
+
+        return plot_line_flow_vs_distance(
+            self.case,
+            self,
+            title=title,
+            color_by=color_by,
+            include_secondary_phases=include_secondary_phases,
+            t=t,
+            power_type=power_type.lower(),
         )
 
 

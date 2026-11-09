@@ -230,7 +230,7 @@ def pyo_obj_curtail(model: LinDistBase, x: pe.Var, **kwargs) -> cp.Expression:
     terms = []
     for i in range(len(all_pg_idx)):
         terms.append((model.x_max[all_pg_idx[i]] - x[all_pg_idx[i]]) ** 2)
-    return sum(terms)
+    return sum(terms) / np.sum(model.x_max[all_pg_idx] ** 2)
 
 
 def pyomo_solve(

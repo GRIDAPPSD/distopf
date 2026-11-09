@@ -2,7 +2,7 @@ import pytest
 import pandas as pd
 import pyomo.environ as pyo
 import distopf as opf
-from distopf.pyomo_models.lindist import create_lindist_model
+from distopf.pyomo_models.common.factory import create_lindist_model
 from distopf.api import Case, create_case
 
 
@@ -93,9 +93,9 @@ def simple_case_data():
         {
             "fb": [1],
             "tb": [2],
-            "ratio_a": [1.0],
-            "ratio_b": [1.0],
-            "ratio_c": [1.0],
+            "tap_a": [0],
+            "tap_b": [0],
+            "tap_c": [0],
             "phases": ["abc"],
         }
     )
@@ -136,8 +136,10 @@ class TestCreateLinDistModel:
         assert hasattr(model, "phase_pair_set")
         assert hasattr(model, "bus_phase_set")
         assert hasattr(model, "branch_phase_set")
-        assert hasattr(model, "gen_phase_set")
-        assert hasattr(model, "cap_phase_set")
+        assert hasattr(model, "gen_device_set")
+        assert hasattr(model, "gen_device_phase_set")
+        assert hasattr(model, "cap_device_set")
+        assert hasattr(model, "cap_device_phase_set")
         assert hasattr(model, "reg_phase_set")
         assert hasattr(model, "bat_phase_set")
         assert hasattr(model, "bat_set")
@@ -152,13 +154,13 @@ class TestCreateLinDistModel:
         assert hasattr(model, "q_load_nom")
         assert hasattr(model, "cvr_p")
         assert hasattr(model, "cvr_q")
-        assert hasattr(model, "p_gen_nom")
-        assert hasattr(model, "q_gen_nom")
-        assert hasattr(model, "s_rated")
-        assert hasattr(model, "q_gen_max")
-        assert hasattr(model, "q_gen_min")
-        assert hasattr(model, "gen_control_type")
-        assert hasattr(model, "q_cap_nom")
+        assert hasattr(model, "gen_p_available")
+        assert hasattr(model, "gen_q_setpoint")
+        assert hasattr(model, "gen_s_max")
+        assert hasattr(model, "gen_q_max")
+        assert hasattr(model, "gen_q_min")
+        assert hasattr(model, "gen_control")
+        assert hasattr(model, "cap_q_nom")
         assert hasattr(model, "reg_ratio")
         assert hasattr(model, "v_swing")
         assert hasattr(model, "v_min")
@@ -213,7 +215,7 @@ class TestCreateLinDistModel:
         assert isinstance(model, pyo.ConcreteModel)
 
         # Check that generators exist in this case
-        assert len(model.gen_phase_set) > 0
+        assert len(model.gen_device_phase_set) > 0
 
     def test_model_creation_simple_case(self, simple_case_data):
         """Test model creation with simple test data"""
@@ -275,7 +277,7 @@ class TestSets:
         assert any(tb == 7 and ph == "c" for _, tb, ph in branch_phase_list)
         assert not any(tb == 7 and ph == "a" for _, tb, ph in branch_phase_list)
 
-    def test_gen_phase_set_empty(self, ieee13_case):
+    def test_gen_device_phase_set_empty(self, ieee13_case):
         """Test generator phase set when no generators exist"""
         case = Case(
             branch_data=ieee13_case.branch_data,
@@ -287,10 +289,9 @@ class TestSets:
 
         model = create_lindist_model(case)
 
-        # Check that gen_phase_set is empty for IEEE 13
-        assert len(model.gen_phase_set) == 0
+        assert len(model.gen_device_phase_set) == 0
 
-    def test_cap_phase_set_ieee13(self, ieee13_case):
+    def test_cap_device_phase_set_ieee13(self, ieee13_case):
         """Test capacitor phase set for IEEE 13"""
         case = Case(
             branch_data=ieee13_case.branch_data,
@@ -302,7 +303,10 @@ class TestSets:
 
         model = create_lindist_model(case)
 
-        cap_phase_list = list(model.cap_phase_set)
+        cap_phase_list = [
+            (model.cap_bus_by_device[device], phase)
+            for device, phase in model.cap_device_phase_set
+        ]
 
         # From the cap_data CSV: bus 10 (675) has abc, bus 11 (611) has c
         assert (10, "a") in cap_phase_list
@@ -368,13 +372,13 @@ class TestModelIntegrity:
 
         p_gen_keys = set(model.p_gen.keys())
         q_gen_keys = set(model.q_gen.keys())
-        gen_phase_set = set(model.gen_phase_set * model.time_set)
-        assert p_gen_keys == gen_phase_set
-        assert q_gen_keys == gen_phase_set
+        gen_device_phase_set = set(model.gen_device_phase_set * model.time_set)
+        assert p_gen_keys == gen_device_phase_set
+        assert q_gen_keys == gen_device_phase_set
 
         q_cap_keys = set(model.q_cap.keys())
-        cap_phase_set = set(model.cap_phase_set * model.time_set)
-        assert q_cap_keys == cap_phase_set
+        cap_device_phase_set = set(model.cap_device_phase_set * model.time_set)
+        assert q_cap_keys == cap_device_phase_set
 
 
 if __name__ == "__main__":

@@ -1,0 +1,31 @@
+# Minimal user-authored DistOPF scenario.
+# Paths are resolved relative to this file.
+
+[case]
+path = "../../src/distopf/cases/csv/ieee13"
+
+[analysis]
+type = "opf"
+objective = "loss"
+
+# Optional: save results and the generated run_config.json here.
+[output]
+directory = "../../scratch/example_results"
+
+# For ENAPP or ADMM, use this form instead:
+# [analysis]
+# type = "enapp"
+# objective = "loss"
+# parallel = false
+
+# [analysis.area_info.area1]
+# up_areas = []
+# down_areas = ["area2"]
+# up_buses = ["sourcebus"]
+# down_buses = ["632"]
+
+# [analysis.area_info.area2]
+# up_areas = ["area1"]
+# down_areas = []
+# up_buses = ["632"]
+# down_buses = []

@@ -1,38 +1,169 @@
+from __future__ import annotations
 
-from typing import Optional
-from functools import cache
+import time
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Iterator, Optional
+
 import networkx as nx
 import numpy as np
-from opendssdirect import dss
 import pandas as pd
+from opendssdirect import dss
+
+if TYPE_CHECKING:
+    from distopf.results import PowerFlowResult
+
+
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+_OPEN_EDGE_WEIGHT = 10_000
+_BRANCH_TYPES = ("line", "transformer", "reactor")
+_PHASE_ORDER = ("a", "b", "c", "s1", "s2")
+_PRIMARY_NODE_PHASE = {1: "a", 2: "b", 3: "c"}
+_SECONDARY_NODE_LEG = {1: "s1", 2: "s2"}
+
+# (suffix, row, col) of the upper-triangular impedance entries that are exported.
+_ABC_Z = (
+    ("aa", 0, 0),
+    ("ab", 0, 1),
+    ("ac", 0, 2),
+    ("bb", 1, 1),
+    ("bc", 1, 2),
+    ("cc", 2, 2),
+)
+_SPLIT_Z = (("s1s1", 0, 0), ("s1s2", 0, 1), ("s2s2", 1, 1))
+_Z_COLUMNS = [
+    f"{prefix}_{suffix}"
+    for entries in (_ABC_Z, _SPLIT_Z)
+    for prefix in "rx"
+    for suffix, _, _ in entries
+]
+# Total line-charging susceptance per phase, per unit on the branch z_base.
+_B_COLUMNS = ["b_a", "b_b", "b_c"]
+# Transformer no-load loss (g) and magnetizing (b) admittance at the from-bus, pu on s_base.
+_SHUNT_COLUMNS = [f"{kind}_sh_{phase}" for kind in "gb" for phase in "abc"]
+_BRANCH_COLUMNS = [
+    "fb",
+    "tb",
+    "from_name",
+    "to_name",
+    *_Z_COLUMNS,
+    *_B_COLUMNS,
+    *_SHUNT_COLUMNS,
+    "primary_phase",
+    "type",
+    "name",
+    "status",
+    "s_base",
+    "v_ln_base",
+    "z_base",
+    "phases",
+]
+_BAT_COLUMNS = [
+    "id",
+    "name",
+    "s_max",
+    "phases",
+    "energy_capacity",
+    "min_soc",
+    "max_soc",
+    "start_soc",
+    "charge_efficiency",
+    "discharge_efficiency",
+    "annual_cycle_limit",
+    "control_variable",
+    "p",
+    "q",
+]
+_GEN_FIRST_COLUMNS = ("id", "name", "primary_phase", "control_variable", "gen_shape")
+_GEN_COLUMNS = [
+    "id",
+    "name",
+    "p_a",
+    "p_b",
+    "p_c",
+    "q_a",
+    "q_b",
+    "q_c",
+    "s_a_max",
+    "s_b_max",
+    "s_c_max",
+    "p_s1",
+    "p_s2",
+    "q_s1",
+    "q_s2",
+    "s_s1_max",
+    "s_s2_max",
+    "primary_phase",
+    "phases",
+    "q_a_max",
+    "q_b_max",
+    "q_c_max",
+    "q_a_min",
+    "q_b_min",
+    "q_c_min",
+    "q_s1_max",
+    "q_s2_max",
+    "q_s1_min",
+    "q_s2_min",
+    "control_variable",
+    "gen_shape",
+]
+
+_LOAD_COLUMNS = [
+    f"{kind}_{ph}"
+    for ph in ("a", "b", "c", "s1", "s2", "s1s2")
+    for kind in ("pl", "ql")
+]
+
+# OpenDSS load model -> (cvr_p, cvr_q). Models 4 and 8 are handled explicitly.
+_LOAD_MODEL_CVR = {1: (0, 0), 2: (2, 2), 3: (0, 2), 5: (1, 1), 6: (0, 0), 7: (0, 2)}
 
 
 def _merge_phases(s: pd.Series) -> str:
+    """Union of phase labels (a, b, c, s1, s2) found in a series of strings."""
     seen: set[str] = set()
-    phase_order = ["a", "b", "c", "s1", "s2"]
     for val in s.dropna():
         remaining = str(val)
-        # consume s1/s2 first so the lone 's' doesn't confuse single-char phases
-        for tok in phase_order:
+        for tok in _PHASE_ORDER:
             if tok in remaining:
                 seen.add(tok)
                 remaining = remaining.replace(tok, "")
-    return "".join(tok for tok in phase_order if tok in seen)
+    return "".join(tok for tok in _PHASE_ORDER if tok in seen)
+
+
+def _gen_agg() -> dict:
+    agg: dict = {}
+    for col in _GEN_COLUMNS:
+        if col == "id":
+            continue  # grouping key
+        if col == "phases":
+            agg[col] = _merge_phases
+        elif col in _GEN_FIRST_COLUMNS:
+            agg[col] = "first"
+        else:
+            agg[col] = "sum"
+    return agg
+
+
+# ---------------------------------------------------------------------------
+# Graph helpers
+# ---------------------------------------------------------------------------
 
 
 def load_dss_model(
     cim_file: str | Path, s_base: float = 1e6
 ) -> dict[str, pd.DataFrame]:
     converter = DSSToCSVConverter(cim_file, s_base=s_base)
-    data = dict(
+    return dict(
         bus_data=converter.bus_data,
         branch_data=converter.branch_data,
         gen_data=converter.gen_data,
+        bat_data=converter.bat_data,
         cap_data=converter.cap_data,
         reg_data=converter.reg_data,
     )
-    return data
 
 
 def build_graph(case) -> nx.Graph:
@@ -40,12 +171,6 @@ def build_graph(case) -> nx.Graph:
 
     All columns from *case.bus_data* become node attributes (keyed by ``id``).
     All columns from *case.branch_data* become edge attributes (keyed by ``fb``/``tb``).
-
-    Args:
-        case: distopf Case object with .bus_data and .branch_data DataFrames
-
-    Returns:
-        An undirected ``nx.Graph`` with all attributes attached.
     """
     g = nx.Graph()
     g.add_nodes_from((r.pop("id"), r) for r in case.bus_data.to_dicts())
@@ -54,21 +179,41 @@ def build_graph(case) -> nx.Graph:
 
 
 def get_spanning_tree(g: nx.Graph) -> nx.Graph:
+    """Minimum spanning tree that avoids edges whose ``status`` is ``"OPEN"``."""
     h = g.copy()
-
-    # --- Step 1: default weights -------------------------------------------
-    for fb, tb, data in h.edges(data=True):
+    for _, _, data in h.edges(data=True):
         data.setdefault("weight", 1)
+        if data.get("status") == "OPEN":
+            data["weight"] = _OPEN_EDGE_WEIGHT
+    return nx.minimum_spanning_tree(h)
 
-        if h[fb][tb].get("status", 1) == "OPEN":
-            h[fb][tb]["weight"] = 10000
 
-    # --- Step 4: run minimum spanning tree (MST) -----------------------------------------------
-    mst = nx.minimum_spanning_tree(h)
-    return mst
+# ---------------------------------------------------------------------------
+# Converter
+# ---------------------------------------------------------------------------
 
 
 class DSSToCSVConverter:
+    """Convert an OpenDSS circuit into distopf-style bus/branch/gen/cap/reg tables.
+
+    Assumptions
+    -----------
+    * Radial network.
+    * Split-phase transformers have canonical winding connections: one
+      secondary winding on ``.1.0`` and the other on ``.0.2``.
+    * Both secondary windings have the same nominal voltage and unity taps.
+    * Triplex lines have one or two hot conductors, with the neutral already
+      eliminated or represented by ground.
+    * Source and winding nominal voltages are consistent with the ideal
+      transformer ratios used by FBS.
+
+    Parameters
+    ----------
+    voltage_bases
+        Optional explicit bus line-to-neutral voltage bases in volts. An
+        override propagates through its line/reactor-connected component.
+    """
+
     def __init__(
         self,
         dssfile: str | Path,
@@ -77,1885 +222,2041 @@ class DSSToCSVConverter:
         v_max: float = 1.05,
         cvr_p: float = 0,
         cvr_q: float = 0,
+        voltage_bases: Optional[dict[str, float]] = None,
+        schedule_steps: int = 96,
+        delta_to_wye: bool = False,
     ) -> None:
         self.dss = dss
         self.dssfile = dssfile
-        self.dss.Text.Command(f"Redirect {self.dssfile}")
-        # if self.dss.Topology.NumLoops() > 0:
-        #     raise ValueError("Toplogy must be radial; topology has .")
+        self.schedule_steps = schedule_steps
+        self._shape_cache: dict[str, np.ndarray] = {}
         self.s_base = s_base
         self.v_min = v_min
         self.v_max = v_max
         self.cvr_p = cvr_p
         self.cvr_q = cvr_q
-        self.center_taps = self._identify_center_tap_transformers()
-        self.bus_names = self.get_bus_names()
-        self.secondary_buses = self._build_secondary_buses()
-        # get dataframes and results
-        self.branch_data = self.get_branch_data()
-        self.bus_data = self.get_bus_data()
-        self.gen_data = self.get_gen_data()
-        self.cap_data = self.get_cap_data()
-        self.reg_data = self.get_reg_data()
-        self.v_solved = self.get_v_solved()
-        self.s_solved = self.get_apparent_power_flows()
+        self._voltage_base_overrides = {
+            str(name).lower(): float(value)
+            for name, value in (voltage_bases or {}).items()
+        }
+        self.dss.Text.Command(f"Redirect {self.dssfile}")
+        if delta_to_wye:
+            self._convert_delta_to_wye()
+        self._refresh()
+
+    def _convert_delta_to_wye(self) -> None:
+        """Make 3-phase transformer windings wye with no neutral node, then re-solve."""
+        names = []
+        self.dss.Transformers.First()
+        for _ in range(self.dss.Transformers.Count()):
+            if self.dss.CktElement.NumPhases() == 3:
+                names.append(self.dss.Transformers.Name())
+            self.dss.Transformers.Next()
+        for name in names:
+            self.dss.Transformers.Name(name)
+            bus_names = list(self.dss.CktElement.BusNames())
+            for winding, bus in enumerate(bus_names, start=1):
+                if bus.endswith(".1.2.3.4"):
+                    bus = bus[: -len(".4")]
+                self.dss.Text.Command(
+                    f"Edit Transformer.{name} wdg={winding} conn=wye bus={bus}"
+                )
+        self.dss.Solution.Solve()
 
     def update(self) -> None:
+        """Re-solve the circuit and rebuild every derived table."""
         self.dss.Solution.Solve()
-        self.bus_names = self.get_bus_names()
+        self._refresh()
+
+    def _refresh(self) -> None:
+        # Order matters: each step depends on the ones before it.
+        self.center_taps = self._identify_center_tap_transformers()
+        self._build_topology()
         self.secondary_buses = self._build_secondary_buses()
-        # get dataframes and results
+        # Building the voltage bases changes the active DSS element, so do it
+        # before any element-iteration loops below.
+        self._nominal_voltage_bases = self._build_nominal_voltage_bases()
+
+        self._schedule_columns: dict[str, np.ndarray] = {}
         self.branch_data = self.get_branch_data()
         self.bus_data = self.get_bus_data()
         self.gen_data = self.get_gen_data()
+        self.bat_data = self.get_bat_data()
         self.cap_data = self.get_cap_data()
         self.reg_data = self.get_reg_data()
+        self.schedules = pd.DataFrame(
+            {"time": np.arange(self.schedule_steps), **self._schedule_columns}
+        )
         self.v_solved = self.get_v_solved()
         self.s_solved = self.get_apparent_power_flows()
 
-    @cache
-    def get_bus_names(self) -> list[str]:
-        """Access all the bus (node) names from the circuit
+    # ------------------------------------------------------------------
+    # Small helpers
+    # ------------------------------------------------------------------
 
-        Returns:
-            list[str]: list of all the bus names
-        """
+    @staticmethod
+    def _bus_of(spec: str) -> str:
+        return spec.split(".")[0]
 
+    @staticmethod
+    def _split_bus_spec(spec: str) -> tuple[str, list[int]]:
+        """Parse ``'secbus.1.0'`` -> ``('secbus', [1, 0])``; ``'bus'`` -> ``('bus', [])``."""
+        name, *nodes = spec.split(".")
+        return name, [int(n) for n in nodes]
+
+    @staticmethod
+    def _is_split_phase_pattern(nodes_a: list[int], nodes_b: list[int]) -> bool:
+        """True for the center-tap pattern: one winding on [1, 0], the other on [0, 2]."""
+        return {tuple(sorted(nodes_a)), tuple(sorted(nodes_b))} == {(0, 1), (0, 2)}
+
+    @staticmethod
+    def _phases_from_nodes(nodes) -> str:
+        """Phase letters for OpenDSS nodes; no explicit phase nodes means ``abc``."""
+        valid = sorted({int(n) for n in nodes if int(n) in _PRIMARY_NODE_PHASE})
+        return "".join(_PRIMARY_NODE_PHASE[n] for n in valid) or "abc"
+
+    def _is_open(self, n_terminals: int = 2) -> bool:
+        return any(self.dss.CktElement.IsOpen(t, 1) for t in range(1, n_terminals + 1))
+
+    def _switch_status(self) -> str:
+        return "OPEN" if self._is_open() else "CLOSED"
+
+    def _pd_edges(
+        self, element_types=_BRANCH_TYPES, include_open: bool = False
+    ) -> list[tuple[str, str]]:
+        """(bus1, bus2) for every matching PD element (open ones excluded by default)."""
+        edges = []
         flag = self.dss.PDElements.First()
-        branches = []
         while flag:
-            element_type = self.dss.CktElement.Name().lower().split(".")[0]
-            if element_type not in ["line", "transformer", "reactor"]:
-                flag = self.dss.PDElements.Next()
-                continue
-            switch_status = (
-                "OPEN"
-                if (
-                    self.dss.CktElement.IsOpen(1, 1)
-                    or self.dss.CktElement.IsOpen(2, 1)
-                )
-                else "CLOSED"
-            )
-            if switch_status == "OPEN":
-                flag = self.dss.PDElements.Next()
-                continue
-            bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
-            bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
-            branches.append((bus1, bus2))
-            self.dss.Circuit.SetActiveBus(bus2)
+            etype = self.dss.CktElement.Name().split(".")[0].lower()
+            if etype in element_types and (include_open or not self._is_open()):
+                specs = self.dss.CktElement.BusNames()
+                edges.append((self._bus_of(specs[0]), self._bus_of(specs[1])))
             flag = self.dss.PDElements.Next()
-        g = nx.Graph()
-        # Keep graph construction deterministic so DFS numbering is reproducible.
-        g.add_edges_from(sorted(set(branches)))
-        g = get_spanning_tree(g)
-        node_list = list(nx.dfs_preorder_nodes(g, self.source, sort_neighbors=sorted))
-        return node_list
+        return edges
+
+    # ------------------------------------------------------------------
+    # Circuit properties
+    # ------------------------------------------------------------------
 
     @property
-    @cache
-    def bus_names_to_index_map(self) -> dict[str, int]:
-        """each of the bus mapped to its corresponding index in the bus names list
-
-        Returns:
-            dict[str,int]: dictionary with key as bus names and value as its index
-        """
-        _map = {bus: index + 1 for index, bus in enumerate(self.bus_names)}
-        return _map
-
-    def bus_names_to_index_map_fun(self, bus: str) -> int:
-        return self.bus_names_to_index_map[bus]
-
-    @cache
-    def _bus_depth_map(self) -> dict[str, int]:
-        """Depth of each reachable bus in a deterministic source-rooted tree."""
-        flag = self.dss.PDElements.First()
-        edges: set[tuple[str, str]] = set()
-        while flag:
-            element_type = self.dss.CktElement.Name().lower().split(".")[0]
-            if element_type not in ["line", "transformer", "reactor"]:
-                flag = self.dss.PDElements.Next()
-                continue
-            switch_status = (
-                "OPEN"
-                if (
-                    self.dss.CktElement.IsOpen(1, 1)
-                    or self.dss.CktElement.IsOpen(2, 1)
-                )
-                else "CLOSED"
-            )
-            if switch_status == "OPEN":
-                flag = self.dss.PDElements.Next()
-                continue
-
-            bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
-            bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
-            edge = tuple(sorted((bus1, bus2)))
-            edges.add(edge)
-            flag = self.dss.PDElements.Next()
-
-        g = nx.Graph()
-        g.add_nodes_from(self.bus_names)
-        g.add_edges_from(sorted(edges))
-        g = get_spanning_tree(g)
-
-        if self.source not in g:
-            return {}
-
-        tree = nx.bfs_tree(g, self.source, sort_neighbors=sorted)
-        return nx.single_source_shortest_path_length(tree, self.source)
-
-    def _orient_edge(self, bus1: str, bus2: str) -> tuple[str, str]:
-        """Orient an edge from upstream to downstream using source depth.
-
-        Falls back to deterministic bus index ordering when depth is tied/unknown.
-        """
-        depth = self._bus_depth_map()
-        d1 = depth.get(bus1)
-        d2 = depth.get(bus2)
-
-        if d1 is not None and d2 is not None:
-            if d1 < d2:
-                return bus1, bus2
-            if d2 < d1:
-                return bus2, bus1
-
-        if d1 is not None and d2 is None:
-            return bus1, bus2
-        if d2 is not None and d1 is None:
-            return bus2, bus1
-
-        i1 = self.bus_names_to_index_map.get(bus1, float("inf"))
-        i2 = self.bus_names_to_index_map.get(bus2, float("inf"))
-        if i1 <= i2:
-            return bus1, bus2
-        return bus2, bus1
+    def source(self) -> str:
+        """Source bus of the circuit (first Vsource)."""
+        self.dss.Vsources.First()
+        return self._bus_of(self.dss.CktElement.BusNames()[0])
 
     @property
     def basekV_LL(self) -> float:
-        """Returns basekV (line to line) of the circuit based on the sourcebus
-
-        Returns:
-            float: base kV of the circuit as referred to the source bus
-        """
-        # make the source bus active before accessing the base kV since there is no provision to get base kV of circuit
+        """Line-to-line base kV as referred to the source bus."""
         self.dss.Circuit.SetActiveBus(self.source)
         return round(self.dss.Bus.kVBase() * np.sqrt(3), 2)
 
     @property
-    def source(self) -> str:
-        """source bus of the circuit.
-
-        Returns:
-            str: returns the source bus of the circuit
-        """
-        # typically the first bus is the source bus
-        self.dss.Vsources.First()
-        return self.dss.CktElement.BusNames()[0].split(".")[0]
-
-    @property
-    # @cache
     def gen_buses(self) -> set[str]:
+        buses = set()
         flag = self.dss.Generators.First()
-        gen_buses = set()
         while flag:
-            gen_buses.add(self.dss.Generators.Bus1().split(".")[0])
+            buses.add(self._bus_of(self.dss.Generators.Bus1()))
             flag = self.dss.Generators.Next()
         flag = self.dss.PVsystems.First()
         while flag:
-            gen_buses.add(self.dss.CktElement.BusNames()[0].split(".")[0])
+            buses.add(self._bus_of(self.dss.CktElement.BusNames()[0]))
             flag = self.dss.PVsystems.Next()
-        return gen_buses
+        return buses
 
     @property
-    # @cache
     def cap_buses(self) -> set[str]:
+        buses = set()
         flag = self.dss.Capacitors.First()
-        cap_buses = set()
         while flag:
-            cap_buses.add(self.dss.CktElement.BusNames()[0].split(".")[0])
+            buses.add(self._bus_of(self.dss.CktElement.BusNames()[0]))
             flag = self.dss.Capacitors.Next()
-        return cap_buses
+        return buses
 
     @property
-    # @cache
     def load_buses(self) -> set[str]:
-        return set(
-            [self.dss.CktElement.BusNames()[0].split(".")[0] for line in self.dss.Loads]
+        return {self._bus_of(self.dss.CktElement.BusNames()[0]) for _ in self.dss.Loads}
+
+    # ------------------------------------------------------------------
+    # Topology
+    # ------------------------------------------------------------------
+
+    def _build_topology(self) -> None:
+        """Build the source-rooted spanning tree, DFS bus numbering and bus depths."""
+        edges = sorted({tuple(sorted(e)) for e in self._pd_edges()})
+        g = nx.Graph()
+        g.add_edges_from(edges)  # sorted so DFS numbering is reproducible
+        tree = get_spanning_tree(g)
+        source = self.source
+
+        self.bus_names: list[str] = list(
+            nx.dfs_preorder_nodes(tree, source, sort_neighbors=sorted)
         )
-
-    @property
-    def num_phase_map(self) -> dict[str, str]:
-        # opendss provides nodes phase in number format so we convert it to letter format
-        num_phase_mapper = {
-            "[1]": "a",
-            "[2]": "b",
-            "[3]": "c",
-            "[1, 2]": "ab",
-            "[1, 3]": "ac",
-            "[2, 3]": "bc",
-            "[1, 2, 3]": "abc",
-            "[1, 2, 3, 4]": "abc",  # excluding 4th node
+        self.bus_names_to_index_map: dict[str, int] = {
+            bus: i for i, bus in enumerate(self.bus_names, start=1)
         }
-        return num_phase_mapper
+        self._bus_lookup = {name.lower(): name for name in self.bus_names}
+        self._bus_depth = nx.single_source_shortest_path_length(tree, source)
 
-    # -------------------- triplex / center-tap detection --------------------
+    def _orient_edge(self, bus1: str, bus2: str) -> tuple[str, str]:
+        """Orient an edge upstream -> downstream.
 
-    @staticmethod
-    def _split_bus_spec(spec: str) -> tuple[str, list[int]]:
-        """Parse an OpenDSS bus specification into name and node list.
-
-        Examples:
-            'secbus.1.0' -> ('secbus', [1, 0])
-            'pribus.1'   -> ('pribus', [1])
-            'sourcebus'  -> ('sourcebus', [])
+        Shallower bus first; a reachable bus precedes an unreachable one;
+        ties fall back to the DFS bus index.
         """
-        parts = spec.split(".")
-        name = parts[0]
-        nodes = [int(p) for p in parts[1:]] if len(parts) > 1 else []
-        return name, nodes
 
-    @staticmethod
-    def _is_split_phase_pattern(nodes_a: list[int], nodes_b: list[int]) -> bool:
-        """Return True if two node lists represent a center-tap split-phase pattern.
+        def key(bus: str):
+            depth = self._bus_depth.get(bus)
+            return (
+                depth is None,
+                0 if depth is None else depth,
+                self.bus_names_to_index_map.get(bus, float("inf")),
+            )
 
-        The canonical center-tap pattern is one winding on nodes [1, 0] (s1 to
-        neutral) paired with another on [0, 2] (neutral to s2), in either order.
-        """
-        a, b = sorted(nodes_a), sorted(nodes_b)
-        return (a == [0, 1] and b == [0, 2]) or (a == [0, 2] and b == [0, 1])
+        return (bus1, bus2) if key(bus1) <= key(bus2) else (bus2, bus1)
+
+    # ------------------------------------------------------------------
+    # Center-tap (split-phase) detection and parameters
+    # ------------------------------------------------------------------
 
     def _identify_center_tap_transformers(self) -> dict[str, dict]:
-        """Find all center-tap (split-phase) transformers in the circuit.
+        """Find 3-winding transformers whose windings 2 and 3 form a split-phase pair.
 
-        A center-tap transformer is identified as a 3-winding transformer where
-        windings 2 and 3 share the same bus name but have complementary
-        split-phase node patterns (.1.0 paired with .0.2).
-
-        Returns:
-            dict keyed by transformer name, each value a dict with:
-                'primary_bus':   str  — bus name on winding 1
-                'secondary_bus': str  — shared bus name on windings 2 & 3
-                'primary_phase': str  — 'a', 'b', or 'c'
+        Returns a dict keyed by transformer name with ``primary_bus``,
+        ``secondary_bus`` and ``primary_phase``.
         """
         center_taps = {}
         flag = self.dss.Transformers.First()
         while flag:
             if self.dss.Transformers.NumWindings() == 3:
-                bus_specs = self.dss.CktElement.BusNames()
-                bus1_name, bus1_nodes = self._split_bus_spec(bus_specs[0])
-                bus2_name, bus2_nodes = self._split_bus_spec(bus_specs[1])
-                bus3_name, bus3_nodes = self._split_bus_spec(bus_specs[2])
-
-                if bus2_name == bus3_name and self._is_split_phase_pattern(
-                    bus2_nodes, bus3_nodes
-                ):
-                    # Determine primary phase from winding-1 non-zero node
-                    primary_nodes = [n for n in bus1_nodes if n != 0]
-                    if primary_nodes:
-                        primary_phase = "abc"[primary_nodes[0] - 1]
-                    else:
-                        # Fallback: single-phase with no explicit node → assume 'a'
-                        primary_phase = "a"
-
+                parsed = [
+                    self._split_bus_spec(s) for s in self.dss.CktElement.BusNames()
+                ]
+                (bus1, nodes1), (bus2, nodes2), (bus3, nodes3) = parsed[:3]
+                if bus2 == bus3 and self._is_split_phase_pattern(nodes2, nodes3):
+                    hot = [n for n in nodes1 if n != 0]
                     center_taps[self.dss.Transformers.Name()] = {
-                        "primary_bus": bus1_name,
-                        "secondary_bus": bus2_name,
-                        "primary_phase": primary_phase,
+                        "primary_bus": bus1,
+                        "secondary_bus": bus2,
+                        "primary_phase": "abc"[hot[0] - 1] if hot else "a",
                     }
             flag = self.dss.Transformers.Next()
         return center_taps
 
     def _build_secondary_buses(self) -> dict[str, dict]:
-        """Walk the network downstream of every center-tap transformer and mark
-        all reachable buses as secondary.
-
-        Returns:
-            dict mapping bus_name -> {'primary_phase': str} for every bus on
-            the secondary (triplex) side of a center-tap transformer.
-            Primary-side buses are never included.
-        """
-        center_taps = self._identify_center_tap_transformers()
-        if not center_taps:
+        """Map every bus on the secondary side of a center-tap transformer to its primary phase."""
+        if not self.center_taps:
             return {}
 
-        # Build full network graph (mirrors get_bus_names logic)
-        flag = self.dss.PDElements.First()
-        edges = []
-        while flag:
-            element_type = self.dss.CktElement.Name().lower().split(".")[0]
-            if element_type in ("line", "transformer", "reactor"):
-                if element_type == "line" and self.dss.Lines.IsSwitch():
-                    if self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(
-                        2, 1
-                    ):
-                        flag = self.dss.PDElements.Next()
-                        continue
-                b1 = self.dss.CktElement.BusNames()[0].split(".")[0]
-                b2 = self.dss.CktElement.BusNames()[1].split(".")[0]
-                edges.append((b1, b2))
-            flag = self.dss.PDElements.Next()
-
         g = nx.Graph()
-        g.add_edges_from(edges)
+        g.add_edges_from(self._pd_edges())
+        for info in self.center_taps.values():
+            if g.has_edge(info["primary_bus"], info["secondary_bus"]):
+                g.remove_edge(info["primary_bus"], info["secondary_bus"])
 
-        # Remove every center-tap transformer edge so that the secondary
-        # side becomes a disconnected component.
-        for info in center_taps.values():
-            pri = info["primary_bus"]
-            sec = info["secondary_bus"]
-            if g.has_edge(pri, sec):
-                g.remove_edge(pri, sec)
-
-        # Every bus reachable from a center-tap's secondary bus (in the
-        # pruned graph) is a secondary bus with the same primary_phase.
-        secondary_buses: dict[str, dict] = {}
-        for info in center_taps.values():
+        secondary: dict[str, dict] = {}
+        for info in self.center_taps.values():
             sec_bus = info["secondary_bus"]
-            primary_phase = info["primary_phase"]
             if sec_bus not in g:
                 continue
-            reachable = nx.node_connected_component(g, sec_bus)
-            for bus in reachable:
-                # Only include buses that are in the known bus list
+            for bus in nx.node_connected_component(g, sec_bus):
                 if bus in self.bus_names_to_index_map:
-                    secondary_buses[bus] = {"primary_phase": primary_phase}
+                    secondary[bus] = {"primary_phase": info["primary_phase"]}
+        return secondary
 
-        return secondary_buses
+    def _read_center_tap_parameters(self, transformer_name: str) -> dict:
+        """Read a canonical center-tap transformer on a common ohmic base.
 
-    def _phases_for_bus(self, bus_name: str) -> str:
-        """Return the phase string for a bus, mapping secondary buses to s1/s2.
-
-        Assumes self.dss.Circuit.SetActiveBus(bus_name) has been called or
-        will be called internally.
+        Impedances are in ohms, referred to the nominal secondary leg voltage.
+        OpenDSS Xhl/Xht/Xlt are on the winding-1 kVA base; each winding's %R is
+        on that winding's own kVA base.
         """
-        if bus_name in self.secondary_buses:
-            self.dss.Circuit.SetActiveBus(bus_name)
-            nodes = [n for n in self.dss.Bus.Nodes() if n != 0]
-            node_to_leg = {1: "s1", 2: "s2"}
-            legs = [node_to_leg[n] for n in sorted(nodes) if n in node_to_leg]
-            return "".join(legs) if legs else "s1s2"
-        return self.num_phase_map[str(self.dss.Bus.Nodes())]
+        self.dss.Transformers.Name(transformer_name)
 
-    def get_v_solved(self) -> pd.DataFrame:
-        va = pd.DataFrame(
-            {
-                "name": [
-                    name.split(".")[0]
-                    for name in self.dss.Circuit.AllNodeNamesByPhase(1)
-                ],
-                "a": self.dss.Circuit.AllNodeVmagPUByPhase(1),
-            }
-        )
-        vb = pd.DataFrame(
-            {
-                "name": [
-                    name.split(".")[0]
-                    for name in self.dss.Circuit.AllNodeNamesByPhase(2)
-                ],
-                "b": self.dss.Circuit.AllNodeVmagPUByPhase(2),
-            }
-        )
-        vc = pd.DataFrame(
-            {
-                "name": [
-                    name.split(".")[0]
-                    for name in self.dss.Circuit.AllNodeNamesByPhase(3)
-                ],
-                "c": self.dss.Circuit.AllNodeVmagPUByPhase(3),
-            }
-        )
-        v_df = pd.merge(va, vb, on="name", how="outer")
-        v_df = pd.merge(v_df, vc, on="name", how="outer")
-        v_df.index = v_df.name.apply(self.bus_names_to_index_map_fun)
-        v_df = v_df.sort_index()
+        if self.dss.Transformers.NumWindings() != 3:
+            raise ValueError(
+                f"{transformer_name}: expected a three-winding transformer"
+            )
+        if self.dss.CktElement.NumPhases() != 1:
+            raise ValueError(
+                f"{transformer_name}: center-tap conversion requires phases=1"
+            )
 
-        # OpenDSS treats center-tap secondary nodes (s1, s2) as 120° apart
-        # instead of 180°, giving kVBase = V_LL/sqrt(3) instead of V_LL/2.
-        # Correct: V_pu_actual = V_pu_dss * (kVBase_dss / kVBase_actual)
-        #                      = V_pu_dss * (V_LL/sqrt(3)) / (V_LL/2)
-        #                      = V_pu_dss * 2/sqrt(3)
-        correction = 2 / np.sqrt(3)  # ≈ 1.1547
-        for bus_name in self.secondary_buses:
-            if bus_name in v_df.name.values:
-                mask = v_df.name == bus_name
-                for col in ("a", "b", "c"):
-                    if col in v_df.columns:
-                        v_df.loc[mask, col] *= correction
+        specs = self.dss.CktElement.BusNames()
+        (
+            (primary_bus, primary_nodes),
+            (sec_bus_2, sec_nodes_2),
+            (sec_bus_3, sec_nodes_3),
+        ) = [self._split_bus_spec(spec) for spec in specs[:3]]
+        if sec_bus_2 != sec_bus_3:
+            raise ValueError(f"{transformer_name}: secondary windings must share a bus")
 
-        # Add s1/s2 columns for secondary buses (node 1 → s1, node 2 → s2).
-        v_df["s1"] = np.nan
-        v_df["s2"] = np.nan
-        for bus_name in self.secondary_buses:
-            if bus_name in v_df.name.values:
-                mask = v_df.name == bus_name
-                v_df.loc[mask, "s1"] = v_df.loc[mask, "a"]
-                v_df.loc[mask, "s2"] = v_df.loc[mask, "b"]
-                v_df.loc[mask, ["a", "b", "c"]] = np.nan
+        # A winding voltage follows its node order: .1.0 is V1-Vn; .0.2 is Vn-V2.
+        canonical = {(1, 0): "s1", (0, 2): "s2"}
+        leg_2 = canonical.get(tuple(sec_nodes_2))
+        leg_3 = canonical.get(tuple(sec_nodes_3))
+        if {leg_2, leg_3} != {"s1", "s2"}:
+            raise ValueError(
+                f"{transformer_name}: expected secondary connections '.1.0' and "
+                f"'.0.2', in either winding order; got {specs[1]!r} and {specs[2]!r}"
+            )
 
-        return v_df
-
-    def get_currents(self, from_side=True):
-        all_names = self.dss.PDElements.AllNames()
-        all_n_conductors = self.dss.PDElements.AllNumConductors()
-        all_n_terminals = self.dss.PDElements.AllNumTerminals()
-        all_n_phases = self.dss.PDElements.AllNumPhases()
-        all_currents_mag_ang = self.dss.PDElements.AllCurrentsMagAng()
-        data_list = []
-        i = 0
-        for name, n_cond, n_phases, n_term in zip(
-            all_names, all_n_conductors, all_n_phases, all_n_terminals
+        # A single-phase wye winding may omit the neutral: bus -> bus.1.0, bus.2 -> bus.2.0
+        if not primary_nodes:
+            primary_nodes = [1, 0]
+        elif len(primary_nodes) == 1 and primary_nodes[0] in _PRIMARY_NODE_PHASE:
+            primary_nodes = [primary_nodes[0], 0]
+        if (
+            len(primary_nodes) != 2
+            or primary_nodes[0] not in _PRIMARY_NODE_PHASE
+            or primary_nodes[1] != 0
         ):
-            element_type = name.split(".")[0]
-            element_name = name.split(".")[1]
-            i_end = i + n_cond * n_term * 2
-            cur_ang = np.array(all_currents_mag_ang[i:i_end]).reshape(
-                n_cond * n_term, 2
+            raise ValueError(
+                f"{transformer_name}: expected a single-phase primary connection "
+                f"such as '.1' or '.1.0'; got {specs[0]!r}"
             )
-            i = i_end
-            if element_type not in ["Line", "Transformer", "Reactor"]:
-                continue
-            if element_type == "Line":
-                self.dss.Lines.Name(element_name)
-            if element_type == "Transformer":
-                self.dss.Transformers.Name(element_name)
-            if element_type == "Reactor":
-                self.dss.Reactors.Name(element_name)
-            bus_names = self.dss.CktElement.BusNames()
-            bus1 = bus_names[0].split(".")[0]
-            bus2 = bus_names[1].split(".")[0]
-            self.dss.Circuit.SetActiveBus(bus2)
-            v_base = self.dss.Bus.kVBase() * 1000
-            current_base = self.s_base / v_base
-            active_phases = np.array([0, 1, 2])
-            if n_phases < 3:
-                active_phases = (
-                    np.array(self.dss.CktElement.BusNames()[0].split(".")[1:]).astype(
-                        int
-                    )
-                    - 1
-                )
-            cur_in = cur_ang[:n_phases, 0]
-            cur_out = cur_ang[n_cond : n_cond + n_phases, 0]
-            if from_side:
-                cur_ = cur_in
-            else:
-                cur_ = cur_out
-            cur = np.array([np.nan, np.nan, np.nan])
-            cur[active_phases] = cur_[:n_phases]
-            cur = cur / current_base
-            self.dss.Circuit.SetActiveBus(bus2)
-            each_current = dict(
-                fb=self.bus_names_to_index_map[bus1],
-                tb=self.bus_names_to_index_map[bus2],
-                from_name=bus1,
-                to_name=bus2,
-                a=cur[0],
-                b=cur[1],
-                c=cur[2],
-                nodes=self.dss.Bus.Nodes(),
-            )
-            data_list.append(each_current)
-        # combine lines between identical buses.
-        df = pd.DataFrame(data_list)
-        df.fb = df.fb.astype(int)
-        df.tb = df.tb.astype(int)
-        df = (
-            df.groupby(by=["fb", "tb"], as_index=False)
-            .agg(
-                {
-                    "fb": "first",
-                    "tb": "first",
-                    "from_name": "first",
-                    "to_name": "first",
-                    "a": "sum",
-                    "b": "sum",
-                    "c": "sum",
-                    "nodes": "first",
-                }
-            )
-            .reset_index(drop=True)
-            .sort_values(by=["fb"], ignore_index=True)
-            .sort_values(by=["tb"], ignore_index=True)
-        )
-        for i, row in df.iterrows():
-            if 1 not in row.nodes:
-                df.loc[i, "a"] = pd.NA
-            if 2 not in row.nodes:
-                df.loc[i, "b"] = pd.NA
-            if 3 not in row.nodes:
-                df.loc[i, "c"] = pd.NA
-        return df.loc[:, ["fb", "tb", "from_name", "to_name", "a", "b", "c"]]
 
-    def get_current_angles(self, from_side=True):
-        all_names = self.dss.PDElements.AllNames()
-        all_n_conductors = self.dss.PDElements.AllNumConductors()
-        all_n_terminals = self.dss.PDElements.AllNumTerminals()
-        all_n_phases = self.dss.PDElements.AllNumPhases()
-        all_currents_mag_ang = self.dss.PDElements.AllCurrentsMagAng()
-        power_data = []
-        i = 0
-        for name, n_cond, n_phases, n_term in zip(
-            all_names, all_n_conductors, all_n_phases, all_n_terminals
+        x12 = float(self.dss.Transformers.Xhl()) / 100.0
+        x13 = float(self.dss.Transformers.Xht()) / 100.0
+        x23 = float(self.dss.Transformers.Xlt()) / 100.0
+
+        windings = {}
+        for winding in (1, 2, 3):
+            self.dss.Transformers.Wdg(winding)
+            if self.dss.Transformers.IsDelta():
+                raise ValueError(
+                    f"{transformer_name}: delta center-tap winding is unsupported"
+                )
+
+            voltage = float(self.dss.Transformers.kV()) * 1000.0
+            power = float(self.dss.Transformers.kVA()) * 1000.0
+            tap = float(self.dss.Transformers.Tap())
+            if voltage <= 0 or power <= 0:
+                raise ValueError(
+                    f"{transformer_name}: winding voltage and kVA must be positive"
+                )
+            if not np.isclose(tap, 1.0, rtol=0, atol=1e-9):
+                raise ValueError(
+                    f"{transformer_name}: winding {winding} has tap={tap}. "
+                    "The current FBS center-tap model assumes unity taps."
+                )
+            windings[winding] = {
+                "voltage": voltage,
+                "power": power,
+                "resistance": float(self.dss.Transformers.R()) / 100.0,
+            }
+
+        secondary_voltage = windings[2]["voltage"]
+        if not np.isclose(
+            secondary_voltage, windings[3]["voltage"], rtol=1e-9, atol=1e-9
         ):
-            element_type = name.split(".")[0]
-            element_name = name.split(".")[1]
-            i_end = i + n_cond * n_term * 2
-            cur_ang = np.array(all_currents_mag_ang[i:i_end]).reshape(
-                n_cond * n_term, 2
+            raise ValueError(
+                f"{transformer_name}: unequal secondary winding voltages are unsupported"
             )
-            i = i_end
-            if element_type not in ["Line", "Transformer", "Reactor"]:
-                continue
-            if element_type == "Line":
-                self.dss.Lines.Name(element_name)
-            if element_type == "Transformer":
-                self.dss.Transformers.Name(element_name)
-            if element_type == "Reactor":
-                self.dss.Reactors.Name(element_name)
-            bus_names = self.dss.CktElement.BusNames()
-            bus1 = bus_names[0].split(".")[0]
-            bus2 = bus_names[1].split(".")[0]
-            active_phases = np.array([0, 1, 2])
-            if n_phases < 3:
-                active_phases = (
-                    np.array(self.dss.CktElement.BusNames()[0].split(".")[1:]).astype(
-                        int
-                    )
-                    - 1
-                )
-            ang_in = cur_ang[:n_phases, 1]
-            ang_out = cur_ang[n_cond : n_cond + n_phases, 1]
-            if from_side:
-                ang_ = ang_in
-            else:
-                ang_ = ang_out - 180
-            ang = np.array([np.nan, np.nan, np.nan])
-            ang[active_phases] = ang_[:n_phases]
-            self.dss.Circuit.SetActiveBus(bus2)
-            each_power = dict(
-                fb=self.bus_names_to_index_map[bus1],
-                tb=self.bus_names_to_index_map[bus2],
-                from_name=bus1,
-                to_name=bus2,
-                a=ang[0] % 360,
-                b=ang[1] % 360,
-                c=ang[2] % 360,
-                nodes=self.dss.Bus.Nodes(),
-            )
-            power_data.append(each_power)
-        # combine lines between identical buses.
-        df = pd.DataFrame(power_data)
-        df.fb = df.fb.astype(int)
-        df.tb = df.tb.astype(int)
-        df = (
-            df.groupby(by=["fb", "tb"], as_index=False)
-            .agg(
-                {
-                    "fb": "first",
-                    "tb": "first",
-                    "from_name": "first",
-                    "to_name": "first",
-                    "a": "sum",
-                    "b": "sum",
-                    "c": "sum",
-                    "nodes": "first",
-                }
-            )
-            .reset_index(drop=True)
-            .sort_values(by=["fb"], ignore_index=True)
-            .sort_values(by=["tb"], ignore_index=True)
+
+        # Pairwise reactances share the primary winding's kVA base.
+        z_leak = secondary_voltage**2 / windings[1]["power"]
+        x_primary = 0.5 * (x12 + x13 - x23) * z_leak
+        x_wdg_2 = 0.5 * (x12 + x23 - x13) * z_leak
+        x_wdg_3 = 0.5 * (x13 + x23 - x12) * z_leak
+
+        # Refer each winding resistance to the secondary voltage.
+        r = {
+            w: d["resistance"] * secondary_voltage**2 / d["power"]
+            for w, d in windings.items()
+        }
+        leg_z = {leg_2: complex(r[2], x_wdg_2), leg_3: complex(r[3], x_wdg_3)}
+
+        return {
+            "primary_bus": primary_bus,
+            "secondary_bus": sec_bus_2,
+            "primary_phase": "abc"[primary_nodes[0] - 1],
+            "primary_voltage": windings[1]["voltage"],
+            "secondary_voltage": secondary_voltage,
+            "z_primary": complex(r[1], x_primary),
+            "z_s1": leg_z["s1"],
+            "z_s2": leg_z["s2"],
+        }
+
+    # ------------------------------------------------------------------
+    # Nominal voltage bases
+    # ------------------------------------------------------------------
+
+    def _build_nominal_voltage_bases(self) -> dict[str, float]:
+        """Propagate nominal voltage bases through lines and reactors.
+
+        Transformers separate voltage-base components. The source and center-tap
+        winding ratings anchor their components; components with no anchor keep
+        their DSS reporting base unless an explicit override is supplied.
+        """
+        graph = nx.Graph()
+        graph.add_nodes_from(self.bus_names)
+        graph.add_edges_from(
+            (b1, b2)
+            for b1, b2 in self._pd_edges(("line", "reactor"))
+            if b1 in graph and b2 in graph
         )
-        for i, row in df.iterrows():
-            if 1 not in row.nodes:
-                df.loc[i, "a"] = pd.NA
-            if 2 not in row.nodes:
-                df.loc[i, "b"] = pd.NA
-            if 3 not in row.nodes:
-                df.loc[i, "c"] = pd.NA
-        return df.loc[:, ["fb", "tb", "from_name", "to_name", "a", "b", "c"]]
 
-    def get_apparent_power_flows(self, from_side=True):
-        all_names = self.dss.PDElements.AllNames()
-        all_n_conductors = self.dss.PDElements.AllNumConductors()
-        all_n_terminals = self.dss.PDElements.AllNumTerminals()
-        all_n_phases = self.dss.PDElements.AllNumPhases()
-        all_powers = self.dss.PDElements.AllPowers()
-        power_data = []
-        i = 0
-        for name, n_cond, n_phases, n_term in zip(
-            all_names, all_n_conductors, all_n_phases, all_n_terminals
-        ):
-            element_type = name.split(".")[0]
-            element_name = name.split(".")[1]
-            i_end = i + n_cond * n_term * 2
-            pq = np.array(all_powers[i:i_end]).reshape(n_cond * n_term, 2)
-            i = i_end
-            if element_type not in ["Line", "Transformer", "Reactor"]:
-                continue
-            if element_type == "Line":
-                self.dss.Lines.Name(element_name)
-            if element_type == "Transformer":
-                self.dss.Transformers.Name(element_name)
-            if element_type == "Reactor":
-                self.dss.Reactors.Name(element_name)
+        anchors: dict[str, list[tuple[float, str]]] = {}
 
-            bus_names = self.dss.CktElement.BusNames()
-            bus1 = bus_names[0].split(".")[0]
-            bus2 = bus_names[1].split(".")[0]
-            active_phases = np.array([0, 1, 2])
-            if n_phases < 3:
-                active_phases = (
-                    np.array(self.dss.CktElement.BusNames()[0].split(".")[1:]).astype(
-                        int
-                    )
-                    - 1
-                )
-            pq_in = pq[:n_phases, :]
-            pq_out = -pq[n_cond : n_cond + n_phases, :]
-            
-            if element_type == "Transformer" and element_name in self.center_taps:
-                # pq_in = pq[0, :]
-                # for center tap transformers we will always use the secondary side
-                # power flow to be consistent with distopf modeling.
-                pq_in = -pq[(2, 5), :]
-                pq_out = -pq[(2, 5), :]
-                active_phases = [0, 1]
-                n_phases = 2
+        def add_anchor(bus: str, voltage: float, description: str) -> None:
+            if bus in graph:
+                anchors.setdefault(bus, []).append((float(voltage), description))
 
-            if from_side:
-                s_ = pq_in[:, 0] + 1j * pq_in[:, 1]
+        # Source BasekV is line-to-line for three phases, across the source for one.
+        self.dss.Vsources.First()
+        source_bus = self._bus_of(self.dss.CktElement.BusNames()[0])
+        source_phases = self.dss.CktElement.NumPhases()
+        source_voltage = float(self.dss.Vsources.BasekV()) * 1000.0
+        if source_phases == 3:
+            source_voltage /= np.sqrt(3)
+        elif source_phases != 1:
+            raise ValueError(
+                "Automatic source voltage-base inference supports one- or three-phase sources"
+            )
+        add_anchor(source_bus, source_voltage, "source rating")
+
+        for name in self.center_taps:
+            data = self._read_center_tap_parameters(name)
+            add_anchor(
+                data["primary_bus"], data["primary_voltage"], f"{name} primary winding"
+            )
+            add_anchor(
+                data["secondary_bus"],
+                data["secondary_voltage"],
+                f"{name} secondary winding",
+            )
+
+        unknown = set(self._voltage_base_overrides) - {n.lower() for n in graph}
+        if unknown:
+            raise ValueError(
+                f"Unknown voltage-base override bus names: {sorted(unknown)}"
+            )
+
+        bases: dict[str, float] = {}
+        unanchored: list[set[str]] = []
+        for component in nx.connected_components(graph):
+            explicit = [
+                (self._voltage_base_overrides[n.lower()], "explicit override")
+                for n in component
+                if n.lower() in self._voltage_base_overrides
+            ]
+            candidates = explicit or [e for n in component for e in anchors.get(n, [])]
+
+            if candidates:
+                voltage = candidates[0][0]
+                if not np.isfinite(voltage) or voltage <= 0:
+                    raise ValueError("Voltage bases must be finite and positive")
+                for other, description in candidates[1:]:
+                    if not np.isclose(voltage, other, rtol=1e-4, atol=1):
+                        raise ValueError(
+                            "Conflicting nominal voltage bases in a line-connected "
+                            f"component: {voltage} V versus {other} V ({description}). "
+                            "Provide a deliberate voltage_bases override and verify "
+                            "the transformer ratios."
+                        )
+                bases.update(dict.fromkeys(component, voltage))
             else:
-                s_ = pq_out[:, 0] + 1j * pq_out[:, 1]
-            s = np.array(
-                [np.nan + 1j * np.nan, np.nan + 1j * np.nan, np.nan + 1j * np.nan]
-            )
-            s[active_phases] = s_[:n_phases]
-            s = s * 1000 / self.s_base
-            self.dss.Circuit.SetActiveBus(bus2)
-            each_power = dict(
-                fb=self.bus_names_to_index_map[bus1],
-                tb=self.bus_names_to_index_map[bus2],
-                from_name=bus1,
-                to_name=bus2,
-                a=s[0],
-                b=s[1],
-                c=s[2],
-                nodes=self.dss.Bus.Nodes(),
-            )
-            power_data.append(each_power)
-        # combine lines between identical buses.
-        power_df = pd.DataFrame(power_data)
-        power_df.fb = power_df.fb.astype(int)
-        power_df.tb = power_df.tb.astype(int)
-        power_df = (
-            power_df.groupby(by=["fb", "tb"], as_index=False)
-            .agg(
-                {
-                    "fb": "first",
-                    "tb": "first",
-                    "from_name": "first",
-                    "to_name": "first",
-                    "a": "sum",
-                    "b": "sum",
-                    "c": "sum",
-                    "nodes": "first",
-                }
-            )
-            .reset_index(drop=True)
-            .sort_values(by=["fb"], ignore_index=True)
-            .sort_values(by=["tb"], ignore_index=True)
-        )
-        for i, row in power_df.iterrows():
-            if 1 not in row.nodes:
-                power_df.loc[i, "a"] = pd.NA
-            if 2 not in row.nodes:
-                power_df.loc[i, "b"] = pd.NA
-            if 3 not in row.nodes:
-                power_df.loc[i, "c"] = pd.NA
+                unanchored.append(component)
 
-        # For secondary branches, remap OpenDSS node-1/node-2 (stored in a/b)
-        # to split-phase leg columns s1/s2.
-        nan_cx = np.nan + 1j * np.nan
-        power_df["s1"] = nan_cx
-        power_df["s2"] = nan_cx
-        sec_mask = power_df["from_name"].isin(self.secondary_buses) | power_df[
-            "to_name"
-        ].isin(self.secondary_buses)
+        self._propagate_bases_through_transformers(bases, unanchored)
+        for component in unanchored:
+            for name in component:
+                if name in bases:
+                    continue
+                # Not reachable from an anchor: keep the DSS reporting base.
+                self.dss.Circuit.SetActiveBus(name)
+                voltage = float(self.dss.Bus.kVBase()) * 1000.0
+                if not np.isfinite(voltage) or voltage <= 0:
+                    raise ValueError(f"No valid voltage base for bus {name!r}")
+                bases[name] = voltage
+        return bases
 
-        power_df.loc[sec_mask, "s1"] = power_df.loc[sec_mask, "a"]
-        power_df.loc[sec_mask, "s2"] = power_df.loc[sec_mask, "b"]
-        power_df.loc[sec_mask, ["a", "b", "c"]] = nan_cx
+    def _propagate_bases_through_transformers(
+        self, bases: dict[str, float], unanchored: list[set[str]]
+    ) -> None:
+        """Give unanchored components base = upstream base x nameplate kV ratio.
 
-        return power_df.loc[
-            :, ["fb", "tb", "from_name", "to_name", "a", "b", "c", "s1", "s2"]
+        The per-unit turns ratio then equals the tap even when the nameplate
+        differs from the DSS reporting bases.
+        """
+        windings = []
+        flag = self.dss.Transformers.First()
+        while flag:
+            name = self.dss.CktElement.Name().lower().split(".")[1]
+            if name not in self.center_taps and self.dss.CktElement.Enabled():
+                buses = [self._bus_of(s) for s in self.dss.CktElement.BusNames()]
+                kvs = []
+                for w in range(1, len(buses) + 1):
+                    self.dss.Transformers.Wdg(w)
+                    kvs.append(float(self.dss.Transformers.kV()))
+                windings.append(list(zip(buses, kvs)))
+            flag = self.dss.Transformers.Next()
+
+        component_of = {bus: comp for comp in unanchored for bus in comp}
+        changed = True
+        while changed:
+            changed = False
+            for xfmr in windings:
+                for known_bus, known_kv in xfmr:
+                    if known_bus not in bases:
+                        continue
+                    for bus, kv in xfmr:
+                        comp = component_of.get(bus)
+                        if comp is None or bus in bases:
+                            continue
+                        voltage = bases[known_bus] * kv / known_kv
+                        bases.update(dict.fromkeys(comp, voltage))
+                        changed = True
+
+    def _discover_neutral_nodes(self) -> dict[str, set[int]]:
+        """Find extra neutral nodes on three-phase wye transformer windings.
+
+        Only the unambiguous A, B, C, neutral layout is used to classify
+        bus-wide neutrals.
+        """
+        neutral_nodes: dict[str, set[int]] = {}
+
+        names = [
+            n
+            for n in self.dss.Circuit.AllElementNames()
+            if n.partition(".")[0].lower() == "transformer"
         ]
+        for full_name in names:
+            self.dss.Transformers.Name(full_name.partition(".")[2])
+            if (
+                not self.dss.CktElement.Enabled()
+                or int(self.dss.CktElement.NumPhases()) != 3
+            ):
+                continue
 
-    def get_p_flows(self):
-        s_flows = self.get_apparent_power_flows()
-        p_flows = s_flows.loc[:, ["fb", "tb", "from_name", "to_name"]].copy()
-        p_flows.loc[:, ["a", "b", "c"]] = np.real(s_flows.loc[:, ["a", "b", "c"]])
-        p_flows.loc[:, ["s1", "s2"]] = np.real(s_flows.loc[:, ["s1", "s2"]])
-        return p_flows
+            n_cond = int(self.dss.CktElement.NumConductors())
+            n_term = int(self.dss.CktElement.NumTerminals())
+            if n_term != int(self.dss.Transformers.NumWindings()) or n_cond < 4:
+                raise ValueError(f"{full_name}: unexpected transformer terminal layout")
 
-    def get_q_flows(self):
-        s_flows = self.get_apparent_power_flows()
-        q_flows = s_flows.loc[:, ["fb", "tb", "from_name", "to_name"]].copy()
-        q_flows.loc[:, ["a", "b", "c"]] = np.imag(s_flows.loc[:, ["a", "b", "c"]])
-        q_flows.loc[s_flows.isna().a, "a"] = np.nan
-        q_flows.loc[s_flows.isna().b, "b"] = np.nan
-        q_flows.loc[s_flows.isna().c, "c"] = np.nan
-        q_flows.loc[:, ["s1", "s2"]] = np.imag(s_flows.loc[:, ["s1", "s2"]])
-        return q_flows
+            specs = list(self.dss.CktElement.BusNames())
+            nodes = np.asarray(self.dss.CktElement.NodeOrder(), dtype=int).reshape(
+                n_term, n_cond
+            )
+
+            for terminal in range(n_term):
+                self.dss.Transformers.Wdg(terminal + 1)
+                if self.dss.Transformers.IsDelta():
+                    continue
+                neutral = int(nodes[terminal, 3])
+                if neutral == 0:
+                    continue
+                if neutral in _PRIMARY_NODE_PHASE:
+                    raise ValueError(
+                        f"{full_name}: winding {terminal + 1} uses reserved phase node "
+                        f"{neutral} as its neutral; this requires an explicit conductor mapping."
+                    )
+                bus = self._bus_of(specs[terminal]).lower()
+                neutral_nodes.setdefault(bus, set()).add(neutral)
+        return neutral_nodes
+
+    # ------------------------------------------------------------------
+    # Impedance matrices (ohms)
+    # ------------------------------------------------------------------
 
     def _get_line_zmatrix(self) -> tuple[np.ndarray, np.ndarray]:
-        """Returns the z_matrix of a specified line element.
+        """3x3 (R, X) matrices in ohms for the active line, embedded by phase."""
+        _, nodes = self._split_bus_spec(self.dss.Lines.Bus1())
+        nodes = [n for n in nodes if n != 0] or list(
+            range(1, self.dss.Lines.Phases() + 1)
+        )
+        n = len(nodes)
+        z = (
+            np.array(self.dss.Lines.RMatrix()) + 1j * np.array(self.dss.Lines.XMatrix())
+        ).reshape(n, n) * self.dss.Lines.Length()
 
-        Returns:
-            real z_matrix, imag z_matrix (np.ndarray, np.ndarray): 3x3 numpy array of the z_matrix corresponding to the each of the phases(real,imag)
+        full = np.zeros((3, 3), dtype=complex)
+        idx = np.array(nodes) - 1
+        full[np.ix_(idx, idx)] = z
+        return full.real, full.imag
+
+    def _get_line_susceptance(self) -> np.ndarray:
+        """Total shunt susceptance (siemens) per phase a, b, c for the active line.
+
+        OpenDSS C1/C0/CMatrix are nF per line-length unit (same unit as Length),
+        so C_total = CMatrix * Length nF. CMatrix is a nodal capacitance matrix
+        (negative off-diagonals). Under balanced 120-degree voltages, the
+        reactive injection of phase i is w*V^2*(C_ii - 0.5*sum_{j!=i} C_ij).
         """
-        n_phases = self.dss.Lines.Phases()
-        bus1_name = self.dss.Lines.Bus1()
-        if n_phases > 3:
-            pass
-        if (len(bus1_name.split(".")) == 4) or (len(bus1_name.split(".")) == 1):
-            # this is the condition check for three phase since three phase is either represented by bus_name.1.2.3 or bus_name
-            z_matrix = (
-                np.array(self.dss.Lines.RMatrix())
-                + 1j * np.array(self.dss.Lines.XMatrix())
-            ) * self.dss.Lines.Length()
+        _, nodes = self._split_bus_spec(self.dss.Lines.Bus1())
+        nodes = [n for n in nodes if n != 0] or list(
+            range(1, self.dss.Lines.Phases() + 1)
+        )
+        n = len(nodes)
+        c_nf = (
+            np.array(self.dss.Lines.CMatrix()).reshape(n, n) * self.dss.Lines.Length()
+        )
+        c_eff = np.diag(c_nf) - 0.5 * (c_nf.sum(axis=1) - np.diag(c_nf))
+        omega = 2 * np.pi * self.dss.Solution.Frequency()
 
-            z_matrix = z_matrix.reshape(3, 3)
-
-            return np.real(z_matrix), np.imag(z_matrix)
-
-        else:
-            # for other than 3 phases
-            active_phases = [int(phase) for phase in bus1_name.split(".")[1:]]
-            z_matrix = np.zeros((3, 3), dtype=complex)
-            r_matrix = self.dss.Lines.RMatrix()
-            x_matrix = self.dss.Lines.XMatrix()
-            counter = 0
-            for _, row in enumerate(active_phases):
-                for _, col in enumerate(active_phases):
-                    z_matrix[row - 1, col - 1] = (
-                        complex(r_matrix[counter], x_matrix[counter])
-                        * self.dss.Lines.Length()
-                    )
-                    counter = counter + 1
-
-            return np.real(z_matrix), np.imag(z_matrix)
+        b = np.zeros(3)
+        b[np.array(nodes) - 1] = omega * c_eff * 1e-9
+        return b
 
     def _get_reactor_zmatrix(self) -> tuple[np.ndarray, np.ndarray]:
-        """Returns the z_matrix of a specified reactor element.
-
-        Returns:
-            real z_matrix, imag z_matrix (np.ndarray, np.ndarray): 3x3 numpy array of the z_matrix corresponding to the each of the phases(real,imag)
-        """
-        n_phases = self.dss.Reactors.Phases()
-        if n_phases == 3:
-            return np.eye(3) * self.dss.Reactors.R(), np.eye(3) * self.dss.Reactors.X()
-
-        else:
-            # for other than 3 phases
+        if self.dss.Reactors.Phases() != 3:
             raise NotImplementedError(
                 "Parsing reactors with phases other than 3 not implemented"
             )
-            # active_phases = [
-            #     int(phase) for phase in self.dss.CktElement.BusNames()[0].split(".")[1:]
-            # ]
-            # z_matrix = np.zeros((3, 3), dtype=complex)
-            # r_matrix = self.dss.Reactors.R()
-            # x_matrix = self.dss.Reactors.X()
-            # counter = 0
-            # for _, row in enumerate(active_phases):
-            #     for _, col in enumerate(active_phases):
-            #         z_matrix[row - 1, col - 1] = (
-            #             complex(r_matrix[counter], x_matrix[counter])
-            #             * self.dss.Lines.Length()
-            #         )
-            #         counter = counter + 1
-            #
-            # return np.real(z_matrix), np.imag(z_matrix)
+        return np.eye(3) * self.dss.Reactors.R(), np.eye(3) * self.dss.Reactors.X()
 
     def _get_transformer_zmatrix(self) -> tuple[np.ndarray, np.ndarray]:
-        r_matrix = np.zeros((3, 3))
-        x_matrix = np.zeros((3, 3))
         self.dss.Transformers.Wdg(1)
         self.dss.Transformers.Wdg(2)
-        kv = self.dss.Transformers.kV()
-        v_base_xfmr = kv / np.sqrt(3) * 1000
+        v_base = self.dss.Transformers.kV() / np.sqrt(3) * 1000
+        s_base = self.dss.Transformers.kVA() * 1000 / 3
+        z_base = v_base**2 / s_base
+        # OpenDSS defines %R/%X on the tapped winding voltage, so ohms scale with tap^2.
+        z_base *= float(self.dss.Transformers.Tap()) ** 2
+        x = self.dss.Transformers.Xhl() / 100 * z_base
+        r = self.dss.Transformers.R() / 100 * z_base * 2
+        return np.eye(3) * r, np.eye(3) * x
+
+    def _get_transformer_shunt(self, phases: str) -> dict[str, float]:
+        """No-load loss and magnetizing admittance of the active transformer.
+
+        OpenDSS models %noloadloss and %imag as P and Q drawn at rated voltage,
+        both as a percent of kVA. The total is split evenly over ``phases``.
+        """
         kva = self.dss.Transformers.kVA()
-        s_base_xfmr = kva * 1000 / 3
-        z_base_xfmr = v_base_xfmr**2 / s_base_xfmr
-
-        x_xfmr = self.dss.Transformers.Xhl() / 100 * z_base_xfmr
-        r_xfmr = self.dss.Transformers.R() / 100 * z_base_xfmr * 2
-        r_matrix[0, 0] = r_xfmr
-        r_matrix[1, 1] = r_xfmr
-        r_matrix[2, 2] = r_xfmr
-        x_matrix[0, 0] = x_xfmr
-        x_matrix[1, 1] = x_xfmr
-        x_matrix[2, 2] = x_xfmr
-        return r_matrix, x_matrix
-
-    def _get_powers(self):
-        n_phases = self.dss.CktElement.NumPhases()
-        pq = np.array(self.dss.CktElement.Powers())
-        n_terminals = self.dss.CktElement.NumTerminals()
-        n_pq_phases = len(pq) // n_terminals // 2
-        pq = pq.reshape(int(n_pq_phases * n_terminals), 2)
-        s_out = np.array(
-            [np.nan + 1j * np.nan, np.nan + 1j * np.nan, np.nan + 1j * np.nan]
+        p_pu = (
+            float(self.dss.Properties.Value("%noloadloss"))
+            / 100
+            * kva
+            * 1000
+            / self.s_base
         )
-        active_phases = np.array([0, 1, 2])
-        if n_phases < 3:
-            active_phases = (
-                np.array(self.dss.CktElement.BusNames()[0].split(".")[1:]).astype(int)
-                - 1
-            )
+        q_pu = (
+            float(self.dss.Properties.Value("%imag")) / 100 * kva * 1000 / self.s_base
+        )
+        shunt = dict.fromkeys(_SHUNT_COLUMNS, np.nan)
+        for phase in phases:
+            shunt[f"g_sh_{phase}"] = p_pu / len(phases)
+            shunt[f"b_sh_{phase}"] = q_pu / len(phases)
+        return shunt
 
-        p = pq[:, 0]
-        q = pq[:, 1]
-        s = p + 1j * q
-        s_out_ = -s[n_pq_phases:]
-        s_out[active_phases] = s_out_[:n_phases]
-        return s_out
+    # ------------------------------------------------------------------
+    # Branch data
+    # ------------------------------------------------------------------
 
-    def _create_branch_row(
-        self, r_matrix, x_matrix, element_type, element_name, switch_status
-    ):
-        bus_names = self.dss.CktElement.BusNames()
-        bus1 = bus_names[0].split(".")[0]
-        bus2 = bus_names[1].split(".")[0]
-        bus1, bus2 = self._orient_edge(bus1, bus2)
-        fb = self.bus_names_to_index_map[bus1]
-        tb = self.bus_names_to_index_map[bus2]
-        self.dss.Circuit.SetActiveBus(bus2)
-        base_kv_ln = self.dss.Bus.kVBase()
-        z_base = (base_kv_ln * 1000) ** 2 / self.s_base
+    def _branch_row(
+        self,
+        *,
+        from_name: str,
+        to_name: str,
+        element_type: str,
+        element_name: str,
+        status: str,
+        phases: str,
+        primary_phase: str = "",
+        z_abc: Optional[tuple[np.ndarray, np.ndarray]] = None,
+        z_split: Optional[np.ndarray] = None,
+        b_abc: Optional[np.ndarray] = None,
+        shunt: Optional[dict[str, float]] = None,
+    ) -> dict:
+        """One branch row, normalized on the receiving bus's nominal voltage base.
 
-        # Parse phase nodes from the terminal matching the oriented from-bus.
-        # Using terminal 0 unconditionally can mismatch phases after orientation.
-        phase_nodes = []
-        if bus_names[0].split(".")[0] == bus1:
-            phase_nodes = bus_names[0].split(".")[1:]
-        elif bus_names[1].split(".")[0] == bus1:
-            phase_nodes = bus_names[1].split(".")[1:]
+        ``z_abc`` is an (R, X) pair of 3x3 ohm matrices; ``z_split`` is a complex
+        2x2 s1/s2 ohm matrix. Whichever is not supplied is exported as NaN.
+        """
+        v_base = float(self._nominal_voltage_bases[to_name])
+        z_base = v_base**2 / self.s_base
 
-        phases = "abc"
-        n_phases = self.dss.CktElement.NumPhases()
-        if n_phases < 3:
-            active_phases = [n for n in phase_nodes if n != "0"]
-            if "0" in active_phases:
-                active_phases.remove("0")
-            if len(active_phases) > 0:
-                active_phases = np.array(active_phases).astype(int) - 1
-                phases = "".join("abc"[i] for i in active_phases)
-            else:
-                phases = ""
-        return dict(
-            fb=fb,
-            tb=tb,
-            from_name=bus1,
-            to_name=bus2,
-            r_aa=r_matrix[0, 0] / z_base,
-            r_ab=r_matrix[0, 1] / z_base,
-            r_ac=r_matrix[0, 2] / z_base,
-            r_bb=r_matrix[1, 1] / z_base,
-            r_bc=r_matrix[1, 2] / z_base,
-            r_cc=r_matrix[2, 2] / z_base,
-            x_aa=x_matrix[0, 0] / z_base,
-            x_ab=x_matrix[0, 1] / z_base,
-            x_ac=x_matrix[0, 2] / z_base,
-            x_bb=x_matrix[1, 1] / z_base,
-            x_bc=x_matrix[1, 2] / z_base,
-            x_cc=x_matrix[2, 2] / z_base,
-            r_s1s1=np.nan,
-            r_s1s2=np.nan,
-            r_s2s2=np.nan,
-            x_s1s1=np.nan,
-            x_s1s2=np.nan,
-            x_s2s2=np.nan,
-            primary_phase="",
+        row = dict(
+            fb=self.bus_names_to_index_map[from_name],
+            tb=self.bus_names_to_index_map[to_name],
+            from_name=from_name,
+            to_name=to_name,
+        )
+        row.update(dict.fromkeys(_Z_COLUMNS, np.nan))
+        row.update(dict.fromkeys(_B_COLUMNS, np.nan))
+        row.update(shunt or dict.fromkeys(_SHUNT_COLUMNS, np.nan))
+        if b_abc is not None:
+            for column, siemens in zip(_B_COLUMNS, b_abc):
+                row[column] = float(siemens) * z_base
+
+        if z_abc is not None:
+            r, x = z_abc
+            for suffix, i, j in _ABC_Z:
+                row[f"r_{suffix}"] = float(r[i, j]) / z_base
+                row[f"x_{suffix}"] = float(x[i, j]) / z_base
+        if z_split is not None:
+            for suffix, i, j in _SPLIT_Z:
+                row[f"r_{suffix}"] = float(z_split[i, j].real) / z_base
+                row[f"x_{suffix}"] = float(z_split[i, j].imag) / z_base
+
+        row.update(
+            primary_phase=primary_phase,
             type=element_type,
             name=element_name,
-            status=switch_status,
+            status=status,
             s_base=self.s_base,
-            v_ln_base=base_kv_ln * 1000,
+            v_ln_base=v_base,
             z_base=z_base,
             phases=phases,
         )
+        return row
 
-    def append_lines(self, line_data):
-        for line in self.dss.Lines:
-            switch_status = None
-            element_type = self.dss.CktElement.Name().lower().split(".")[0]
-            element_name = self.dss.CktElement.Name().lower().split(".")[1]
-            element_name = self.dss.Lines.Name()
-
-            # Skip triplex lines — handled by append_triplex_lines
-            bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
-            bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
-            if bus1 in self.secondary_buses or bus2 in self.secondary_buses:
-                continue  # Skip triplex lines — handled by append_triplex_lines
-
-            r_matrix, x_matrix = self._get_line_zmatrix()
-
-            if self.dss.Lines.IsSwitch():
-                element_type = "switch"
-            switch_status = (
-                "OPEN"
-                if (
-                    self.dss.CktElement.IsOpen(1, 1)
-                    or self.dss.CktElement.IsOpen(2, 1)
+    def _branch_phases(self, from_name: str, specs: list[str]) -> str:
+        """Phase letters of the active element, read from the terminal at ``from_name``."""
+        if self.dss.CktElement.NumPhases() >= 3:
+            return "abc"
+        for spec in specs[:2]:
+            name, nodes = self._split_bus_spec(spec)
+            if name == from_name:
+                return "".join(
+                    _PRIMARY_NODE_PHASE[n] for n in nodes if n in _PRIMARY_NODE_PHASE
                 )
-                else "CLOSED"
+        return ""
+
+    def _simple_branch_row(
+        self,
+        z_abc: tuple[np.ndarray, np.ndarray],
+        element_type: str,
+        element_name: str,
+        b_abc: Optional[np.ndarray] = None,
+        shunt_from_transformer: bool = False,
+    ) -> dict:
+        """Branch row for the active two-terminal line/transformer/reactor."""
+        specs = self.dss.CktElement.BusNames()
+        from_name, to_name = self._orient_edge(
+            self._bus_of(specs[0]), self._bus_of(specs[1])
+        )
+        phases = self._branch_phases(from_name, specs)
+        return self._branch_row(
+            from_name=from_name,
+            to_name=to_name,
+            element_type=element_type,
+            element_name=element_name,
+            status=self._switch_status(),
+            phases=phases,
+            z_abc=z_abc,
+            b_abc=b_abc,
+            shunt=self._get_transformer_shunt(phases)
+            if shunt_from_transformer
+            else None,
+        )
+
+    def append_lines(self, rows: list[dict]) -> None:
+        for _ in self.dss.Lines:
+            specs = self.dss.CktElement.BusNames()
+            if (
+                self._bus_of(specs[0]) in self.secondary_buses
+                or self._bus_of(specs[1]) in self.secondary_buses
+            ):
+                continue  # handled by append_triplex_lines
+            element_type = "switch" if self.dss.Lines.IsSwitch() else "line"
+            rows.append(
+                self._simple_branch_row(
+                    self._get_line_zmatrix(),
+                    element_type,
+                    self.dss.Lines.Name(),
+                    b_abc=self._get_line_susceptance(),
+                )
             )
 
-            line_data.append(
-                self._create_branch_row(
-                    r_matrix,
-                    x_matrix,
-                    element_type=element_type,
-                    element_name=element_name,
-                    switch_status=switch_status,
+    def append_transformers(self, rows: list[dict]) -> None:
+        for _ in self.dss.Transformers:
+            name = self.dss.CktElement.Name().lower().split(".")[1]
+            if name in self.center_taps:
+                continue  # handled by append_center_tap_transformers
+            rows.append(
+                self._simple_branch_row(
+                    self._get_transformer_zmatrix(),
+                    "transformer",
+                    name,
+                    shunt_from_transformer=True,
                 )
             )
 
-    def append_triplex_lines(self, line_data):
-        """Build branch rows for triplex (secondary) service drop lines.
+    def append_reactors(self, rows: list[dict]) -> None:
+        for _ in self.dss.Reactors:
+            rows.append(
+                self._simple_branch_row(
+                    self._get_reactor_zmatrix(), "reactor", self.dss.Reactors.Name()
+                )
+            )
 
-        A triplex line is any line where at least one endpoint is a secondary
-        bus. The 2x2 impedance matrix is stored in r_s1s1/r_s1s2/r_s2s2 and
-        x_s1s1/x_s1s2/x_s2s2 columns; the 3x3 ABC columns are set to NaN.
+    def append_triplex_lines(self, rows: list[dict]) -> None:
+        """Branch rows for lines with at least one secondary endpoint.
+
+        The 2x2 impedance goes in the s1/s2 columns; the ABC columns are NaN.
         """
-        for line in self.dss.Lines:
-            bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
-            bus2 = self.dss.CktElement.BusNames()[1].split(".")[0]
-            if bus1 not in self.secondary_buses and bus2 not in self.secondary_buses:
+        for _ in self.dss.Lines:
+            specs = self.dss.CktElement.BusNames()
+            b1, nodes_1 = self._split_bus_spec(specs[0])
+            b2, nodes_2 = self._split_bus_spec(specs[1])
+
+            if b1 not in self.secondary_buses and b2 not in self.secondary_buses:
+                continue
+            if self._is_open():
                 continue
 
-            element_name = self.dss.Lines.Name()
-
-            switch_status = (
-                "OPEN"
-                if (
-                    self.dss.CktElement.IsOpen(1, 1)
-                    or self.dss.CktElement.IsOpen(2, 1)
+            name = self.dss.Lines.Name()
+            n = int(self.dss.Lines.Phases())
+            if n not in (1, 2):
+                raise ValueError(
+                    f"Triplex line {name!r}: explicit-neutral or {n}-conductor "
+                    "matrices require a separate neutral model"
                 )
-                else "CLOSED"
+
+            nodes_1 = nodes_1 or list(range(1, n + 1))
+            nodes_2 = nodes_2 or list(range(1, n + 1))
+            if (
+                len(nodes_1) != n
+                or len(nodes_2) != n
+                or len(set(nodes_1)) != n
+                or any(node not in _SECONDARY_NODE_LEG for node in nodes_1)
+                or nodes_1 != nodes_2
+            ):
+                raise ValueError(
+                    f"Triplex line {name!r}: unsupported conductor mapping "
+                    f"{specs[0]!r} -> {specs[1]!r}"
+                )
+
+            length = float(self.dss.Lines.Length())
+            raw = (
+                np.asarray(self.dss.Lines.RMatrix(), dtype=float)
+                + 1j * np.asarray(self.dss.Lines.XMatrix(), dtype=float)
+            ).reshape(n, n) * length
+            if not np.allclose(raw, raw.T):
+                raise ValueError(
+                    f"Triplex line {name!r}: impedance matrix must be symmetric"
+                )
+
+            # Map actual conductor order into the fixed s1/s2 order.
+            legs = np.asarray(nodes_1, dtype=int) - 1
+            impedance = np.zeros((2, 2), dtype=complex)
+            impedance[np.ix_(legs, legs)] = raw
+
+            from_name, to_name = self._orient_edge(b1, b2)
+            if not np.isclose(
+                self._nominal_voltage_bases[from_name],
+                self._nominal_voltage_bases[to_name],
+            ):
+                raise ValueError(
+                    f"Triplex line {name!r}: endpoint voltage bases differ"
+                )
+
+            secondary_bus = b1 if b1 in self.secondary_buses else b2
+            rows.append(
+                self._branch_row(
+                    from_name=from_name,
+                    to_name=to_name,
+                    element_type="triplex_line",
+                    element_name=name,
+                    status="CLOSED",
+                    phases="".join(_SECONDARY_NODE_LEG[nd] for nd in sorted(nodes_1)),
+                    primary_phase=self.secondary_buses[secondary_bus]["primary_phase"],
+                    z_split=impedance,
+                )
             )
 
-            # Determine bus ordering (fb < tb)
-            from_name, to_name = self._orient_edge(bus1, bus2)
-            fb = self.bus_names_to_index_map[from_name]
-            tb = self.bus_names_to_index_map[to_name]
-
-            # Secondary-side base quantities.
-            # OpenDSS reports kVBase = V_LL/sqrt(3) for center-tap secondaries
-            # (treating s1-s2 as 120° apart).  The correct line-to-neutral
-            # base for 180° split-phase is V_LL/2.
-            self.dss.Circuit.SetActiveBus(to_name)
-            base_kv_ln_dss = self.dss.Bus.kVBase()
-            # Correct for OpenDSS treating secondary as 3-phase (120° apart)
-            # instead of split-phase (180° apart). The correction factor is √(3/4).
-            base_kv_ln = base_kv_ln_dss * np.sqrt(3 / 4)
-            z_base = (base_kv_ln * 1000) ** 2 / self.s_base
-
-            # Extract raw 2x2 R and X matrices from OpenDSS, scaled by length
-            length = self.dss.Lines.Length()
-            r_raw = np.array(self.dss.Lines.RMatrix()) * length
-            x_raw = np.array(self.dss.Lines.XMatrix()) * length
-
-            # For nphases=2, RMatrix/XMatrix return 4 elements (2x2 row-major)
-            r2 = r_raw.reshape(2, 2)
-            x2 = x_raw.reshape(2, 2)
-
-            # Look up primary_phase from either endpoint
-            sec_bus = bus1 if bus1 in self.secondary_buses else bus2
-            primary_phase = self.secondary_buses[sec_bus]["primary_phase"]
-
-            row = dict(
-                fb=fb,
-                tb=tb,
-                from_name=from_name,
-                to_name=to_name,
-                r_aa=np.nan,
-                r_ab=np.nan,
-                r_ac=np.nan,
-                r_bb=np.nan,
-                r_bc=np.nan,
-                r_cc=np.nan,
-                x_aa=np.nan,
-                x_ab=np.nan,
-                x_ac=np.nan,
-                x_bb=np.nan,
-                x_bc=np.nan,
-                x_cc=np.nan,
-                r_s1s1=r2[0, 0] / z_base,
-                r_s1s2=r2[0, 1] / z_base,
-                r_s2s2=r2[1, 1] / z_base,
-                x_s1s1=x2[0, 0] / z_base,
-                x_s1s2=x2[0, 1] / z_base,
-                x_s2s2=x2[1, 1] / z_base,
-                primary_phase=primary_phase,
-                type="triplex_line",
-                name=element_name,
-                status=switch_status,
-                s_base=self.s_base,
-                v_ln_base=base_kv_ln * 1000,
-                z_base=z_base,
-                phases="s1s2",
-            )
-            line_data.append(row)
-
-    def append_transformers(self, line_data):
-        center_tap_names = set(self._identify_center_tap_transformers().keys())
-        for transformer in self.dss.Transformers:
-            element_name = self.dss.CktElement.Name().lower().split(".")[1]
-            if element_name in center_tap_names:
+    def append_center_tap_transformers(self, rows: list[dict]) -> None:
+        """One row per closed center-tap transformer (primary -> secondary)."""
+        for name in self.center_taps:
+            data = self._read_center_tap_parameters(
+                name
+            )  # also activates the transformer
+            if self._is_open(3):
                 continue
-            switch_status = None
-            element_type = self.dss.CktElement.Name().lower().split(".")[0]
-            r_matrix, x_matrix = self._get_transformer_zmatrix()
-            switch_status = (
-                "OPEN"
-                if (
-                    self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(2, 1)
+
+            primary_bus, secondary_bus = data["primary_bus"], data["secondary_bus"]
+            if self._orient_edge(primary_bus, secondary_bus) != (
+                primary_bus,
+                secondary_bus,
+            ):
+                raise ValueError(
+                    f"{name}: FBS requires the center-tap transformer to be "
+                    "traversed from primary to secondary"
                 )
-                else "CLOSED"
+
+            # FBS copies the primary pu voltage to both secondary legs, so the
+            # chosen bases must match the rated turns ratio.
+            base_ratio = (
+                self._nominal_voltage_bases[secondary_bus]
+                / self._nominal_voltage_bases[primary_bus]
             )
-            line_data.append(
-                self._create_branch_row(
-                    r_matrix,
-                    x_matrix,
-                    element_type=element_type,
-                    element_name=element_name,
-                    switch_status=switch_status,
+            if not np.isclose(
+                base_ratio,
+                data["secondary_voltage"] / data["primary_voltage"],
+                rtol=1e-4,  # matches the anchor-conflict tolerance in _build_nominal_voltage_bases
+            ):
+                raise ValueError(
+                    f"{name}: selected voltage bases do not match the rated "
+                    "turns ratio assumed by the current FBS"
                 )
-            )
 
-    def append_center_tap_transformers(self, line_data):
-        """Build branch rows for center-tap (split-phase) service transformers.
+            zp, z1, z2 = data["z_primary"], data["z_s1"], data["z_s2"]
+            # Physical conductor-to-neutral voltage references. FBS flips the
+            # second voltage reference when it builds its own matrix.
+            impedance = np.array([[zp + z1, -zp], [-zp, zp + z2]], dtype=complex)
 
-        Each center-tap transformer becomes one row with type='center_tap_xfmr',
-        the secondary-side 2x2 impedance in r_s1s1/r_s1s2/r_s2s2/x_s1s1/x_s1s2/x_s2s2,
-        and primary_phase set from the detection logic.
-        """
-        center_taps = self._identify_center_tap_transformers()
-        if not center_taps:
-            return
-
-        for xfmr_name, info in center_taps.items():
-            # Activate the transformer
-            self.dss.Transformers.Name(xfmr_name)
-
-            primary_bus = info["primary_bus"]
-            secondary_bus = info["secondary_bus"]
-            primary_phase = info["primary_phase"]
-
-            fb = self.bus_names_to_index_map[primary_bus]
-            tb = self.bus_names_to_index_map[secondary_bus]
-            from_name, to_name = self._orient_edge(primary_bus, secondary_bus)
-            fb = self.bus_names_to_index_map[from_name]
-            tb = self.bus_names_to_index_map[to_name]
-
-            # Secondary-side base quantities.
-            # OpenDSS reports kVBase = V_LL/sqrt(3); correct to V_LL/2 for
-            # 180° split-phase.
-            self.dss.Circuit.SetActiveBus(secondary_bus)
-            base_kv_ln_dss = self.dss.Bus.kVBase()
-            base_kv_ln = base_kv_ln_dss * 2 / np.sqrt(3)
-            z_base = (base_kv_ln * 1000) ** 2 / self.s_base
-
-            # Extract per-winding impedances referred to secondary
-            # xhl = leakage reactance winding 1-2, xht = 1-3, xlt = 2-3 (all in %)
-            xhl = self.dss.Transformers.Xhl() / 100
-            xht = self.dss.Transformers.Xht() / 100
-            xlt = self.dss.Transformers.Xlt() / 100
-
-            # Per-winding resistances (% on winding kVA base)
-            self.dss.Transformers.Wdg(2)
-            kva_sec = self.dss.Transformers.kVA()
-            kv_sec = self.dss.Transformers.kV()
-            r2_pct = self.dss.Transformers.R()
-
-            self.dss.Transformers.Wdg(3)
-            r3_pct = self.dss.Transformers.R()
-
-            # Convert to ohms on secondary base
-            z_base_xfmr = (kv_sec * 1000) ** 2 / (kva_sec * 1000)
-
-            # Star-circuit reactances from pair-wise leakage values:
-            #   x1 = 0.5*(xhl + xht - xlt)  (primary winding)
-            #   x2 = 0.5*(xhl + xlt - xht)  (secondary winding 2)
-            #   x3 = 0.5*(xht + xlt - xhl)  (secondary winding 3)
-            x2 = 0.5 * (xhl + xlt - xht) * z_base_xfmr
-            x3 = 0.5 * (xht + xlt - xhl) * z_base_xfmr
-            r2 = r2_pct / 100 * z_base_xfmr
-            r3 = r3_pct / 100 * z_base_xfmr
-
-            # Build 2x2 secondary impedance matrix (diagonal, no mutual coupling)
-            r_s1s1 = r2 / z_base
-            r_s2s2 = r3 / z_base
-            r_s1s2 = 0
-            x_s1s1 = x2 / z_base
-            x_s2s2 = x3 / z_base
-            x_s1s2 = 0
-
-            switch_status = (
-                "OPEN"
-                if (
-                    self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(2, 1)
-                )
-                else "CLOSED"
-            )
-
-            row = dict(
-                fb=fb,
-                tb=tb,
-                from_name=from_name,
-                to_name=to_name,
-                r_aa=np.nan,
-                r_ab=np.nan,
-                r_ac=np.nan,
-                r_bb=np.nan,
-                r_bc=np.nan,
-                r_cc=np.nan,
-                x_aa=np.nan,
-                x_ab=np.nan,
-                x_ac=np.nan,
-                x_bb=np.nan,
-                x_bc=np.nan,
-                x_cc=np.nan,
-                r_s1s1=r_s1s1,
-                r_s1s2=r_s1s2,
-                r_s2s2=r_s2s2,
-                x_s1s1=x_s1s1,
-                x_s1s2=x_s1s2,
-                x_s2s2=x_s2s2,
-                primary_phase=primary_phase,
-                type="center_tap_xfmr",
-                name=xfmr_name,
-                status=switch_status,
-                s_base=self.s_base,
-                v_ln_base=base_kv_ln * 1000,
-                z_base=z_base,
-                phases="s1s2",
-            )
-            line_data.append(row)
-
-    def append_reactors(self, line_data):
-        for reactor in self.dss.Reactors:
-            element_type = self.dss.CktElement.Name().lower().split(".")[0]
-            element_name = self.dss.Reactors.Name()
-            r_matrix, x_matrix = self._get_reactor_zmatrix()
-
-            switch_status = (
-                "OPEN"
-                if (
-                    self.dss.CktElement.IsOpen(1, 1) or self.dss.CktElement.IsOpen(2, 1)
-                )
-                else "CLOSED"
-            )
-            line_data.append(
-                self._create_branch_row(
-                    r_matrix,
-                    x_matrix,
-                    element_type=element_type,
-                    element_name=element_name,
-                    switch_status=switch_status,
+            rows.append(
+                self._branch_row(
+                    from_name=primary_bus,
+                    to_name=secondary_bus,
+                    element_type="center_tap_xfmr",
+                    element_name=name,
+                    status="CLOSED",
+                    phases="s1s2",
+                    primary_phase=data["primary_phase"],
+                    z_split=impedance,
+                    shunt=self._get_transformer_shunt(data["primary_phase"]),
                 )
             )
 
     def get_branch_data(self) -> pd.DataFrame:
-        line_data = []
-        self.append_lines(line_data)
-        self.append_triplex_lines(line_data)
-        self.append_transformers(line_data)
-        self.append_center_tap_transformers(line_data)
-        self.append_reactors(line_data)
+        rows: list[dict] = []
+        self.append_lines(rows)
+        self.append_triplex_lines(rows)
+        self.append_transformers(rows)
+        self.append_center_tap_transformers(rows)
+        self.append_reactors(rows)
 
-        # combine lines between identical buses.
-        branch_df = pd.DataFrame(line_data)
-        branch_df = (
-            branch_df.groupby(by=["fb", "tb"], as_index=False)
-            .agg(
-                {
-                    "fb": "max",
-                    "tb": "max",
-                    "from_name": "first",
-                    "to_name": "first",
-                    "r_aa": "sum",
-                    "r_ab": "sum",
-                    "r_ac": "sum",
-                    "r_bb": "sum",
-                    "r_bc": "sum",
-                    "r_cc": "sum",
-                    "x_aa": "sum",
-                    "x_ab": "sum",
-                    "x_ac": "sum",
-                    "x_bb": "sum",
-                    "x_bc": "sum",
-                    "x_cc": "sum",
-                    "r_s1s1": "sum",  # <-- NEW
-                    "r_s1s2": "sum",
-                    "r_s2s2": "sum",
-                    "x_s1s1": "sum",
-                    "x_s1s2": "sum",
-                    "x_s2s2": "sum",
-                    "primary_phase": "first",
-                    "type": "first",
-                    "name": "sum",
-                    "status": "first",
-                    "s_base": "first",
-                    "v_ln_base": "first",
-                    "z_base": "first",
-                    "phases": "sum",
-                }
-            )
-            .sort_values(by=["tb", "fb"], ignore_index=True)
-            .reset_index(drop=True)
+        agg = {col: "sum" for col in [*_Z_COLUMNS, *_B_COLUMNS, *_SHUNT_COLUMNS]}
+        agg.update(
+            fb="max",
+            tb="max",
+            from_name="first",
+            to_name="first",
+            primary_phase="first",
+            type="first",
+            status="first",
+            s_base="first",
+            v_ln_base="first",
+            z_base="first",
+            name="sum",
+            phases="sum",  # parallel branches: concatenate
         )
-        return branch_df
+        group_keys = ["fb", "tb"]
+        agg = {k: v for k, v in agg.items() if k not in group_keys}
+
+        # Combine parallel branches between identical buses.
+        df = pd.DataFrame(rows).groupby(group_keys, as_index=False).agg(agg)
+        return df.sort_values(by=["tb", "fb"], ignore_index=True)[_BRANCH_COLUMNS]
+
+    # ------------------------------------------------------------------
+    # Bus data
+    # ------------------------------------------------------------------
+
+    def _bus_phases(self, bus_name: str) -> str:
+        """Phase string of the active bus; secondary buses map to s1/s2."""
+        nodes = [n for n in self.dss.Bus.Nodes() if n != 0]
+        if bus_name in self.secondary_buses:
+            legs = [
+                _SECONDARY_NODE_LEG[n]
+                for n in sorted(nodes)
+                if n in _SECONDARY_NODE_LEG
+            ]
+            return "".join(legs) or "s1s2"
+        return self._phases_from_nodes(nodes)
+
+    def _energized_phases(self, bus_id: int, phases: str) -> str:
+        """Drop primary phases that no closed branch at the bus carries (e.g. open switches)."""
+        if "s" in phases:
+            return phases
+        touching = self.branch_data[
+            ((self.branch_data.fb == bus_id) | (self.branch_data.tb == bus_id))
+            & (self.branch_data.status != "OPEN")
+        ]
+        carried = "".join(touching.phases)
+        kept = "".join(p for p in phases if p in carried)
+        return kept or phases
 
     def get_bus_data(self) -> pd.DataFrame:
-        """Extract the bus data from the distribution model.
-
-        Args:
-            source_voltage (float, optional): Voltage of the source (for all phases) in per unit (pu). Defaults to 1.0.
-            s_base (float, optional): MVA base of the system (in VA). Defaults to 1000000 (or 1 MVA).
-            v_min (float, optional): minimum voltage limit of the system in pu. Defaults to 0.95.
-            v_max (float, optional): maximum voltage limit of the system in pu. Defaults to 1.05.
-            cvr_p (float, optional): conservative voltage reduction parameter for p (0 means no voltage dependence). Defaults to 0.
-            cvr_q (float, optional): conservative voltage reduction parameter for q (0 means no voltage dependence). Defaults to 0.
-
-        Returns:
-            pd.DataFrame: bus data in DataFrame format
-        """
+        """Bus table (one row per bus), merged with per-bus load totals."""
         source_voltage = self.dss.Vsources.PU()
-        s_base = self.s_base
-        v_min = self.v_min
-        v_max = self.v_max
-        all_buses_names = self.dss.Circuit.AllBusNames()
-        # all_loads = self.get_loads()
-        load_df = self._get_loads()
-        bus_data = []
-        for bus_id, bus in enumerate(all_buses_names):
-            # need to set the nodes active before extracting their info
-            self.dss.Circuit.SetActiveBus(bus)
-            bus_type = "PQ"
-            v = 1
-            if (
-                len(self.dss.Bus.AllPCEatBus()) > 0
-                and "Vsource" in self.dss.Bus.AllPCEatBus()[0]
-            ):
-                v = source_voltage
-                bus_type = "SWING"
-            active_bus_name = self.dss.Bus.Name()
-            v_ln_base = self.dss.Bus.kVBase() * 1000
-
-            # Correct base voltage for secondary (triplex) buses.
-            # OpenDSS calculates secondary voltage using 3-phase assumptions,
-            # multiplying by sqrt(4/3). For split-phase secondaries, we need
-            # the actual leg-to-neutral voltage, so divide by sqrt(4/3) or
-            # equivalently multiply by sqrt(3/4).
-            if active_bus_name in self.secondary_buses:
-                v_ln_base = v_ln_base * np.sqrt(3 / 4)
-
-            each_bus = dict(
-                id=self.bus_names_to_index_map[bus],  # bus id for each active bus
-                name=active_bus_name,  # name of the active bus
-                bus_type=bus_type,  # SWING if source else PQ
-                v_a=v,  # p.u. voltage of the active bus in phase a
-                v_b=v,  # p.u. voltage of the active bus in phase b
-                v_c=v,  # p.u. voltage of the active bus in phase c
-                v_ln_base=v_ln_base,  # line-to-phase voltage base of the active bus
-                s_base=s_base,  # s_base of the system
-                v_min=v_min,  # minimum p.u. voltage for the bus
-                v_max=v_max,  # maximum p.u. voltage for the bus
-                # cvr_p=cvr_p,  # conservative voltage reduction parameter for active power
-                # cvr_q=cvr_q,  # conservative voltage reduction parameter for reactive power
-                phases=self._phases_for_bus(active_bus_name),
-                primary_phase=self.secondary_buses.get(active_bus_name, {}).get(
-                    "primary_phase", ""
-                ),
-                has_gen=(
-                    True if active_bus_name in self.gen_buses else False
-                ),  # if the bus has a generator or not
-                has_load=(
-                    True if active_bus_name in self.load_buses else False
-                ),  # if the bus has a load or not
-                has_cap=(
-                    True if active_bus_name in self.cap_buses else False
-                ),  # if the bus has a capacitor or not
-                # be careful that X gives you lon and Y gives you lat
-                # extra elements
-                latitude=self.dss.Bus.Y(),  # latitude of the bus location (Y)
-                longitude=self.dss.Bus.X(),
-            )  # longitude of the bus location (X)
-            bus_data.append(each_bus)
-        bus_df = pd.DataFrame(bus_data)
-        bus_df = pd.merge(load_df, bus_df, on=["id"], how="outer").sort_values(
-            by="id", ignore_index=True
+        gen_buses, load_buses, cap_buses = (
+            self.gen_buses,
+            self.load_buses,
+            self.cap_buses,
         )
+        load_df = self._get_loads()
+
+        rows = []
+        for bus in self.dss.Circuit.AllBusNames():
+            self.dss.Circuit.SetActiveBus(bus)  # must be active before reading info
+            pce = self.dss.Bus.AllPCEatBus()
+            is_swing = len(pce) > 0 and "Vsource" in pce[0]
+            v = source_voltage if is_swing else 1
+            name = self.dss.Bus.Name()
+            rows.append(
+                dict(
+                    id=self.bus_names_to_index_map[bus],
+                    name=name,
+                    bus_type="SWING" if is_swing else "PQ",
+                    v_a=v,
+                    v_b=v,
+                    v_c=v,
+                    v_ln_base=self._nominal_voltage_bases[name],
+                    s_base=self.s_base,
+                    v_min=self.v_min,
+                    v_max=self.v_max,
+                    phases=self._bus_phases(name),
+                    primary_phase=self.secondary_buses.get(name, {}).get(
+                        "primary_phase", ""
+                    ),
+                    has_gen=name in gen_buses,
+                    has_load=name in load_buses,
+                    has_cap=name in cap_buses,
+                    latitude=self.dss.Bus.Y(),
+                    longitude=self.dss.Bus.X(),
+                )
+            )
+
+        for row in rows:
+            row["phases"] = self._energized_phases(row["id"], row["phases"])
+
+        bus_df = pd.merge(load_df, pd.DataFrame(rows), on="id", how="outer")
+        bus_df = bus_df.sort_values(by="id", ignore_index=True)
         bus_df["primary_phase"] = bus_df["primary_phase"].fillna("")
+        bus_df["load_shape"] = bus_df["load_shape"].fillna("")
         bus_df = bus_df.fillna(0)
-        return bus_df
+        first = ["id", "name"]
+        return bus_df[first + [c for c in bus_df.columns if c not in first]]
+
+    def get_v_solved(self) -> pd.DataFrame:
+        """DSS voltage magnitudes in pu on the exported nominal bus bases.
+
+        No fixed sqrt(3)/2 or 2/sqrt(3) correction is applied.
+        """
+        records = []
+        for name in self.bus_names:
+            self.dss.Circuit.SetActiveBus(name)
+            magnitudes = np.asarray(self.dss.Bus.VMagAngle(), dtype=float).reshape(
+                -1, 2
+            )[:, 0]
+            base = self._nominal_voltage_bases[name]
+            phase_map = (
+                _SECONDARY_NODE_LEG
+                if name in self.secondary_buses
+                else _PRIMARY_NODE_PHASE
+            )
+            row = {"id": self.bus_names_to_index_map[name], "name": name}
+            row.update(dict.fromkeys(_PHASE_ORDER, np.nan))
+            for node, magnitude in zip(self.dss.Bus.Nodes(), magnitudes):
+                if node in phase_map:
+                    row[phase_map[node]] = magnitude / base
+            records.append(row)
+        return pd.DataFrame(records).set_index("id").sort_index()
+
+    # ------------------------------------------------------------------
+    # Power / current flows
+    # ------------------------------------------------------------------
+
+    def _pd_branch_table(self, raw, extract, dtype) -> pd.DataFrame:
+        """Shared walk over PD elements for currents, angles and powers.
+
+        ``raw`` is a flat OpenDSS array with two values per conductor
+        terminal. ``extract(block, ctx)`` returns ``(values, active_phases)``
+        for one element, where ``block`` is that element's (n_cond*n_term, 2)
+        slice and ``ctx`` is a dict of element info.
+        """
+        names = self.dss.PDElements.AllNames()
+        n_conds = self.dss.PDElements.AllNumConductors()
+        n_terms = self.dss.PDElements.AllNumTerminals()
+        n_phases_all = self.dss.PDElements.AllNumPhases()
+        setters = {
+            "line": self.dss.Lines.Name,
+            "transformer": self.dss.Transformers.Name,
+            "reactor": self.dss.Reactors.Name,
+        }
+
+        records = []
+        i = 0
+        for full_name, n_cond, n_phases, n_term in zip(
+            names, n_conds, n_phases_all, n_terms
+        ):
+            etype, _, ename = full_name.partition(".")
+            etype = etype.lower()
+            i_end = i + n_cond * n_term * 2
+            block = np.array(raw[i:i_end]).reshape(n_cond * n_term, 2)
+            i = i_end
+            if etype not in setters:
+                continue
+
+            setters[etype](ename)
+            specs = self.dss.CktElement.BusNames()
+            bus1, bus2 = self._bus_of(specs[0]), self._bus_of(specs[1])
+            # Disabled/open elements are absent from the topology but present in the flat arrays.
+            if (
+                bus1 not in self.bus_names_to_index_map
+                or bus2 not in self.bus_names_to_index_map
+            ):
+                continue
+
+            if n_phases < 3:
+                nodes = [int(n) for n in specs[0].split(".")[1:] if n != "0"]
+                nodes = nodes or list(range(1, n_phases + 1))
+                active = np.array(nodes, dtype=int) - 1
+            else:
+                active = np.array([0, 1, 2])
+
+            ctx = dict(
+                etype=etype,
+                ename=ename.lower(),
+                n_cond=n_cond,
+                n_phases=n_phases,
+                bus1=bus1,
+                bus2=bus2,
+                active=active,
+            )
+            values, active = extract(block, ctx)
+
+            out = np.full(3, np.nan, dtype=dtype)
+            out[active] = values[: len(active)]
+
+            self.dss.Circuit.SetActiveBus(bus2)
+            records.append(
+                dict(
+                    fb=self.bus_names_to_index_map[bus1],
+                    tb=self.bus_names_to_index_map[bus2],
+                    from_name=bus1,
+                    to_name=bus2,
+                    a=out[0],
+                    b=out[1],
+                    c=out[2],
+                    nodes=self.dss.Bus.Nodes(),
+                )
+            )
+        return self._combine_parallel(pd.DataFrame(records))
+
+    @staticmethod
+    def _combine_parallel(df: pd.DataFrame) -> pd.DataFrame:
+        """Sum parallel branches, then blank phases not present at the receiving bus."""
+        df = df.astype({"fb": int, "tb": int})
+        df = (
+            df.groupby(["fb", "tb"], as_index=False)
+            .agg(
+                from_name=("from_name", "first"),
+                to_name=("to_name", "first"),
+                a=("a", "sum"),
+                b=("b", "sum"),
+                c=("c", "sum"),
+                nodes=("nodes", "first"),
+            )
+            .sort_values(by=["tb", "fb"], ignore_index=True)
+        )
+        for node, col in _PRIMARY_NODE_PHASE.items():
+            missing = df["nodes"].apply(lambda nodes, n=node: n not in nodes)
+            df[col] = df[col].where(~missing, np.nan)
+        return df[["fb", "tb", "from_name", "to_name", "a", "b", "c"]]
+
+    def get_currents(self, from_side: bool = True) -> pd.DataFrame:
+        """Current magnitudes in pu."""
+
+        def extract(block, ctx):
+            n, nc = ctx["n_phases"], ctx["n_cond"]
+            mags = block[:n, 0] if from_side else block[nc : nc + n, 0]
+            self.dss.Circuit.SetActiveBus(ctx["bus2"])
+            current_base = self.s_base / (self.dss.Bus.kVBase() * 1000)
+            return mags / current_base, ctx["active"]
+
+        return self._pd_branch_table(
+            self.dss.PDElements.AllCurrentsMagAng(), extract, float
+        )
+
+    def get_current_angles(self, from_side: bool = True) -> pd.DataFrame:
+        """Current angles in degrees, wrapped to [0, 360)."""
+
+        def extract(block, ctx):
+            n, nc = ctx["n_phases"], ctx["n_cond"]
+            ang = block[:n, 1] if from_side else block[nc : nc + n, 1] - 180
+            return ang % 360, ctx["active"]
+
+        return self._pd_branch_table(
+            self.dss.PDElements.AllCurrentsMagAng(), extract, float
+        )
+
+    def get_apparent_power_flows(self, from_side: bool = True) -> pd.DataFrame:
+        """Complex branch power in pu; secondary branches are remapped to s1/s2."""
+
+        def extract(block, ctx):
+            n, nc, active = ctx["n_phases"], ctx["n_cond"], ctx["active"]
+            if ctx["etype"] == "transformer" and ctx["ename"] in self.center_taps:
+                # Always use secondary-side flow for center-tap transformers,
+                # consistent with distopf modeling.
+                pq = -block[(2, 5), :]
+                active = np.array([0, 1])
+            elif from_side:
+                pq = block[:n, :]
+            else:
+                pq = -block[nc : nc + n, :]
+            return (pq[:, 0] + 1j * pq[:, 1]) * 1000 / self.s_base, active
+
+        df = self._pd_branch_table(self.dss.PDElements.AllPowers(), extract, complex)
+
+        # Secondary branches: OpenDSS node 1/2 (stored in a/b) -> s1/s2.
+        nan_c = complex(np.nan, np.nan)
+        sec = df["from_name"].isin(self.secondary_buses) | df["to_name"].isin(
+            self.secondary_buses
+        )
+        df["s1"] = nan_c
+        df["s2"] = nan_c
+        df.loc[sec, "s1"] = df.loc[sec, "a"]
+        df.loc[sec, "s2"] = df.loc[sec, "b"]
+        df.loc[sec, ["a", "b", "c"]] = nan_c
+        return df[["fb", "tb", "from_name", "to_name", "a", "b", "c", "s1", "s2"]]
+
+    def _split_flows(self, part: Callable) -> pd.DataFrame:
+        s = self.get_apparent_power_flows()
+        out = s[["fb", "tb", "from_name", "to_name"]].copy()
+        cols = ["a", "b", "c", "s1", "s2"]
+        values = part(s[cols].astype(complex).to_numpy())
+        values = np.where(
+            s[cols].isna().to_numpy(), np.nan, values
+        )  # keep missing phases NaN
+        out[cols] = values
+        return out
+
+    def get_p_flows(self) -> pd.DataFrame:
+        return self._split_flows(np.real)
+
+    def get_q_flows(self) -> pd.DataFrame:
+        return self._split_flows(np.imag)
+
+    # ------------------------------------------------------------------
+    # Generators
+    # ------------------------------------------------------------------
 
     def _build_gen_row(
-        self, bus_name: str, gen_name: str, kw: float, kvar: float, kva_rated: float
+        self,
+        bus_name: str,
+        gen_name: str,
+        kw: float,
+        kvar: float,
+        kva_rated: float,
+        shape: str = "",
     ) -> dict:
-        """Build a gen_data row dict for a single generator or PV system."""
-        s_base = self.s_base
-        # Ensure exported apparent-power limit can support the exported P/Q setpoint.
-        # Some feeders use PV DC oversizing (Pmpp > inverter kVA), and exporting
-        # fixed p_gen with s_rated < |S| creates an infeasible OPF model.
-        # kva_rated = max(float(kva_rated), float(np.hypot(kw, kvar)))
-        bus_spec = self.dss.CktElement.BusNames()[0]
-        bus_phases = bus_spec.split(".")[1:]
+        """gen_data row for one generator or PV system (all values in pu)."""
+        scale = 1000 / self.s_base
+        nodes = [n for n in self.dss.CktElement.BusNames()[0].split(".")[1:]]
 
-        # Initialize all columns to zero
-        each_gen: dict = dict(
+        row = dict.fromkeys(_GEN_COLUMNS, 0)
+        row.update(
             id=self.bus_names_to_index_map[bus_name],
             name=gen_name,
-            p_a=0,
-            p_b=0,
-            p_c=0,
-            q_a=0,
-            q_b=0,
-            q_c=0,
-            s_a_max=0,
-            s_b_max=0,
-            s_c_max=0,
-            p_s1=0,
-            p_s2=0,
-            q_s1=0,
-            q_s2=0,
-            s_s1_max=0,
-            s_s2_max=0,
             primary_phase="",
             phases="",
-            q_a_max=0,
-            q_b_max=0,
-            q_c_max=0,
-            q_a_min=0,
-            q_b_min=0,
-            q_c_min=0,
-            q_s1_max=0,
-            q_s2_max=0,
-            q_s1_min=0,
-            q_s2_min=0,
             control_variable="",
-            gen_shape="PV",
+            gen_shape=shape.lower(),
         )
 
+        def assign(phase: str, share: float) -> None:
+            s = kva_rated * scale * share
+            row[f"p_{phase}"] = kw * scale * share
+            row[f"q_{phase}"] = kvar * scale * share
+            row[f"s_{phase}_max"] = s
+            row[f"q_{phase}_max"] = s
+            row[f"q_{phase}_min"] = -s
+
         if bus_name in self.secondary_buses:
-            # ---- Secondary (triplex) generator ----
-            primary_phase = self.secondary_buses[bus_name]["primary_phase"]
-            each_gen["primary_phase"] = primary_phase
-            nodes = [int(n) for n in bus_phases if n != "0"]
-            node_to_leg = {1: "s1", 2: "s2"}
-
-            if sorted(nodes) == [1, 2]:
-                # 240 V phase-to-phase: split equally across both legs
-                s_leg = kva_rated * 1000 / s_base / 2
-                each_gen["p_s1"] = kw * 1000 / s_base / 2
-                each_gen["p_s2"] = kw * 1000 / s_base / 2
-                each_gen["q_s1"] = kvar * 1000 / s_base / 2
-                each_gen["q_s2"] = kvar * 1000 / s_base / 2
-                each_gen["s_s1_max"] = s_leg
-                each_gen["s_s2_max"] = s_leg
-                each_gen["q_s1_max"] = s_leg
-                each_gen["q_s2_max"] = s_leg
-                each_gen["q_s1_min"] = -s_leg
-                each_gen["q_s2_min"] = -s_leg
-                each_gen["phases"] = "s1s2"
-            elif len(nodes) == 1 and nodes[0] in node_to_leg:
-                # 120 V single-leg
-                leg = node_to_leg[nodes[0]]
-                s_leg = kva_rated * 1000 / s_base
-                each_gen[f"p_{leg}"] = kw * 1000 / s_base
-                each_gen[f"q_{leg}"] = kvar * 1000 / s_base
-                each_gen[f"s_{leg}_max"] = s_leg
-                each_gen[f"q_{leg}_max"] = s_leg
-                each_gen[f"q_{leg}_min"] = -s_leg
-                each_gen["phases"] = leg
+            row["primary_phase"] = self.secondary_buses[bus_name]["primary_phase"]
+            hot = sorted(int(n) for n in nodes if n != "0")
+            if hot == [1, 2]:  # 240 V: split equally across both legs
+                legs, share = ["s1", "s2"], 0.5
+            elif len(hot) == 1 and hot[0] in _SECONDARY_NODE_LEG:  # 120 V single leg
+                legs, share = [_SECONDARY_NODE_LEG[hot[0]]], 1.0
+            else:
+                legs, share = [], 0.0
+            for leg in legs:
+                assign(leg, share)
+            row["phases"] = "".join(legs)
         else:
-            # ---- Primary generator ----
-            n_phases = len(bus_phases)
-            if n_phases == 0 or n_phases >= 3:
-                n_phases = 3
-            active_phases = np.array([0, 1, 2])
-            if n_phases < 3:
-                active_phases = np.array(bus_phases).astype(int) - 1
-
-            p_per_phase = kw / n_phases * 1000 / s_base
-            q_per_phase = kvar / n_phases * 1000 / s_base
-            s_per_phase = kva_rated / n_phases * 1000 / s_base
-
-            phases = ""
-            for phase_id in active_phases:
-                ph = "abc"[phase_id]
-                each_gen[f"p_{ph}"] = p_per_phase
-                each_gen[f"q_{ph}"] = q_per_phase
-                each_gen[f"s_{ph}_max"] = s_per_phase
-                phases += ph
-            each_gen["phases"] = phases
-
-            each_gen["q_a_max"] = each_gen["s_a_max"]
-            each_gen["q_b_max"] = each_gen["s_b_max"]
-            each_gen["q_c_max"] = each_gen["s_c_max"]
-            each_gen["q_a_min"] = -each_gen["s_a_max"]
-            each_gen["q_b_min"] = -each_gen["s_b_max"]
-            each_gen["q_c_min"] = -each_gen["s_c_max"]
-
-        return each_gen
-
-    _GEN_COLUMNS = [
-        "id",
-        "name",
-        "p_a",
-        "p_b",
-        "p_c",
-        "q_a",
-        "q_b",
-        "q_c",
-        "s_a_max",
-        "s_b_max",
-        "s_c_max",
-        "p_s1",
-        "p_s2",
-        "q_s1",
-        "q_s2",
-        "s_s1_max",
-        "s_s2_max",
-        "primary_phase",
-        "phases",
-        "q_a_max",
-        "q_b_max",
-        "q_c_max",
-        "q_a_min",
-        "q_b_min",
-        "q_c_min",
-        "q_s1_max",
-        "q_s2_max",
-        "q_s1_min",
-        "q_s2_min",
-        "control_variable",
-        "gen_shape",
-    ]
-
-    _GEN_AGG = dict(
-        id="first",
-        name="first",
-        p_a="sum",
-        p_b="sum",
-        p_c="sum",
-        q_a="sum",
-        q_b="sum",
-        q_c="sum",
-        s_a_max="sum",
-        s_b_max="sum",
-        s_c_max="sum",
-        p_s1="sum",
-        p_s2="sum",
-        q_s1="sum",
-        q_s2="sum",
-        s_s1_max="sum",
-        s_s2_max="sum",
-        primary_phase="first",
-        phases=_merge_phases,
-        q_a_max="sum",
-        q_b_max="sum",
-        q_c_max="sum",
-        q_a_min="sum",
-        q_b_min="sum",
-        q_c_min="sum",
-        q_s1_max="sum",
-        q_s2_max="sum",
-        q_s1_min="sum",
-        q_s2_min="sum",
-        control_variable="first",
-        gen_shape="first",
-    )
+            n_phases = len(nodes) if 0 < len(nodes) < 3 else 3
+            active = np.array(nodes).astype(int) - 1 if n_phases < 3 else [0, 1, 2]
+            phases = "".join("abc"[k] for k in active)
+            for ph in phases:
+                assign(ph, 1 / n_phases)
+            row["phases"] = phases
+        return row
 
     def get_gen_data(self) -> pd.DataFrame:
-        gen_data = []
+        rows = []
 
-        generator_flag = self.dss.Generators.First()
-        while generator_flag:
-            bus_name = self.dss.Generators.Bus1().split(".")[0]
-            gen_data.append(
+        flag = self.dss.Generators.First()
+        while flag:
+            rows.append(
                 self._build_gen_row(
-                    bus_name,
+                    self._bus_of(self.dss.Generators.Bus1()),
                     self.dss.Generators.Name(),
                     self.dss.Generators.kW(),
                     self.dss.Generators.kvar(),
                     self.dss.Generators.kVARated(),
                 )
             )
-            generator_flag = self.dss.Generators.Next()
+            flag = self.dss.Generators.Next()
 
-        pv_flag = self.dss.PVsystems.First()
-        while pv_flag:
-            bus_name = self.dss.CktElement.BusNames()[0].split(".")[0]
-            # try:
-            # pv_kw = self.dss.PVsystems.kW()
-            # pv_kw = 0
-            # except Exception:
-            pv_kw = self.dss.PVsystems.Pmpp()
-            gen_data.append(
+        flag = self.dss.PVsystems.First()
+        while flag:
+            rows.append(
                 self._build_gen_row(
-                    bus_name,
+                    self._bus_of(self.dss.CktElement.BusNames()[0]),
                     self.dss.PVsystems.Name(),
-                    pv_kw,
+                    self.dss.PVsystems.Pmpp(),
                     self.dss.PVsystems.kvar(),
                     self.dss.PVsystems.kVARated(),
+                    self.dss.PVsystems.yearly(),
                 )
             )
-            pv_flag = self.dss.PVsystems.Next()
+            flag = self.dss.PVsystems.Next()
 
-        if not gen_data:
-            return pd.DataFrame({col: [] for col in self._GEN_COLUMNS})
+        if not rows:
+            return pd.DataFrame({col: [] for col in _GEN_COLUMNS})
+        gen_df = pd.DataFrame(rows)
+        power_cols = [c for c in ("p_a", "p_b", "p_c", "p_s1", "p_s2") if c in gen_df]
+        gen_df["weight"] = gen_df[power_cols].sum(axis=1)
+        groups = {
+            bus: list(zip(g["weight"], g["gen_shape"]))
+            for bus, g in gen_df.groupby("id")
+        }
+        shape_of_id = self._link_shapes(groups, "gen")
+        gen_df["gen_shape"] = gen_df["id"].map(shape_of_id).fillna("")
+        gen_df = gen_df.drop(columns="weight")
+        return gen_df.groupby("id", as_index=False).agg(_gen_agg())
 
-        gen_df = pd.DataFrame(gen_data)
-        gen_df = gen_df.groupby(by=["id"], as_index=False).agg(self._GEN_AGG)
-        return gen_df
+    # ------------------------------------------------------------------
+    # Batteries
+    # ------------------------------------------------------------------
+
+    def _storage_property(self, name: str, prop: str) -> float:
+        self.dss.Text.Command(f"? Storage.{name}.{prop}")
+        return float(self.dss.Text.Result())
+
+    def _build_bat_row(self, name: str) -> dict:
+        """bat_data row (pu) for one Storage element; p/q are its solved discharge power."""
+        element = self.dss.CktElement.BusNames()[0]
+        bus_name = self._bus_of(element)
+        if bus_name in self.secondary_buses:
+            raise NotImplementedError(f"Storage.{name} on secondary bus {bus_name}")
+        nodes = element.split(".")[1:]
+        n_phases = len(nodes) if 0 < len(nodes) < 3 else 3
+        active = np.array(nodes).astype(int) - 1 if n_phases < 3 else [0, 1, 2]
+        scale = 1000 / self.s_base
+        # CktElement.Powers is consumption; discharge is its negative.
+        powers = np.array(self.dss.CktElement.Powers())
+        return dict(
+            id=self.bus_names_to_index_map[bus_name],
+            name=name,
+            s_max=self._storage_property(name, "kVA") * scale,
+            phases="".join("abc"[k] for k in active),
+            energy_capacity=self._storage_property(name, "kWhrated") * scale,
+            min_soc=self._storage_property(name, "%reserve") / 100,
+            max_soc=1.0,
+            start_soc=self._storage_property(name, "%stored") / 100,
+            charge_efficiency=self._storage_property(name, "%effcharge") / 100,
+            discharge_efficiency=self._storage_property(name, "%effdischarge") / 100,
+            annual_cycle_limit=365,
+            control_variable="P",
+            p=-powers[0::2].sum() * scale,
+            q=-powers[1::2].sum() * scale,
+        )
+
+    def get_bat_data(self) -> pd.DataFrame:
+        """One row per bus: Storage elements at the same bus are combined."""
+        rows = []
+        flag = self.dss.Storages.First()
+        while flag:
+            rows.append(self._build_bat_row(self.dss.Storages.Name()))
+            flag = self.dss.Storages.Next()
+        if not rows:
+            return pd.DataFrame({col: [] for col in _BAT_COLUMNS})
+        additive = ["s_max", "energy_capacity", "p", "q"]
+        agg = {col: "first" for col in _BAT_COLUMNS if col != "id"}
+        agg.update(dict.fromkeys(additive, "sum"))
+        agg["phases"] = lambda s: "".join(sorted(set("".join(s))))
+        return pd.DataFrame(rows).groupby("id", as_index=False).agg(agg)[_BAT_COLUMNS]
+
+    # ------------------------------------------------------------------
+    # Capacitors and regulators
+    # ------------------------------------------------------------------
+
+    def _rated_to_base_ratio(
+        self, bus: str, rated_kv: float, is_delta: bool = False
+    ) -> float:
+        """Bus base / element's rated kV (line-to-line if multiphase or delta); 1.0 on secondaries."""
+        if bus in self.secondary_buses:
+            return 1.0
+        line_to_line = is_delta or self.dss.CktElement.NumPhases() > 1
+        rated_ln = rated_kv * 1000 / (3**0.5 if line_to_line else 1)
+        return float(self._nominal_voltage_bases[bus]) / rated_ln
 
     def get_cap_data(self) -> pd.DataFrame:
-        s_base = self.s_base
+        columns = ["id", "name", "q_a", "q_b", "q_c", "phases"]
+        rows = []
         flag = self.dss.Capacitors.First()
-        cap_data = []
         while flag:
-            cap_bus_name = self.dss.CktElement.BusNames()[0].split(".")[0]
-            cap_bus_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
-
-            # convert this to string to be consistent with how we conver num to phase letters
-            cap_bus_phases = str([int(phase) for phase in cap_bus_phases])
-            if cap_bus_phases == "[]":
-                # three phases are usually represented by either .1.2.3 or nothing in opendss
-                # for second case we should ensure that 3 phase is actually represented
-                cap_bus_phases = "[1, 2, 3]"
-
-            cap_phase = self.num_phase_map[cap_bus_phases]
-
-            if cap_phase != "abc":
-                each_cap = dict(
-                    id=self.bus_names_to_index_map[cap_bus_name],
-                    name=cap_bus_name,
-                    q_a=(
-                        self.dss.Capacitors.kvar() * 1000 / s_base
-                        if cap_phase in {"a"}
-                        else 0
-                    ),
-                    q_b=(
-                        self.dss.Capacitors.kvar() * 1000 / s_base
-                        if cap_phase in {"b"}
-                        else 0
-                    ),
-                    q_c=(
-                        self.dss.Capacitors.kvar() * 1000 / s_base
-                        if cap_phase in {"c"}
-                        else 0
-                    ),
-                    phases=cap_phase,
-                )
-            else:
-                each_cap = dict(
-                    id=self.bus_names_to_index_map[cap_bus_name],
-                    name=cap_bus_name,
-                    q_a=(self.dss.Capacitors.kvar() * 1000 / 3) / s_base,
-                    q_b=(self.dss.Capacitors.kvar() * 1000 / 3) / s_base,
-                    q_c=(self.dss.Capacitors.kvar() * 1000 / 3) / s_base,
-                    phases=cap_phase,
-                )
-
-            cap_data.append(each_cap)
+            if not any(self.dss.Capacitors.States()):  # switched off in OpenDSS
+                flag = self.dss.Capacitors.Next()
+                continue
+            bus, nodes = self._split_bus_spec(self.dss.CktElement.BusNames()[0])
+            phases = self._phases_from_nodes(nodes)  # no nodes -> abc
+            q_pu = self.dss.Capacitors.kvar() * 1000 / self.s_base / len(phases)
+            q_pu *= self._rated_to_base_ratio(bus, self.dss.Capacitors.kV()) ** 2
+            row = dict(id=self.bus_names_to_index_map[bus], name=bus, phases=phases)
+            row.update({f"q_{ph}": (q_pu if ph in phases else 0) for ph in "abc"})
+            rows.append(row)
             flag = self.dss.Capacitors.Next()
-        cap_df = pd.DataFrame(cap_data)
-        if len(cap_data) < 1:
-            cap_df = pd.DataFrame(
-                {
-                    "id": [],
-                    "name": [],
-                    "q_a": [],
-                    "q_b": [],
-                    "q_c": [],
-                    "phases": [],
-                }
-            )
 
-        cap_df = cap_df.groupby(by=["id"], as_index=False).agg(
-            dict(
-                id="first",
-                name="first",
-                q_a="sum",
-                q_b="sum",
-                q_c="sum",
-                phases="sum",
+        if not rows:
+            return pd.DataFrame({col: [] for col in columns})
+        return (
+            pd.DataFrame(rows, columns=columns)
+            .groupby("id", as_index=False)
+            .agg(
+                name=("name", "first"),
+                q_a=("q_a", "sum"),
+                q_b=("q_b", "sum"),
+                q_c=("q_c", "sum"),
+                phases=("phases", "sum"),
             )
         )
-        return cap_df
 
     def get_reg_data(self) -> pd.DataFrame:
-        # s_base = self.s_base
-        reg_data = []
-        reg_control_names = self.dss.RegControls.AllNames()
-        reg_names = []
-        if len(reg_control_names) != 0:
-            dss_reg_df = self.dss.utils.regcontrols_to_dataframe()
-            reg_names = dss_reg_df.Transformer.to_list()
+        columns = [
+            "fb",
+            "tb",
+            "from_name",
+            "to_name",
+            "tap_a",
+            "tap_b",
+            "tap_c",
+            "phases",
+            "ratio_min",
+            "ratio_max",
+            "num_taps",
+        ]
+        reg_names: list[str] = []
+        if len(self.dss.RegControls.AllNames()) != 0:
+            reg_names = self.dss.utils.regcontrols_to_dataframe().Transformer.to_list()
+
+        rows = []
         flag = self.dss.Transformers.First()
         while flag:
-            element_type = self.dss.CktElement.Name().lower().split(".")[0]
-            element_name = self.dss.CktElement.Name().lower().split(".")[1]
-            if element_type not in ["transformer"]:
-                flag = self.dss.Transformers.Next()
-                continue
-            if element_name not in reg_names:
-                flag = self.dss.Transformers.Next()
-                continue
-            raw_bus1 = self.dss.CktElement.BusNames()[0].split(".")[0]
-            raw_bus2 = self.dss.CktElement.BusNames()[-1].split(".")[0]
-            bus1, bus2 = self._orient_edge(raw_bus1, raw_bus2)
-            fb = self.bus_names_to_index_map[bus1]
-            tb = self.bus_names_to_index_map[bus2]
-            tap_direction = 1 if (bus1, bus2) == (raw_bus1, raw_bus2) else -1
-            self.dss.Circuit.SetActiveBus(bus2)
-            line_phases = self.dss.CktElement.BusNames()[0].split(".")[1:]
-            line_phases = sorted(line_phases)
-
-            # convert this to string to be consistent with how we conver num to phase letters
-            line_phases = str([int(phase) for phase in line_phases])
-            if line_phases == "[]":
-                # three phases are usually represented by either .1.2.3 or nothing in opendss
-                # for second case we should ensure that 3 phase is actually represented
-                line_phases = "[1, 2, 3]"
-            line_phase = self.num_phase_map[line_phases]
-            ratio = self.dss.Transformers.Tap()
-            tap = (ratio - 1) / 0.00625 * tap_direction
-            each_reg = {}
-            each_reg["fb"] = fb
-            each_reg["tb"] = tb
-            each_reg["from_name"] = bus1
-            each_reg["to_name"] = bus2
-            for ph in line_phase:
-                each_reg[f"tap_{ph}"] = int(round(tap))
-            each_reg["phases"] = line_phase
-            reg_data.append(each_reg)
-
+            name = self.dss.CktElement.Name().lower().split(".")[1]
+            self.dss.Transformers.Wdg(2)
+            if name in reg_names or self.dss.Transformers.Tap() != 1:
+                specs = self.dss.CktElement.BusNames()
+                raw1, raw2 = self._bus_of(specs[0]), self._bus_of(specs[-1])
+                bus1, bus2 = self._orient_edge(raw1, raw2)
+                direction = 1 if (bus1, bus2) == (raw1, raw2) else -1
+                phases = self._phases_from_nodes(self._split_bus_spec(specs[0])[1])
+                self.dss.Transformers.Wdg(2)
+                ratio_min = self.dss.Transformers.MinTap()
+                ratio_max = self.dss.Transformers.MaxTap()
+                num_taps = self.dss.Transformers.NumTaps()
+                step = (ratio_max - ratio_min) / num_taps
+                tap = int(round((self.dss.Transformers.Tap() - 1) / step * direction))
+                row = dict(
+                    fb=self.bus_names_to_index_map[bus1],
+                    tb=self.bus_names_to_index_map[bus2],
+                    from_name=bus1,
+                    to_name=bus2,
+                    phases=phases,
+                    ratio_min=ratio_min,
+                    ratio_max=ratio_max,
+                    num_taps=num_taps,
+                )
+                row.update({f"tap_{ph}": tap for ph in phases})
+                rows.append(row)
             flag = self.dss.Transformers.Next()
 
-        # combine lines between identical buses.
-        reg_df = pd.DataFrame(reg_data)
-        if len(reg_data) < 1:
-            reg_df = pd.DataFrame(
-                {
-                    "fb": [],
-                    "tb": [],
-                    "from_name": [],
-                    "to_name": [],
-                    "tap_a": [],
-                    "tap_b": [],
-                    "tap_c": [],
-                    "phases": [],
-                }
-            )
-        reg_df = reg_df.groupby(["fb", "tb"]).agg(
-            {
-                "fb": "first",
-                "tb": "first",
-                "from_name": "first",
-                "to_name": "first",
-                "tap_a": "max",
-                "tap_b": "max",
-                "tap_c": "max",
-                "phases": "sum",
-            }
+        df = pd.DataFrame(rows, columns=columns if not rows else None)
+        for col in ("tap_a", "tap_b", "tap_c"):
+            if col not in df:
+                df[col] = np.nan
+        if df.empty:
+            return pd.DataFrame({col: [] for col in columns})
+        df = df.groupby(["fb", "tb"], as_index=False).agg(
+            from_name=("from_name", "first"),
+            to_name=("to_name", "first"),
+            tap_a=("tap_a", "max"),
+            tap_b=("tap_b", "max"),
+            tap_c=("tap_c", "max"),
+            phases=("phases", "sum"),
+            ratio_min=("ratio_min", "first"),
+            ratio_max=("ratio_max", "first"),
+            num_taps=("num_taps", "first"),
         )
-        reg_df = reg_df.reset_index(drop=True)
-        reg_df = reg_df.sort_values(by="tb", ignore_index=True).fillna(1)
-        # reg_df["tap_a"] = (reg_df["ratio_a"] - 1) / 0.00625
-        # reg_df["tap_b"] = (reg_df["ratio_b"] - 1) / 0.00625
-        # reg_df["tap_c"] = (reg_df["ratio_c"] - 1) / 0.00625
-        return reg_df
+        return df.sort_values(by="tb", ignore_index=True).fillna(0)
+
+    # ------------------------------------------------------------------
+    # Loads
+    # ------------------------------------------------------------------
+
+    def _load_cvr(self) -> tuple[float, float]:
+        """CVR exponents (p, q) of the active load, from its OpenDSS model."""
+        model = self.dss.Loads.Model()
+        if model == 4:  # exponential
+            return self.dss.Loads.CVRwatts(), self.dss.Loads.CVRvars()
+        if model == 8:  # ZIP
+            z = self.dss.Loads.ZipV()
+            return 2 * z[0] + z[1], 2 * z[3] + z[4]
+        return _LOAD_MODEL_CVR.get(model, (0, 0))
+
+    def _shape_values(self, name: str, kind: str = "p") -> np.ndarray:
+        """First `schedule_steps` multipliers of a loadshape (kind "p" or "q")."""
+        key = (name.lower(), kind)
+        if key not in self._shape_cache:
+            self.dss.LoadShape.Name(key[0])
+            values = np.array(self.dss.LoadShape.PMult())
+            if kind == "q":
+                q_values = np.array(self.dss.LoadShape.QMult())
+                # OpenDSS reuses PMult for kvar when qmult is not defined.
+                values = q_values if len(q_values) > 1 else values
+            is_constant = len(values) == 1  # interval is irrelevant
+            if is_constant:
+                values = np.repeat(values, self.schedule_steps)
+            interval = self.dss.LoadShape.SInterval()
+            step = self.dss.Solution.StepSize()
+            if interval != step and not is_constant:
+                raise ValueError(
+                    f"Loadshape {name!r} interval is {interval} s but the solution "
+                    f"step is {step} s; resampling is not supported"
+                )
+            if len(values) < self.schedule_steps:
+                raise ValueError(
+                    f"Loadshape {name!r} has {len(values)} points, "
+                    f"need {self.schedule_steps}"
+                )
+            self._shape_cache[key] = values[: self.schedule_steps]
+        return self._shape_cache[key]
+
+    def _blend_shapes(self, weights, shapes, kind: str = "p") -> np.ndarray:
+        """Weighted average of loadshapes (no shape counts as 1.0)."""
+        weights = np.asarray(weights, dtype=float)
+        curves = np.array(
+            [
+                self._shape_values(s, kind) if s else np.ones(self.schedule_steps)
+                for s in shapes
+            ]
+        )
+        return weights @ curves / weights.sum()
+
+    def _link_load_shapes(self, bus_loads: dict) -> dict:
+        """Add load schedule columns; return the load_shape name for each bus.
+
+        Buses whose kW and kvar multipliers differ get "<name>.p" and "<name>.q"
+        columns; the others share one "<name>" column.
+        """
+        shape_of_bus = {}
+        for bus, entries in bus_loads.items():
+            kws, kvars, shapes = zip(*entries)
+            if set(shapes) == {""}:
+                continue
+            p_curve = self._blend_shapes(kws, shapes, "p")
+            q_weights = kvars if sum(kvars) else kws
+            q_curve = self._blend_shapes(q_weights, shapes, "q")
+            name = shapes[0] if len(set(shapes)) == 1 else f"{bus}_load".lower()
+            if np.allclose(p_curve, q_curve):
+                self._schedule_columns[name] = p_curve
+            else:
+                self._schedule_columns[f"{name}.p"] = p_curve
+                self._schedule_columns[f"{name}.q"] = q_curve
+            shape_of_bus[bus] = name
+        return shape_of_bus
+
+    def _link_shapes(self, groups: dict, suffix: str) -> dict:
+        """Add schedule columns; return the shape name for each key in `groups`.
+
+        A key whose entries share one shape uses it directly. Otherwise a
+        kW-weighted blend is stored under "<key>_<suffix>" (no shape counts as 1.0).
+        """
+        shape_of_key = {}
+        for key, entries in groups.items():
+            names = {shape for _, shape in entries}
+            if names == {""}:
+                continue
+            if len(names) == 1:
+                shape = names.pop()
+                self._schedule_columns[shape] = self._shape_values(shape)
+            else:
+                shape = f"{key}_{suffix}".lower()
+                self._schedule_columns[shape] = self._blend_shapes(
+                    [kw for kw, _ in entries], [s for _, s in entries]
+                )
+            shape_of_key[key] = shape
+        return shape_of_key
 
     def _get_loads(self) -> pd.DataFrame:
-        """Extract load information for each node for each phase. This method extracts load on the exact bus(node) as
-        modeled in the distribution model, including secondary.
+        """Per-bus load totals (pu), including secondary-side loads."""
+        scale = 1000 / self.s_base
+        rows = []
+        bus_loads: dict[str, list[tuple[float, float, str]]] = {}
+        flag = self.dss.Loads.First()
+        while flag:
+            specs = self.dss.CktElement.BusNames()
+            shape = self.dss.Loads.Yearly().lower()
+            if len(specs) > 1:
+                raise ValueError("Multiple connected buses")
+            bus, nodes = self._split_bus_spec(specs[0])
 
-        Returns:
-            load_per_phase(pd.DataFrame): Per phase load data in a pandas dataframe
-        """
-        s_base = self.s_base
-        load_df = pd.DataFrame(
-            [],
-            columns=[
-                "id",
-                "name",
-                "pl_a",
-                "ql_a",
-                "pl_b",
-                "ql_b",
-                "pl_c",
-                "ql_c",
-                "pl_s1",
-                "ql_s1",
-                "pl_s2",
-                "ql_s2",
-                "pl_s1s2",
-                "ql_s1s2",
-            ],
-        )
-        loads_flag = self.dss.Loads.First()
-        load_data = []
-        model_to_cvr_map = {
-            1: (0, 0),
-            2: (2, 2),
-            3: (0, 2),
-            5: (1, 1),
-            6: (0, 0),
-            7: (0, 2),
-        }
-        while loads_flag:
-            connected_buses = self.dss.CktElement.BusNames()
-            if len(connected_buses) > 1:
-                raise Exception("Multiple connected buses")
-            model = self.dss.Loads.Model()
-            cvr_p, cvr_q = model_to_cvr_map.get(model, (0, 0))
-            if model == 4:  # exponential model
-                cvr_p = self.dss.Loads.CVRwatts()
-                cvr_q = self.dss.Loads.CVRvars()
-            if model == 8:  # zip model
-                zipv = self.dss.Loads.ZipV()
-                cvr_p = 2 * zipv[0] + zipv[1]
-                cvr_q = 2 * zipv[3] + zipv[4]
-            bus = connected_buses[0]
-            bus_name = bus.split(".")[0]
-            each_load = {
-                "id": 0,
-                "pl_a": 0,
-                "ql_a": 0,
-                "pl_b": 0,
-                "ql_b": 0,
-                "pl_c": 0,
-                "ql_c": 0,
-                "pl_s1": 0,
-                "ql_s1": 0,
-                "pl_s2": 0,
-                "ql_s2": 0,
-                "pl_s1s2": 0,
-                "ql_s1s2": 0,
-                "cvr_p": cvr_p,
-                "cvr_q": cvr_q,
-            }
-            bus_split = bus.split(".")
-            each_load["id"] = self.bus_names_to_index_map[bus_name]
-            connected_phase_secondary = bus_split[1:]
+            cvr_p, cvr_q = self._load_cvr()
+            row = dict.fromkeys(_LOAD_COLUMNS, 0)
+            row.update(id=self.bus_names_to_index_map[bus])
 
-            # conductor power contains info on active and reactive power
-            conductor_power = np.array(self.dss.CktElement.Powers())
-            p_values = conductor_power[::2]
-            q_values = conductor_power[1::2]
+            # Nominal (rated-voltage) power; the OPF applies cvr_p/cvr_q itself.
+            kw, kvar = self.dss.Loads.kW(), self.dss.Loads.kvar()
+            ratio = self._rated_to_base_ratio(
+                bus, self.dss.Loads.kV(), self.dss.Loads.IsDelta()
+            )
+            kw *= ratio**cvr_p
+            kvar *= ratio**cvr_q
+            row.update(
+                _kw=abs(kw),
+                _kvar=abs(kvar),
+                _cvr_p_kw=cvr_p * abs(kw),
+                _cvr_q_kvar=cvr_q * abs(kvar),
+            )
+            bus_loads.setdefault(bus, []).append((kw, kvar, shape))
 
-            if bus_name in self.secondary_buses:
-                # ---- Secondary (triplex) load ----
-                # Filter out neutral node 0, map remaining to s1/s2
-                nodes = [int(n) for n in connected_phase_secondary if n != "0"]
-                node_to_leg = {1: "s1", 2: "s2"}
-                if sorted(nodes) == [1, 2]:
-                    # 240 V line-to-line load across both legs.
-                    # OpenDSS splits the power across both conductors,
-                    # so sum both entries to get the total load.
-                    each_load["pl_s1s2"] = p_values[:2].sum() * 1000 / s_base
-                    each_load["ql_s1s2"] = q_values[:2].sum() * 1000 / s_base
-                elif len(nodes) == 1 and nodes[0] in node_to_leg:
-                    # 120 V line-to-neutral load on one leg
-                    leg = node_to_leg[nodes[0]]
-                    each_load[f"pl_{leg}"] = p_values[0] * 1000 / s_base
-                    each_load[f"ql_{leg}"] = q_values[0] * 1000 / s_base
+            if bus in self.secondary_buses:
+                hot = sorted(n for n in nodes if n != 0)
+                if hot == [1, 2]:  # 240 V across both legs
+                    row["pl_s1s2"] = kw * scale
+                    row["ql_s1s2"] = kvar * scale
+                elif (
+                    len(hot) == 1 and hot[0] in _SECONDARY_NODE_LEG
+                ):  # 120 V on one leg
+                    leg = _SECONDARY_NODE_LEG[hot[0]]
+                    row[f"pl_{leg}"] = kw * scale
+                    row[f"ql_{leg}"] = kvar * scale
+            elif self.dss.Loads.IsDelta() and len(nodes) >= 2 and 0 not in nodes:
+                # Each line-to-line element becomes line-to-neutral injections (balanced voltage).
+                # OpenDSS uses n_phases elements on consecutive node pairs, wrapping around.
+                n_elements = self.dss.CktElement.NumPhases()
+                s_element = complex(kw, kvar) / n_elements
+                for k in range(n_elements):
+                    i, j = nodes[k], nodes[(k + 1) % len(nodes)]
+                    sign = 1 if (j - i) % 3 == 1 else -1
+                    shift = np.exp(1j * sign * np.pi / 6) / np.sqrt(3)
+                    for node, s in (
+                        (i, s_element * shift.conjugate()),
+                        (j, s_element * shift),
+                    ):
+                        row[f"pl_{'abc'[node - 1]}"] += s.real * scale
+                        row[f"ql_{'abc'[node - 1]}"] += s.imag * scale
             else:
-                # ---- Primary load (existing logic) ----
-                phases = "abc"
-                if len(connected_phase_secondary) > 0:
-                    phases = "".join(
-                        "abc"[int(n) - 1] for n in connected_phase_secondary
-                    )
-                for phase_index, ph in enumerate(phases):
-                    each_load[f"pl_{ph}"] = p_values[phase_index] * 1000 / s_base
-                    each_load[f"ql_{ph}"] = q_values[phase_index] * 1000 / s_base
+                phases = "".join("abc"[n - 1] for n in nodes) if nodes else "abc"
+                for ph in phases:
+                    row[f"pl_{ph}"] = kw / len(phases) * scale
+                    row[f"ql_{ph}"] = kvar / len(phases) * scale
 
-            load_data.append(each_load)
-            loads_flag = self.dss.Loads.Next()
-        load_df = pd.DataFrame(load_data)
-        load_df = load_df.groupby("id").agg(
-            {
-                "id": "first",
-                "pl_a": "sum",
-                "ql_a": "sum",
-                "pl_b": "sum",
-                "ql_b": "sum",
-                "pl_c": "sum",
-                "ql_c": "sum",
-                "pl_s1": "sum",
-                "ql_s1": "sum",
-                "pl_s2": "sum",
-                "ql_s2": "sum",
-                "pl_s1s2": "sum",
-                "ql_s1s2": "sum",
-                "cvr_p": "sum",
-                "cvr_q": "sum",
-            }
+            rows.append(row)
+            flag = self.dss.Loads.Next()
+
+        columns = ["id", *_LOAD_COLUMNS, "cvr_p", "cvr_q"]
+        if not rows:
+            return pd.DataFrame(columns=[*columns, "load_shape"])
+        load_df = pd.DataFrame(rows).groupby("id", as_index=False).sum()
+        # Several loads on one bus: CVR exponents are the kW/kvar-weighted average.
+        load_df["cvr_p"] = (load_df["_cvr_p_kw"] / load_df["_kw"]).fillna(0)
+        load_df["cvr_q"] = (load_df["_cvr_q_kvar"] / load_df["_kvar"]).fillna(0)
+        load_df = load_df[columns]
+        shape_of_bus = self._link_load_shapes(bus_loads)
+        load_df["load_shape"] = load_df["id"].map(
+            {self.bus_names_to_index_map[b]: s for b, s in shape_of_bus.items()}
         )
-        load_df = load_df.fillna(0)
-        return load_df.reset_index(drop=True)
+        return load_df.fillna({c: 0 for c in columns})
+
+    # ------------------------------------------------------------------
+    # Output / write-back
+    # ------------------------------------------------------------------
 
     def to_csv(self, dir_name: Optional[str] = None, overwrite: bool = True) -> None:
-        if dir_name is None:
-            dir_name = "testfiles"
+        out = Path(dir_name or "testfiles")
+        out.mkdir(parents=True, exist_ok=overwrite)
+        for key in (
+            "branch_data",
+            "bus_data",
+            "cap_data",
+            "gen_data",
+            "bat_data",
+            "reg_data",
+            "schedules",
+        ):
+            getattr(self, key).to_csv(out / f"{key}.csv", index=False)
 
-        Path(dir_name).mkdir(parents=True, exist_ok=overwrite)
-        self.branch_data.to_csv(f"{dir_name}/branch_data.csv", index=False)
-        self.bus_data.to_csv(f"{dir_name}/bus_data.csv", index=False)
-        self.cap_data.to_csv(f"{dir_name}/cap_data.csv", index=False)
-        self.gen_data.to_csv(f"{dir_name}/gen_data.csv", index=False)
-        self.reg_data.to_csv(f"{dir_name}/reg_data.csv", index=False)
-
-    def update_gen_p(self, p: pd.DataFrame):
+    def _update_gens(
+        self, values: pd.DataFrame, setter: Callable[[float], None]
+    ) -> None:
+        """Write per-phase pu values (indexed by bus id) back into the generators."""
         flag = self.dss.Generators.First()
         while flag:
-            bus_phases = np.array(
-                self.dss.CktElement.BusNames()[0].split(".")[1:]
-            ).astype(int)
-            n_phases = len(bus_phases)
-            if len(bus_phases) == 0 or len(bus_phases) >= 3:
-                n_phases = 3
-            active_phases = np.array([0, 1, 2])
-            if n_phases < 3:
-                active_phases = bus_phases - 1
-            phase_columns = ["abc"[ph_idx] for ph_idx in active_phases]
-            bus = self.dss.Generators.Bus1().split(".")[0]
-            bus_id = self.bus_names_to_index_map[bus]
-            kw = p.loc[bus_id, phase_columns].sum() * self.s_base / 1000
-            self.dss.Generators.kW(kw)
+            nodes = np.array(self.dss.CktElement.BusNames()[0].split(".")[1:]).astype(
+                int
+            )
+            active = nodes - 1 if 0 < len(nodes) < 3 else np.array([0, 1, 2])
+            bus_id = self.bus_names_to_index_map[
+                self._bus_of(self.dss.Generators.Bus1())
+            ]
+            total = values.loc[bus_id, ["abc"[k] for k in active]].sum()
+            setter(total * self.s_base / 1000)
             flag = self.dss.Generators.Next()
 
-    def update_gen_q(self, q: pd.DataFrame):
-        flag = self.dss.Generators.First()
-        while flag:
-            bus_phases = np.array(
-                self.dss.CktElement.BusNames()[0].split(".")[1:]
-            ).astype(int)
-            n_phases = len(bus_phases)
-            if len(bus_phases) == 0 or len(bus_phases) >= 3:
-                n_phases = 3
-            active_phases = np.array([0, 1, 2])
-            if n_phases < 3:
-                active_phases = bus_phases - 1
-            phase_columns = ["abc"[ph_idx] for ph_idx in active_phases]
-            bus = self.dss.Generators.Bus1().split(".")[0]
-            bus_id = self.bus_names_to_index_map[bus]
-            kvar = q.loc[bus_id, phase_columns].sum() * self.s_base / 1000
-            self.dss.Generators.kvar(kvar)
-            flag = self.dss.Generators.Next()
+    def update_gen_p(self, p: pd.DataFrame) -> None:
+        self._update_gens(p, self.dss.Generators.kW)
+
+    def update_gen_q(self, q: pd.DataFrame) -> None:
+        self._update_gens(q, self.dss.Generators.kvar)
+
+    # ------------------------------------------------------------------
+    # PowerFlowResult export
+    # ------------------------------------------------------------------
+
+    def get_power_flow_result(
+        self, *, t: int = 0, case=None, solve: bool = False
+    ) -> "PowerFlowResult":
+        """Format the current OpenDSS snapshot as a ``PowerFlowResult``.
+
+        Parameters
+        ----------
+        t : time label assigned to every row (does not advance the simulation).
+        case : optional Case object attached to the result.
+        solve : call ``Solution.Solve()`` first instead of using the existing solution.
+
+        Notes
+        -----
+        * Branch powers/currents are measured at the receiving terminal, positive
+          downstream. Center-tap flows are measured on the two secondary windings.
+        * Secondary voltage angles follow the FBS convention
+          (s1 = V1 - Vn, s2 = Vn - V2); current angles keep physical references.
+        * Device powers are the actual solved terminal powers.
+        * Explicit non-ground neutral conductors are not supported.
+        """
+        from distopf.results import PowerFlowResult
+
+        neutral_nodes = self._discover_neutral_nodes()
+        phases = _PHASE_ORDER
+        phase_index = {ph: k for k, ph in enumerate(phases)}
+        node_columns = ["id", "name", "t", *phases]
+        branch_columns = ["fb", "tb", "from_name", "to_name", "t", *phases]
+
+        elapsed = None
+        if solve:
+            start = time.perf_counter()
+            self.dss.Solution.Solve()
+            elapsed = time.perf_counter() - start
+
+        canonical_names = {str(n).lower(): n for n in self.bus_names}
+        secondary_names = {str(n).lower() for n in self.secondary_buses}
+        center_tap_names = {str(n).lower() for n in self.center_taps}
+
+        def canonical_bus(spec) -> str:
+            raw = self._bus_of(str(spec)).lower()
+            if raw not in canonical_names:
+                raise ValueError(
+                    f"Bus {raw!r} is not in the converter topology. "
+                    "Refresh or reconstruct the converter after topology changes."
+                )
+            return canonical_names[raw]
+
+        def phase_for_node(bus_name: str, node) -> Optional[str]:
+            node, key = int(node), bus_name.lower()
+            if node == 0 or node in neutral_nodes.get(key, set()):
+                return None
+            mapping = (
+                _SECONDARY_NODE_LEG if key in secondary_names else _PRIMARY_NODE_PHASE
+            )
+            if node not in mapping:
+                raise ValueError(
+                    f"Bus {bus_name!r} contains node {node}, which is neither a "
+                    "supported phase node nor an automatically identified "
+                    "wye-transformer neutral."
+                )
+            return mapping[node]
+
+        def complex_values(values) -> np.ndarray:
+            arr = np.asarray(values, dtype=float).reshape(-1, 2)
+            return arr[:, 0] + 1j * arr[:, 1]
+
+        def terminal_arrays():
+            """(nodes, currents, powers), each shaped (terminals, conductors)."""
+            n_cond = int(self.dss.CktElement.NumConductors())
+            n_term = int(self.dss.CktElement.NumTerminals())
+            shape = (n_term, n_cond)
+            nodes = np.asarray(self.dss.CktElement.NodeOrder(), dtype=int).reshape(
+                shape
+            )
+            currents = complex_values(self.dss.CktElement.Currents()).reshape(shape)
+            powers = complex_values(self.dss.CktElement.Powers()).reshape(
+                shape
+            )  # kW + j kvar
+            return nodes, currents, powers
+
+        def blank() -> np.ndarray:
+            return np.full(len(phases), complex(np.nan, np.nan), dtype=complex)
+
+        def accumulate(array: np.ndarray, phase: str, value: complex) -> None:
+            k = phase_index[phase]
+            if np.isnan(array[k].real):
+                array[k] = 0.0j
+            array[k] += value
+
+        def component_row(values: np.ndarray, component: Callable) -> dict:
+            return {
+                ph: np.nan if np.isnan(v.real) else float(component(v))
+                for ph, v in zip(phases, values)
+            }
+
+        def node_frame(values_by_bus: dict, component: Callable) -> pd.DataFrame:
+            rows = [
+                {
+                    "id": int(self.bus_names_to_index_map[bus]),
+                    "name": bus,
+                    "t": t,
+                    **component_row(values, component),
+                }
+                for bus, values in values_by_bus.items()
+            ]
+            return (
+                pd.DataFrame(rows, columns=node_columns)
+                .sort_values("id")
+                .reset_index(drop=True)
+            )
+
+        # ---- Bus voltages ------------------------------------------------
+        bus_voltages: dict[str, np.ndarray] = {}
+        bus_connected: dict[str, list[str]] = {}
+
+        for bus_name in self.bus_names:
+            self.dss.Circuit.SetActiveBus(bus_name)
+            base = float(self._nominal_voltage_bases[bus_name])
+            if not np.isfinite(base) or base <= 0:
+                raise ValueError(f"Invalid voltage base for bus {bus_name!r}")
+
+            values, connected = blank(), []
+            for node, voltage in zip(
+                self.dss.Bus.Nodes(), complex_values(self.dss.Bus.Voltages())
+            ):
+                phase = phase_for_node(bus_name, node)
+                if phase is None:
+                    continue
+                if phase == "s2":  # OpenDSS gives V2 - Vg; FBS stores the negative
+                    voltage = -voltage
+                values[phase_index[phase]] = voltage / base
+                connected.append(phase)
+            bus_voltages[bus_name] = values
+            bus_connected[bus_name] = connected
+
+        voltages = node_frame(bus_voltages, abs)
+        voltage_angles = node_frame(bus_voltages, lambda v: np.angle(v, deg=True))
+
+        # ---- Branch receiving-end powers and downstream currents --------
+        branch_values: dict[tuple[str, str], dict[str, np.ndarray]] = {}
+        # Capture names first: activating elements changes the DSS selection.
+        element_names = list(self.dss.Circuit.AllElementNames())
+
+        for full_name in element_names:
+            etype, _, ename = full_name.partition(".")
+            etype = etype.lower()
+            if etype not in _BRANCH_TYPES:
+                continue
+
+            self.dss.Circuit.SetActiveElement(full_name)
+            specs = list(self.dss.CktElement.BusNames())
+            n_term = int(self.dss.CktElement.NumTerminals())
+            if not self.dss.CktElement.Enabled() or self._is_open(n_term):
+                continue
+
+            b1, b2 = canonical_bus(specs[0]), canonical_bus(specs[1])
+            fb_name, tb_name = self._orient_edge(b1, b2)
+
+            if etype == "transformer" and ename.lower() in center_tap_names:
+                if n_term != 3:
+                    raise ValueError(
+                        f"{full_name}: expected three transformer terminals"
+                    )
+                if (fb_name, tb_name) != (b1, b2):
+                    raise ValueError(
+                        f"{full_name}: center-tap transformer must be oriented primary to secondary"
+                    )
+                if canonical_bus(specs[2]) != tb_name:
+                    raise ValueError(
+                        f"{full_name}: secondary windings do not share a bus"
+                    )
+                receiving_terminals = [1, 2]
+            else:
+                if n_term != 2:
+                    raise ValueError(
+                        f"{full_name}: unsupported {n_term}-terminal branch"
+                    )
+                receiving_terminals = [0 if b1 == tb_name else 1]
+
+            nodes, term_currents, term_powers = terminal_arrays()
+            entry = branch_values.setdefault(
+                (fb_name, tb_name), {"power": blank(), "current": blank()}
+            )
+            current_base = self.s_base / float(self._nominal_voltage_bases[tb_name])
+
+            for terminal in receiving_terminals:
+                for conductor, node in enumerate(nodes[terminal]):
+                    phase = phase_for_node(tb_name, node)
+                    if phase is None:
+                        continue
+                    # DSS values enter the element; negate for downstream flow.
+                    accumulate(
+                        entry["current"],
+                        phase,
+                        -term_currents[terminal, conductor] / current_base,
+                    )
+                    accumulate(
+                        entry["power"],
+                        phase,
+                        -term_powers[terminal, conductor] * 1000.0 / self.s_base,
+                    )
+
+        def branch_frame(quantity: str, component: Callable) -> pd.DataFrame:
+            rows = [
+                {
+                    "fb": int(self.bus_names_to_index_map[fb]),
+                    "tb": int(self.bus_names_to_index_map[tb]),
+                    "from_name": fb,
+                    "to_name": tb,
+                    "t": t,
+                    **component_row(entry[quantity], component),
+                }
+                for (fb, tb), entry in branch_values.items()
+            ]
+            return (
+                pd.DataFrame(rows, columns=branch_columns)
+                .sort_values(["tb", "fb"])
+                .reset_index(drop=True)
+            )
+
+        # ---- Actual solved device powers, aggregated by bus -------------
+        device_values: dict[str, dict[str, np.ndarray]] = {
+            k: {} for k in ("load", "generation", "battery", "capacitor")
+        }
+        for bus_name, connected in bus_connected.items():  # every bus appears in loads
+            values = blank()
+            for ph in connected:
+                values[phase_index[ph]] = 0.0j
+            device_values["load"][bus_name] = values
+
+        device_categories = {
+            "load": ("load", 1.0),
+            "generator": ("generation", -1.0),
+            "pvsystem": ("generation", -1.0),
+            "storage": ("battery", -1.0),
+            "capacitor": ("capacitor", -1.0),
+        }
+        for full_name in element_names:
+            etype = full_name.partition(".")[0].lower()
+            if etype not in device_categories:
+                continue
+            self.dss.Circuit.SetActiveElement(full_name)
+            if not self.dss.CktElement.Enabled():
+                continue
+
+            category, sign = device_categories[etype]
+            bus_name = canonical_bus(self.dss.CktElement.BusNames()[0])
+            nodes, _, powers = terminal_arrays()
+            # Only shunt devices (extra terminals, if any, grounded) are supported.
+            if nodes.shape[0] > 1 and np.any(nodes[1:] != 0):
+                raise ValueError(
+                    f"{full_name}: non-ground additional terminals are not "
+                    "supported by the bus-injection result formatter"
+                )
+
+            values = device_values[category].setdefault(bus_name, blank())
+            for conductor, node in enumerate(nodes[0]):
+                phase = phase_for_node(bus_name, node)
+                if phase is not None:
+                    accumulate(
+                        values,
+                        phase,
+                        sign * powers[0, conductor] * 1000.0 / self.s_base,
+                    )
+
+        def device_frame(category: str, component: Callable) -> pd.DataFrame:
+            return node_frame(device_values[category], component)
+
+        converged = bool(self.dss.Solution.Converged())
+        status = "converged" if converged else "not_converged"
+        real, imag = (lambda v: v.real), (lambda v: v.imag)
+
+        return PowerFlowResult(
+            voltages=voltages,
+            voltage_angles=voltage_angles,
+            active_power_flows=branch_frame("power", real),
+            reactive_power_flows=branch_frame("power", imag),
+            currents=branch_frame("current", abs),
+            current_angles=branch_frame(
+                "current", lambda v: np.angle(v, deg=True) % 360.0
+            ),
+            active_power_generation=device_frame("generation", real),
+            reactive_power_generation=device_frame("generation", imag),
+            active_power_loads=device_frame("load", real),
+            reactive_power_loads=device_frame("load", imag),
+            battery_active_power=device_frame("battery", real),
+            battery_reactive_power=device_frame("battery", imag),
+            capacitor_reactive_power=device_frame("capacitor", imag),
+            converged=converged,
+            iterations=int(self.dss.Solution.Iterations()),
+            solver_status=status,
+            termination_condition=status,
+            solve_time=elapsed,
+            solver="opendss",
+            backend="opendss",
+            result_type="pf",
+            case_name=Path(self.dssfile).stem,
+            case=case,
+            metadata={
+                "t": t,
+                "branch_power_side": "receiving",
+                "branch_current_side": "receiving",
+                "branch_current_direction": "downstream",
+                "center_tap_flow_side": "secondary_receiving",
+                "secondary_voltage_reference": {
+                    "s1": "V1 - Vneutral",
+                    "s2": "Vneutral - V2",
+                },
+                "device_powers": "actual_solved_terminal_powers",
+                "generation_sign": "positive_injection",
+                "battery_sign": "positive_injection",
+                "capacitor_sign": "positive_injection",
+                "load_sign": "positive_consumption",
+                "parallel_branches": "powers and complex currents aggregated by fb/tb",
+                "voltage_bases": "converter_nominal_voltage_bases",
+                "explicit_neutral_nodes": {
+                    bus: sorted(nodes) for bus, nodes in neutral_nodes.items()
+                },
+                "neutral_conductors_in_phase_tables": "omitted",
+                "voltage_reference": "phase_to_ground; secondary s2 sign reversed",
+            },
+        )
+
+
+if __name__ == "__main__":
+    converter = DSSToCSVConverter(
+        r"C:\Users\gray570\Documents\git\distopf\src\distopf\cases\dss\minimal_triplex\minimal_triplex.dss"
+    )
+    converter.to_csv(
+        r"C:\Users\gray570\Documents\git\distopf\src\distopf\cases\csv\minimal_triplex_corrected"
+    )
+    print(
+        converter.branch_data[
+            [
+                "name",
+                "v_ln_base",
+                "z_base",
+                "r_aa",
+                "x_aa",
+                "r_s1s1",
+                "x_s1s1",
+                "r_s2s2",
+                "x_s2s2",
+                "r_s1s2",
+                "x_s1s2",
+            ]
+        ]
+    )
+    print(converter.v_solved.describe())

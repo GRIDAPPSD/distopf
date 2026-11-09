@@ -40,7 +40,12 @@ logger.addHandler(_logging.NullHandler())
 from distopf.cases import CASES_DIR
 from distopf.api import Case, create_case, replay
 from distopf.results import PowerFlowResult
-from distopf.fbs import run_fbs_with_opf_setpoints
+from distopf.fbs import (
+    replay_exact_power_flow,
+    replay_exact_power_flow_from_opf_result,
+    run_fbs_from_saved_results,
+    run_fbs_with_opf_setpoints,
+)
 
 # =============================================================================
 # Matrix models and solvers - loaded eagerly as they're commonly used
@@ -85,6 +90,7 @@ from distopf.plot import (
 from distopf.wrappers.matrix_wrapper import create_model, auto_solve
 from distopf.fbs import fbs_solve, FBS
 
+from distopf.utils.results_comparison import compare_voltage_results, compare_voltage_tables
 from distopf.utils.input_handlers import (
     get,
     handle_bus_input,
@@ -117,6 +123,7 @@ CONTROL_PQ = "PQ"
 _lazy_imports = {
     "DSSToCSVConverter": "distopf.dss_importer.dss_to_csv_converter",
     "pyomo_models": "distopf.pyomo_models",
+    "cvxpy_models": "distopf.cvxpy_models",
 }
 
 def __getattr__(name: str):
@@ -124,7 +131,7 @@ def __getattr__(name: str):
     if name in _lazy_imports:
         import importlib
         module_path = _lazy_imports[name]
-        if name == "pyomo_models":
+        if name in ("pyomo_models", "cvxpy_models"):
             return importlib.import_module(module_path)
         else:
             module = importlib.import_module(module_path)
@@ -141,6 +148,9 @@ __all__ = [
     "replay",
     # Result containers
     "PowerFlowResult",
+    "replay_exact_power_flow",
+    "replay_exact_power_flow_from_opf_result",
+    "run_fbs_from_saved_results",
     "run_fbs_with_opf_setpoints",
     # Power flow solver
     "fbs_solve",
@@ -164,6 +174,8 @@ __all__ = [
     "cp_obj_curtail",
     "cp_obj_curtail_lp",
     "cp_obj_none",
+    "compare_voltage_results",
+    "compare_voltage_tables",
     "plot_network",
     "plot_voltages",
     "plot_power_flows",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from distopf.wrappers.base import Wrapper
 
@@ -52,6 +53,9 @@ class MatrixBessWrapper(Wrapper):
             cvxpy_solve,
         )
         from distopf.results import PowerFlowResult
+        from distopf.utils.input_handlers import require_legacy_device_schema
+
+        require_legacy_device_schema(self.case, "the matrix_bess wrapper")
 
         # Pop model_type injected by formulation= routing (not a solver kwarg)
         model_type = kwargs.pop("model_type", None)
@@ -98,18 +102,28 @@ class MatrixBessWrapper(Wrapper):
         # Resolve objective function
         obj_func = self._resolve_objective(objective)
 
-        # Solve
+        start_time = perf_counter()
         self.result = cvxpy_solve(self.model, obj_func, **kwargs)
+        solve_time = perf_counter() - start_time
 
         if raw_result:
             return self.result
 
+        u_caps = (
+            self.model.get_uc(self.result.x) if hasattr(self.model, "get_uc") else None
+        )
+        z_caps = (
+            self.model.get_zc(self.result.x) if hasattr(self.model, "get_zc") else None
+        )
         return PowerFlowResult(
             voltages=self.get_voltages(),
             active_power_flows=self.get_p_flows(),
             reactive_power_flows=self.get_q_flows(),
             active_power_generation=self.get_p_gens(),
             reactive_power_generation=self.get_q_gens(),
+            capacitor_reactive_power=self.get_q_caps(),
+            u_caps=u_caps,
+            z_caps=z_caps,
             battery_active_power=self.get_p_batt(),
             battery_reactive_power=self.get_q_batt(),
             p_charge=self.get_p_charge(),
@@ -122,6 +136,7 @@ class MatrixBessWrapper(Wrapper):
             raw_result=self.result,
             model=self.model,
             case=self.case,
+            solve_time=solve_time,
         )
 
     def _resolve_objective(self, objective: Any) -> Any:

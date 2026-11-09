@@ -100,7 +100,7 @@ case = create_case(CASES_DIR / "csv" / "ieee123_30der")
 case = create_case("/path/to/csv/directory")
 
 # With multi-period settings
-case = create_case(CASES_DIR / "csv" / "ieee123_30der_bat", n_steps=24, delta_t=1.0)
+case = create_case(CASES_DIR / "csv" / "ieee123_bat", n_steps=24, delta_t=1.0)
 ```
 
 ### Modify Case Parameters
@@ -243,7 +243,7 @@ all timesteps. To get average per-timestep loss: `result.objective_value / n_ste
 | `ieee34` | IEEE 34-bus feeder | 3 | No | No |
 | `ieee123` | IEEE 123-bus feeder | 3 | No | No |
 | `ieee123_30der` | IEEE 123-bus with 30 DERs | 3 | Yes (30) | No |
-| `ieee123_30der_bat` | IEEE 123-bus with DERs + batteries | 3 | Yes (30) | Yes |
+| `ieee123_bat` | IEEE 123-bus with DERs + batteries | 3 | Yes (5) | Yes |
 | `ieee13_battery` | IEEE 13-bus with battery | 3 | No | Yes |
 | `9500` | IEEE 9500-node feeder | 3 | No | No |
 | `smartds_small` | SmartDS small network | 3 | No | No |
@@ -363,7 +363,7 @@ for backend in backends:
 from distopf import create_case, CASES_DIR
 
 case = create_case(
-    CASES_DIR / "csv" / "ieee123_30der_bat",
+    CASES_DIR / "csv" / "ieee123_bat",
     n_steps=24,
     delta_t=1.0,
 )

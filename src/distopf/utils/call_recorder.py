@@ -5,6 +5,7 @@ captures the exact arguments passed to a method and attaches them to the
 result's ``metadata`` attribute as a JSON-serializable dict structured as
 ``{"call": {...}, "provenance": {...}}``.
 """
+
 from __future__ import annotations
 import functools
 import inspect
@@ -24,6 +25,7 @@ def _get_version() -> str | None:
     """Return the installed distopf package version, or None if unavailable."""
     try:
         from importlib.metadata import version, PackageNotFoundError
+
         try:
             return version("distopf")
         except PackageNotFoundError:
