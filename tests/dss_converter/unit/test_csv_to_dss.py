@@ -122,6 +122,26 @@ def test_run_pf_opendss_matches_fbs():
     assert _voltage_frame_error(case.run_pf().voltages, dss_result.voltages) < 1e-5
 
 
+@pytest.mark.parametrize("case_name", ["ieee123_30der", "minimal_triplex"])
+def test_run_pf_opendss_flows_and_angles_match_fbs(case_name):
+    case = opf.create_case(CASES / case_name)
+    fbs, dss_result = case.run_pf(), case.run_pf(solver="opendss")
+    phases = ["a", "b", "c", "s1", "s2"]
+
+    for field in (
+        "active_power_flows",
+        "reactive_power_flows",
+        "currents",
+        "voltage_angles",
+    ):
+        expected, actual = getattr(fbs, field), getattr(dss_result, field)
+        assert list(actual.columns) == list(expected.columns)
+        both = expected[phases].notna().to_numpy() & actual[phases].notna().to_numpy()
+        error = np.abs(expected[phases].to_numpy() - actual[phases].to_numpy())
+        tolerance = 0.05 if field == "voltage_angles" else 1e-3  # degrees vs per-unit
+        assert np.max(error[both]) < tolerance, field
+
+
 def test_fbs_mpssd_ports_match_opendss():
     case = _mpssd_case()
     fbs = case.run_pf()
@@ -146,3 +166,24 @@ def test_run_pf_unknown_solver():
     case = opf.create_case(CASES / "ieee13")
     with pytest.raises(ValueError, match="Unknown power flow solver"):
         case.run_pf(solver="nope")
+
+
+def test_run_pf_opendss_returns_device_tables_matching_opf():
+    case = opf.create_case(CASES / "ieee123_30der")
+    opf_result = case.run_opf("loss_min")
+    dss_result = case.run_pf(solver="opendss", opf_result=opf_result)
+
+    for field in (
+        "active_power_generation",
+        "reactive_power_generation",
+        "battery_active_power",
+        "battery_reactive_power",
+        "capacitor_reactive_power",
+    ):
+        expected, actual = getattr(opf_result, field), getattr(dss_result, field)
+        assert list(actual.columns) == list(expected.columns), field
+        phases = ["a", "b", "c"]
+        error = np.abs(expected[phases].to_numpy() - actual[phases].to_numpy())
+        assert np.nanmax(error) < 1e-2, field
+    for field in ("active_power_loads", "reactive_power_loads", "u_caps", "tap_ratios"):
+        assert len(getattr(dss_result, field)) > 0, field

@@ -21,6 +21,7 @@ from distopf.pyomo_models.common.device_data import (
 from distopf.pyomo_models.common.registry import DeviceRegistry
 from distopf.pyomo_models.common.injection_providers import MappedInjectionProvider
 from distopf.pyomo_models.common.objectives import substation_cost_objective_rule
+from distopf.pyomo_models.common.power_flow_result import bus_values
 from distopf.pyomo_models.common.results import PyoResult, get_values_tidy
 from distopf.pyomo_models.common.results import get_constraint_duals_pivoted
 from distopf.pyomo_models.common.results import get_values_tidy_3ph
@@ -126,11 +127,9 @@ def test_named_batteries_share_bus_and_preserve_soc(capacitor_model, control, ph
     assert set(result.soc.device_name) == {"bat1", "bat2"}
     assert len(result.soc) == 4
     assert set(result.get_dual("storage").id) == {2}
-    wrapper = PyomoWrapper(case=None)
-    wrapper.result = result
-    assert wrapper._get_bus_values("p_discharge")["value"].tolist() == pytest.approx(
-        [0.2, 0.2]
-    )
+    assert bus_values(result.p_discharge, None, "p_discharge")[
+        "value"
+    ].tolist() == pytest.approx([0.2, 0.2])
 
 
 @pytest.mark.parametrize(
@@ -1057,8 +1056,7 @@ def test_capacity_expansion_builds_and_reports_zone_results():
 
 
 def test_bus_level_device_states_are_weighted_means():
-    wrapper = PyomoWrapper(case=None)
-    wrapper.case = SimpleNamespace(
+    case = SimpleNamespace(
         cap_data=pd.DataFrame(
             {"device_name": ["c1", "c2"], "bus_name": ["7", "7"], "q_a": [0.1, 0.3]}
         ),
@@ -1071,11 +1069,11 @@ def test_bus_level_device_states_are_weighted_means():
         ),
     )
     lead = {"id": [7, 7], "name": ["7", "7"], "t": [0, 0]}
-    wrapper.result = SimpleNamespace(
+    result = SimpleNamespace(
         u_cap=pd.DataFrame({"device_name": ["c1", "c2"], **lead, "a": [1.0, 0.0]}),
         soc=pd.DataFrame({"device_name": ["b1", "b2"], **lead, "value": [0.2, 0.6]}),
         q_cap=pd.DataFrame({"device_name": ["c1", "c2"], **lead, "a": [0.1, 0.0]}),
     )
-    assert wrapper._get_bus_values("u_cap").a.tolist() == pytest.approx([0.25])
-    assert wrapper._get_bus_values("soc").value.tolist() == pytest.approx([0.5])
-    assert wrapper._get_bus_values("q_cap").a.tolist() == pytest.approx([0.1])
+    assert bus_values(result.u_cap, case, "u_cap").a.tolist() == pytest.approx([0.25])
+    assert bus_values(result.soc, case, "soc").value.tolist() == pytest.approx([0.5])
+    assert bus_values(result.q_cap, case, "q_cap").a.tolist() == pytest.approx([0.1])
