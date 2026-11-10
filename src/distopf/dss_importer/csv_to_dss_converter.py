@@ -519,37 +519,316 @@ def csv_to_dss(
     return case_to_dss(create_case(Path(csv_dir)), output_path, t, opf_result)
 
 
+def _complex_pairs(flat) -> np.ndarray:
+    """OpenDSS returns complex arrays as interleaved real, imaginary values."""
+    values = np.asarray(flat, dtype=float)
+    return values[0::2] + 1j * values[1::2]
+
+
+def _element_terminal(element: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Voltage (V), current (A) and power (kVA) of every conductor of ``element``."""
+    from opendssdirect import dss
+
+    dss.Circuit.SetActiveElement(element)
+    return (
+        _complex_pairs(dss.CktElement.Voltages()),
+        _complex_pairs(dss.CktElement.Currents()),
+        _complex_pairs(dss.CktElement.Powers()),
+    )
+
+
+def _branch_values(
+    row: pd.Series, bus_v_base: dict
+) -> dict[str, tuple[complex, complex]]:
+    """Per-unit (power, current) entering each phase of one branch, by phase name.
+
+    Power is taken at terminal 1 (the from side) and current at terminal 2 (the branch
+    current into the to bus), as FBS does. A center-tap transformer is reported like
+    FBS: primary voltage times the s1/s2 secondary load currents, with the s2 power on
+    the minus voltage reference.
+    """
+    s_base = row["s_base"]
+    name = f"{row['name']}_{int(row['fb'])}_{int(row['tb'])}"
+    values = {}
+    if row["type"] == "center_tap_xfmr":
+        v, i, _ = _element_terminal(f"Transformer.{name}")
+        i_base = s_base / bus_v_base[row["tb"]]
+        v_primary = v[0] / bus_v_base[row["fb"]]
+        i_s1, i_s2 = -i[2] / i_base, -i[5] / i_base
+        values["s1"] = (v_primary * np.conj(i_s1), i_s1)
+        values["s2"] = (-v_primary * np.conj(i_s2), i_s2)
+        return values
+
+    if row["type"] == "transformer":
+        elements = [
+            (f"Transformer.{name}_{p}", [p]) for p in "abc" if p in row["phases"]
+        ]
+    else:
+        elements = [(f"Line.{name}", _split_phases(row["phases"]))]
+    i_base = s_base / bus_v_base[row["tb"]]
+    for element, phases in elements:
+        _, i, s = _element_terminal(element)
+        terminal_2 = len(i) // 2
+        for k, phase in enumerate(phases):
+            values[phase] = (s[k] * 1e3 / s_base, -i[terminal_2 + k] / i_base)
+    return values
+
+
+def _solved_bus_rows(bus: pd.DataFrame, t: int) -> tuple[list[dict], list[dict]]:
+    """Per-unit voltage magnitude and angle (degrees) rows of the solved circuit."""
+    from opendssdirect import dss
+
+    magnitudes, angles = [], []
+    secondary = bus["phases"].astype(str).str.contains("s").to_numpy()
+    for (i, name), is_sec in zip(bus[["id", "name"]].values, secondary):
+        mag_row = {"id": i, "name": name, "t": t, **dict.fromkeys(PHASE_NODE, np.nan)}
+        ang_row = dict(mag_row)
+        dss.Circuit.SetActiveBus(str(name))
+        phases = ("s1", "s2") if is_sec else ("a", "b", "c")
+        pu_mag_ang = dss.Bus.puVmagAngle()
+        for node, mag, ang in zip(dss.Bus.Nodes(), pu_mag_ang[0::2], pu_mag_ang[1::2]):
+            if 1 <= node <= len(phases):
+                phase = phases[node - 1]
+                mag_row[phase] = mag
+                # s2 sits on the minus reference (secondary.0.2); FBS reports it flipped.
+                ang_row[phase] = (ang + 360) % 360 - 180 if phase == "s2" else ang
+        magnitudes.append(mag_row)
+        angles.append(ang_row)
+    return magnitudes, angles
+
+
+def _solved_branch_rows(case: Case, t: int) -> dict[str, list[dict]]:
+    """Per-unit branch rows (P, Q, current magnitude, current angle) in the FBS layout."""
+    bus = case.bus_data
+    bus_v_base = dict(zip(bus["id"], bus["v_ln_base"]))
+    bus_name = dict(zip(bus["id"], bus["name"].astype(str)))
+    tables = {"p": [], "q": [], "i_mag": [], "i_ang": []}
+    for _, row in case.branch_data.sort_values("tb", kind="stable").iterrows():
+        lead = {
+            "fb": row["fb"],
+            "tb": row["tb"],
+            "from_name": bus_name[row["fb"]],
+            "to_name": bus_name[row["tb"]],
+            "t": t,
+        }
+        out = {key: {**lead, **dict.fromkeys(PHASE_NODE, np.nan)} for key in tables}
+        for phase, (power, current) in _branch_values(row, bus_v_base).items():
+            out["p"][phase] = power.real
+            out["q"][phase] = power.imag
+            out["i_mag"][phase] = abs(current)
+            out["i_ang"][phase] = np.angle(current, deg=True) % 360
+        for key, table in tables.items():
+            table.append(out[key])
+    return tables
+
+
+def _kva_by_node(element: str) -> dict[int, complex]:
+    """Terminal-1 power (kW + j kvar into the element) at each non-ground node."""
+    from opendssdirect import dss
+
+    _, _, power = _element_terminal(element)
+    n_conductors = dss.CktElement.NumConductors()
+    nodes = dss.CktElement.NodeOrder()[:n_conductors]
+    return {n: p for n, p in zip(nodes, power[:n_conductors]) if n != 0}
+
+
+def _device_row(lead: dict, phases: list[str], values: dict[str, float]) -> dict:
+    """FBS-layout row: NaN for phases the device lacks, 0 for phases without a value."""
+    row = {**lead, **dict.fromkeys(PHASE_NODE, np.nan)}
+    row.update(dict.fromkeys(phases, 0.0))
+    row.update({phase: value + 0.0 for phase, value in values.items()})  # no -0.0
+    return row
+
+
+def _drop_empty_secondary(table: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """Device tables list s1/s2 columns only when the network has secondary devices."""
+    if table is None:
+        return None
+    empty = [p for p in ("s1", "s2") if table[p].isna().all()]
+    return table.drop(columns=empty)
+
+
+def _solved_device_rows(case: Case, t: int) -> dict[str, list[dict]]:
+    """Per-unit generator, load, capacitor and battery rows read from the solved circuit.
+
+    Generation and capacitor/battery injections are positive when injecting power
+    (OpenDSS reports them as negative power into the element).
+    """
+    from opendssdirect import dss
+
+    bus = case.bus_data
+    existing = {name.lower() for name in dss.Circuit.AllElementNames()}
+    kva_base = dict(zip(bus["id"], bus["s_base"] / 1e3))
+    tables = {
+        key: [] for key in ("p_gen", "q_gen", "p_load", "q_load", "q_cap", "u_cap")
+    }
+
+    def element_kva(element: str) -> complex:
+        return sum(_kva_by_node(element).values()) if element.lower() in existing else 0
+
+    for _, gen in case.gen_data.iterrows():
+        phases = _split_phases(gen["phases"])
+        power = {
+            p: -element_kva(f"Generator.{gen['name']}_{p}") / kva_base[gen["id"]]
+            for p in phases
+        }
+        lead = {"id": gen["id"], "name": gen["name"], "t": t}
+        tables["p_gen"].append(
+            _device_row(lead, phases, {p: v.real for p, v in power.items()})
+        )
+        tables["q_gen"].append(
+            _device_row(lead, phases, {p: v.imag for p, v in power.items()})
+        )
+
+    for _, cap in case.cap_data.iterrows():
+        phases = _split_phases(cap["phases"])
+        lead = {"id": cap["id"], "name": cap["name"], "t": t}
+        elements = {p: f"Capacitor.{cap['name']}_{p}" for p in phases}
+        q = {p: -element_kva(e).imag / kva_base[cap["id"]] for p, e in elements.items()}
+        on = {p: float(e.lower() in existing) for p, e in elements.items()}
+        tables["q_cap"].append(_device_row(lead, phases, q))
+        tables["u_cap"].append(_device_row(lead, phases, on))
+
+    for _, row in bus.iterrows():
+        phases = _split_phases(row["phases"])
+        power = dict.fromkeys(phases, 0j)
+        for phase in LOAD_PHASES:
+            element = f"Load.{row['name']}_{phase}"
+            if element.lower() not in existing:
+                continue
+            load = element_kva(element) / kva_base[row["id"]]
+            for target in ("s1", "s2") if phase == "s1s2" else (phase,):
+                power[target] = power.get(target, 0j) + load / (
+                    2 if phase == "s1s2" else 1
+                )
+        lead = {"id": row["id"], "name": row["name"], "t": t}
+        tables["p_load"].append(
+            _device_row(lead, phases, {p: v.real for p, v in power.items()})
+        )
+        tables["q_load"].append(
+            _device_row(lead, phases, {p: v.imag for p, v in power.items()})
+        )
+    return tables
+
+
+def _solved_battery_rows(case: Case, t: int) -> dict[str, list[dict]]:
+    """Per-unit battery P and Q (positive discharging) read from the solved circuit."""
+    from opendssdirect import dss
+
+    tables = {"p_bat": [], "q_bat": []}
+    if case.bat_data is None:
+        return tables
+    existing = {name.lower() for name in dss.Circuit.AllElementNames()}
+    kva_base = dict(zip(case.bus_data["id"], case.bus_data["s_base"] / 1e3))
+    node_phase = {1: "a", 2: "b", 3: "c"}
+    for _, bat in case.bat_data.iterrows():
+        phases = _split_phases(bat.get("phases", "abc"))
+        power = {}
+        if f"storage.{bat['name']}".lower() in existing:
+            kva = _kva_by_node(f"Storage.{bat['name']}")
+            power = {node_phase[n]: -v / kva_base[bat["id"]] for n, v in kva.items()}
+        lead = {"id": bat["id"], "name": bat["name"], "t": t}
+        tables["p_bat"].append(
+            _device_row(lead, phases, {p: v.real for p, v in power.items()})
+        )
+        tables["q_bat"].append(
+            _device_row(lead, phases, {p: v.imag for p, v in power.items()})
+        )
+    return tables
+
+
+def _solved_regulator_rows(case: Case, t: int) -> dict[str, list[dict]]:
+    """Winding-2 tap ratios and tap positions of the regulators in the solved circuit."""
+    from opendssdirect import dss
+
+    tables = {"tap_ratios": [], "reg_taps": []}
+    if case.reg_data is None or not len(case.reg_data):
+        return tables
+    bus_name = dict(zip(case.bus_data["id"], case.bus_data["name"].astype(str)))
+    branch_name = case.branch_data.set_index(["fb", "tb"])["name"]
+    for _, reg in case.reg_data.iterrows():
+        step = (reg["ratio_max"] - reg["ratio_min"]) / reg["num_taps"]
+        lead = {
+            "fb": reg["fb"],
+            "tb": reg["tb"],
+            "from_name": bus_name[reg["fb"]],
+            "to_name": bus_name[reg["tb"]],
+            "t": t,
+        }
+        ratios = {}
+        for phase in _split_phases(reg["phases"]):
+            dss.Transformers.Name(
+                f"{branch_name[(reg['fb'], reg['tb'])]}_{int(reg['fb'])}_{int(reg['tb'])}_{phase}"
+            )
+            dss.Transformers.Wdg(2)
+            ratios[phase] = dss.Transformers.Tap()
+        tables["tap_ratios"].append(_device_row(lead, list(ratios), ratios))
+        taps = {p: round((r - 1) / step) for p, r in ratios.items()}
+        tables["reg_taps"].append(_device_row(lead, list(taps), taps))
+    return tables
+
+
 def run_opendss(case: Case, opf_result: Any = None) -> PowerFlowResult:
     """Solve each time step of ``case`` (or each period of ``opf_result``) in OpenDSS.
 
-    Returns per-unit voltage magnitudes in the FBS ``voltages`` layout.
+    Everything is read back from the solved circuit, in per-unit and the FBS result
+    layout: bus voltage magnitudes and angles, branch active/reactive power flows (from
+    side) and currents, generator, load, capacitor and battery power, capacitor on/off
+    states and regulator tap ratios and positions. MPSSD port setpoints are not
+    returned.
     """
     from opendssdirect import dss
 
     frames = _opf_frames(opf_result)
     times = _replay_times(case, [f for n, f in frames.items() if n != "voltages"])
-    bus = case.bus_data
-    secondary = bus["phases"].astype(str).str.contains("s").to_numpy()
-    rows, converged = [], True
+    rows: dict[str, list[dict]] = {}
+    converged = True
     with tempfile.TemporaryDirectory() as tmp:
         for t in times:
             path = case_to_dss(case, Path(tmp) / f"case_{t}.dss", t, opf_result)
             dss.Text.Command("Clear")
             dss.Text.Command(f"Redirect {path}")
             converged = converged and bool(dss.Solution.Converged())
-            for (i, name), is_sec in zip(bus[["id", "name"]].values, secondary):
-                row = {"id": i, "name": name, "t": t}
-                row.update({p: np.nan for p in PHASE_NODE})
-                dss.Circuit.SetActiveBus(str(name))
-                nodes = dss.Bus.Nodes()
-                vmag = dss.Bus.puVmagAngle()[0::2]
-                phases = ("s1", "s2") if is_sec else ("a", "b", "c")
-                for node, value in zip(nodes, vmag):
-                    if 1 <= node <= len(phases):
-                        row[phases[node - 1]] = value
-                rows.append(row)
+            magnitudes, angles = _solved_bus_rows(case.bus_data, t)
+            step = {
+                "voltages": magnitudes,
+                "voltage_angles": angles,
+                **_solved_branch_rows(case, t),
+                **_solved_device_rows(case, t),
+                **_solved_battery_rows(case, t),
+                **_solved_regulator_rows(case, t),
+            }
+            for name, step_rows in step.items():
+                rows.setdefault(name, []).extend(step_rows)
+    tables = {
+        name: pd.DataFrame(table) if table else None for name, table in rows.items()
+    }
+    for name in tables.keys() - {
+        "voltages",
+        "voltage_angles",
+        "p",
+        "q",
+        "i_mag",
+        "i_ang",
+    }:
+        tables[name] = _drop_empty_secondary(tables[name])
     return PowerFlowResult(
-        voltages=pd.DataFrame(rows),
+        voltages=tables["voltages"],
+        voltage_angles=tables["voltage_angles"],
+        active_power_flows=tables["p"],
+        reactive_power_flows=tables["q"],
+        currents=tables["i_mag"],
+        current_angles=tables["i_ang"],
+        active_power_generation=tables["p_gen"],
+        reactive_power_generation=tables["q_gen"],
+        active_power_loads=tables["p_load"],
+        reactive_power_loads=tables["q_load"],
+        capacitor_reactive_power=tables["q_cap"],
+        u_caps=tables["u_cap"],
+        battery_active_power=tables.get("p_bat"),
+        battery_reactive_power=tables.get("q_bat"),
+        tap_ratios=tables.get("tap_ratios"),
+        reg_taps=tables.get("reg_taps"),
         solver="opendss",
         backend="opendss",
         result_type="opendss",

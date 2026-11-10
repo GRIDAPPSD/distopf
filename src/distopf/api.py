@@ -402,7 +402,8 @@ class Case:
         solver : {"fbs", "opendss"}, default "fbs"
             Power flow solver. ``"opendss"`` writes the case with
             :func:`distopf.dss_importer.csv_to_dss_converter.case_to_dss` and solves
-            it in OpenDSS (needs ``opendssdirect``); it returns voltages only.
+            it in OpenDSS (needs ``opendssdirect``); it returns the full result read from the solved
+            circuit (voltages, angles, branch flows and currents, device power, taps).
         opf_result : PowerFlowResult, optional
             OPF result whose generator, battery, MPSSD, OUT-bus load, regulator
             and capacitor decisions replace the case values (see

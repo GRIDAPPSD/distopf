@@ -13,6 +13,11 @@ import pandas as pd
 from distopf.wrappers.base import Wrapper
 from distopf.pyomo_models.common import objectives
 from distopf.pyomo_models.common.data import parse_phases
+from distopf.pyomo_models.common.power_flow_result import (
+    bus_values,
+    currents_from_l_flow,
+    to_power_flow_result,
+)
 
 if TYPE_CHECKING:
     from distopf.results import PowerFlowResult
@@ -297,92 +302,11 @@ class PyomoWrapper(Wrapper):
 
     def _build_result(self, solver_name: str):
         """Build PowerFlowResult from solved pyomo model."""
-        from distopf.results import PowerFlowResult
-
-        q_caps = self.get_q_caps() if hasattr(self.result, "q_cap") else None
-        reg_taps = getattr(self.result, "reg_taps", None)
-        tap_ratios = None
-        if reg_taps is not None:
-            tap_ratios = reg_taps.copy()
-            reg = self.case.reg_data.set_index(["fb", "tb"])
-            step = (reg["ratio_max"] - reg["ratio_min"]) / reg["num_taps"]
-            step = step.reindex(pd.MultiIndex.from_frame(reg_taps[["fb", "tb"]]))
-            for ph in "abc":
-                tap_ratios[ph] = 1 + step.to_numpy() * reg_taps[ph]
-        u_caps = (
-            self._get_bus_values("u_cap") if hasattr(self.result, "u_cap") else None
-        )
-        z_caps = (
-            self._get_bus_values("z_cap") if hasattr(self.result, "z_cap") else None
-        )
-        p_loads = getattr(self.result, "p_load", None)
-        q_loads = getattr(self.result, "q_load", None)
-        p_bats = (
-            self._get_bus_values("p_bat") if hasattr(self.result, "p_bat") else None
-        )
-        q_bats = (
-            self._get_bus_values("q_bat") if hasattr(self.result, "q_bat") else None
-        )
-        p_charge = (
-            self._get_bus_values("p_charge")
-            if hasattr(self.result, "p_charge")
-            else None
-        )
-        p_discharge = (
-            self._get_bus_values("p_discharge")
-            if hasattr(self.result, "p_discharge")
-            else None
-        )
-        soc = self._get_bus_values("soc") if hasattr(self.result, "soc") else None
-
-        objective_value = getattr(self.result, "objective_value", None)
-        solve_time = getattr(self.result, "solve_time", None)
-        log = getattr(self.result, "log", "")
-        # Extract duals if available on the raw result
-        dual_power_balance_p = getattr(self.result, "dual_power_balance_p", None)
-        dual_power_balance_q = getattr(self.result, "dual_power_balance_q", None)
-        dual_voltage_drop = getattr(self.result, "dual_voltage_drop", None)
-        dual_voltage_limits_lower = getattr(
-            self.result, "dual_voltage_limits_lower", None
-        )
-        dual_voltage_limits_upper = getattr(
-            self.result, "dual_voltage_limits_upper", None
-        )
-
-        return PowerFlowResult(
-            voltages=self.get_voltages(),
-            active_power_flows=self.get_p_flows(),
-            reactive_power_flows=self.get_q_flows(),
-            currents=self.get_currents(),
-            current_angles=getattr(self, "_initial_current_angles", None),
-            active_power_generation=self.get_p_gens(),
-            reactive_power_generation=self.get_q_gens(),
-            active_power_loads=p_loads,
-            reactive_power_loads=q_loads,
-            capacitor_reactive_power=q_caps,
-            tap_ratios=tap_ratios,
-            reg_taps=reg_taps,
-            u_caps=u_caps,
-            z_caps=z_caps,
-            battery_active_power=p_bats,
-            battery_reactive_power=q_bats,
-            p_charge=p_charge,
-            p_discharge=p_discharge,
-            soc=soc,
-            dual_power_balance_p=dual_power_balance_p,
-            dual_power_balance_q=dual_power_balance_q,
-            dual_voltage_drop=dual_voltage_drop,
-            dual_voltage_limits_lower=dual_voltage_limits_lower,
-            dual_voltage_limits_upper=dual_voltage_limits_upper,
-            objective_value=objective_value,
-            converged=True,
+        return to_power_flow_result(
+            self.result,
+            self.case,
             solver=solver_name,
-            solve_time=solve_time,
-            result_type="opf",
-            raw_result=self.result,
-            model=self.model,
-            case=self.case,
-            log=log,
+            current_angles=getattr(self, "_initial_current_angles", None),
         )
 
     @staticmethod
@@ -686,76 +610,20 @@ class PyomoWrapper(Wrapper):
         return self.result.q_flow
 
     def get_currents(self) -> Optional[pd.DataFrame]:
-        """Branch current magnitudes ``sqrt(L)`` from the squared-current variable.
-
-        Returns None when the model has no ``l_flow`` variable (e.g. LinDistFlow).
-        """
-        l_flow = getattr(self.result, "l_flow", None)
-        if l_flow is None:
-            return None
-        diagonal = {"aa": "a", "bb": "b", "cc": "c", "s1s1": "s1", "s2s2": "s2"}
-        id_cols = [
-            col for col in ("fb", "tb", "from_name", "to_name", "t") if col in l_flow
-        ]
-        currents = l_flow[id_cols].copy()
-        for pair, phase in diagonal.items():
-            if pair in l_flow:
-                currents[phase] = np.sqrt(l_flow[pair].clip(lower=0.0))
-        return currents
+        """Branch current magnitudes, or None for models without ``l_flow``."""
+        return currents_from_l_flow(getattr(self.result, "l_flow", None))
 
     def get_p_gens(self) -> pd.DataFrame:
         """Extract active power generation results from solved model."""
-        return self._get_bus_values("p_gen")
+        return bus_values(self.result.p_gen, self.case, "p_gen")
 
     def get_q_gens(self) -> pd.DataFrame:
         """Extract reactive power generation results from solved model."""
-        return self._get_bus_values("q_gen")
+        return bus_values(self.result.q_gen, self.case, "q_gen")
 
     def get_q_caps(self) -> pd.DataFrame:
         """Extract bus-level capacitor reactive power."""
-        return self._get_bus_values("q_cap")
-
-    def _get_bus_values(self, variable: str) -> pd.DataFrame:
-        """Aggregate device-level values to the bus-level result contract.
-
-        Powers are summed. States (``soc``, ``u_cap``, ``z_cap``) are averaged,
-        weighted by battery energy capacity or capacitor rating, so that a bus
-        state times the bus total matches the sum over its devices.
-        """
-        frame = getattr(self.result, variable)
-        if "device_name" not in frame.columns:
-            return frame
-        keys = ["id", "name", "t"]
-        phases = [
-            phase for phase in ("a", "b", "c", "s1", "s2", "value") if phase in frame
-        ]
-        if variable not in ("soc", "u_cap", "z_cap"):
-            return frame.groupby(keys, as_index=False)[phases].sum(min_count=1)
-        weights = self._device_state_weights(variable, frame, phases)
-        weights = weights.where(frame[phases].notna())
-        numerator = (frame[phases] * weights).groupby([frame[k] for k in keys]).sum()
-        denominator = weights.groupby([frame[k] for k in keys]).sum()
-        return (numerator / denominator).reset_index()
-
-    def _device_state_weights(
-        self, variable: str, frame: pd.DataFrame, phases: list[str]
-    ) -> pd.DataFrame:
-        """Per-row weights for averaging device states over a bus.
-
-        Uses ``energy_capacity`` for batteries and ``q_{phase}`` for capacitors.
-        Legacy tables (no ``device_name``) have one device per bus, so equal
-        weights are used.
-        """
-        table = self.case.bat_data if variable == "soc" else self.case.cap_data
-        weights = pd.DataFrame(1.0, index=frame.index, columns=phases)
-        if table is None or "device_name" not in table.columns:
-            return weights
-        devices = table.set_index("device_name")
-        for phase in phases:
-            column = "energy_capacity" if variable == "soc" else f"q_{phase}"
-            if column in devices.columns:
-                weights[phase] = frame["device_name"].map(devices[column]).abs()
-        return weights
+        return bus_values(self.result.q_cap, self.case, "q_cap")
 
     def get_all_results(self) -> dict[str, pd.DataFrame]:
         """Get all variable results from the solved model.
