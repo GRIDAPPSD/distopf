@@ -119,10 +119,22 @@ class TestLoads:
             (0.1 + 0.025, 0.05 * 0.25 + 0.01)
         )
 
-    def test_shape_names_are_matched_in_lowercase(self, gad_case):
+    def test_shape_names_are_matched_exactly_including_case(self, gad_case):
+        # Migrated legacy cases keep mixed-case names such as "PV".
+        gad_case.load_data["load_shape"] = gad_case.load_data["load_shape"].replace(
+            {"shape_a": "Shape_A"}
+        )
+        gad_case.schedules = gad_case.schedules.rename(columns={"shape_a": "Shape_A"})
+        gad_case.pv_data["pv_shape"] = "PV"
+        gad_case.schedules = gad_case.schedules.rename(columns={"pv": "PV"})
+        case = to_fbs_case(gad_case, 2)
+        assert load_at(case, "671", "b") == pytest.approx((0.1, 0.05))
+        assert gen_at(case, "675")["a"] == pytest.approx((0.1, 0.0))
+
+    def test_shape_name_with_different_case_than_the_schedule_fails(self, gad_case):
         gad_case.load_data["load_shape"] = gad_case.load_data["load_shape"].str.upper()
-        case = to_fbs_case(gad_case, 0)
-        assert load_at(case, "671", "b") == pytest.approx((0.08, 0.04))
+        with pytest.raises(ValueError, match="SHAPE_A"):
+            to_fbs_case(gad_case, 0)
 
     def test_cvr_is_the_power_weighted_average_per_bus_phase(self, gad_case):
         # t=0: l1 contributes .08 (cvr 0), l2 contributes .05 (cvr_p 1) on phase a.
@@ -175,13 +187,41 @@ class TestInjectionDevices:
             "c": pytest.approx((0.1, 0.0)),
         }
 
-    def test_generator_shape_scales_p_but_not_q(self, gad_case):
+    def test_generator_shape_scales_p_and_q_like_opendss(self, gad_case):
         gad_case.gen_data["gen_shape"] = "shape_a"
         gad_case.gen_data["q"] = 0.02
         case = to_fbs_case(gad_case, 2)
         assert gen_at(case, "611")["c"] == pytest.approx((0.1, 0.02))
         case = to_fbs_case(gad_case, 0)
-        assert gen_at(case, "611")["c"] == pytest.approx((0.08, 0.02))
+        assert gen_at(case, "611")["c"] == pytest.approx((0.08, 0.02 * 0.8))
+
+    def test_generator_q_uses_the_q_column_when_it_exists(self, gad_case):
+        gad_case.gen_data["gen_shape"] = "shape_a"
+        gad_case.gen_data["q"] = 0.02
+        gad_case.schedules["shape_a.q"] = [0.5, 0.5, 0.25, 0.5]
+        case = to_fbs_case(gad_case, 2)
+        assert gen_at(case, "611")["c"] == pytest.approx((0.1, 0.02 * 0.25))
+
+    def test_generator_without_shape_keeps_q(self, gad_case):
+        gad_case.gen_data["q"] = 0.02
+        case = to_fbs_case(gad_case, 0)
+        assert gen_at(case, "611")["c"] == pytest.approx((0.1, 0.02))
+
+    def test_pv_q_follows_the_shape_and_the_limit_caps_p_only(self, gad_case):
+        gad_case.pv_data["q"] = 0.06
+        gad_case.pv_data["irradiance"] = 2.0
+        gad_case.pv_data["pmpp_limit"] = 0.5
+        case = to_fbs_case(gad_case, 1)  # pv shape = 0.5
+        # p = min(.3*2*.5, .5*.3) = .15 in total; q = .06 * 0.5 in total
+        assert gen_at(case, "675")["a"] == pytest.approx((0.05, 0.01))
+
+    def test_setpoints_are_not_scaled_by_the_shape(self, gad_case):
+        gad_case.gen_data["gen_shape"] = "shape_a"
+        setpoints = {
+            "gen_data": pd.DataFrame({"p": [0.07], "q": [0.03]}, index=["generator.g1"])
+        }
+        case = to_fbs_case(gad_case, 0, setpoints)
+        assert gen_at(case, "611")["c"] == pytest.approx((0.07, 0.03))
 
     def test_devices_on_one_bus_are_summed(self, gad_case):
         extra = gad_case.gen_data.copy()
