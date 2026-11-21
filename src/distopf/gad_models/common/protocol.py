@@ -35,10 +35,10 @@ class LindistModelProtocol(Protocol):
     x: pyo.Param  # Reactance indexed by (branch, phase_pair)
 
     # Load parameters
-    p_load_nom: pyo.Param  # Nominal active power load at 1.0 p.u. voltage
-    q_load_nom: pyo.Param  # Nominal reactive power load at 1.0 p.u. voltage
-    cvr_p: pyo.Param  # CVR factor for active power loads
-    cvr_q: pyo.Param  # CVR factor for reactive power loads
+    p_load_nom: pyo.Param  # [load device, phase, t] nominal active power (shape applied)
+    q_load_nom: pyo.Param  # [load device, phase, t] nominal reactive power (shape applied)
+    cvr_p: pyo.Param  # [load device] CVR factor for active power
+    cvr_q: pyo.Param  # [load device] CVR factor for reactive power
 
     # Generator parameters
     gen_p_available: pyo.Param  # Shape-scaled available active power
@@ -96,8 +96,8 @@ class LindistModelProtocol(Protocol):
     q_gen: pyo.Var  # Reactive power generation
 
     # Load variables
-    p_load: pyo.Var  # Active power load
-    q_load: pyo.Var  # Reactive power load
+    p_load: pyo.Var  # [load device, phase, t] active power load
+    q_load: pyo.Var  # [load device, phase, t] reactive power load
 
     # Capacitor variables
     q_cap: pyo.Var  # Capacitor reactive power

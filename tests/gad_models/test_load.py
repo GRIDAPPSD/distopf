@@ -87,6 +87,13 @@ def test_q_multiplier_column_scales_reactive_power_only(gad_case):
         assert model.q_load_nom["load.l1", "a", t] == pytest.approx(0.05 * q_mult[t])
 
 
+def test_q_follows_the_p_multiplier_without_a_q_column(gad_case):
+    assert "shape_b.q" not in gad_case.schedules
+    model = build(gad_case)
+    for t in TIMES:
+        assert model.q_load_nom["load.l2", "a", t] == pytest.approx(0.02 * SHAPE_B[t])
+
+
 def test_cvr_exponents_are_per_device(gad_case):
     model = build(gad_case)
     assert model.cvr_p["load.l2"] == 1.0
@@ -216,3 +223,17 @@ def test_empty_load_table_builds(gad_case):
     model = build(gad_case)
     assert len(model.p_load) == 0
     assert LoadProvider().active_power_injection(model, 1, "a", 0) == 0
+
+
+@pytest.mark.skipif(not _ipopt_available, reason="ipopt not available")
+def test_converted_ieee13_loads_solve():
+    from distopf import CASES_DIR
+    from distopf.dss_importer.gad_dss_to_csv_converter import GadDSSToCSVConverter
+
+    dss_file = CASES_DIR / "dss" / "ieee13_dss" / "IEEE13Nodeckt.dss"
+    case = GadDSSToCSVConverter(dss_file).to_gad_case(n_steps=2)
+    # No regulators in this model, so let the voltage limits be soft.
+    model = build(case, voltage_slacks=True, thermal_constraints=False)
+    assert len(model.load_device_set) == 15
+    solve_feasibility(model, "ipopt")
+    assert pyo.value(model.p_load["load.646", "b", 0]) > 0

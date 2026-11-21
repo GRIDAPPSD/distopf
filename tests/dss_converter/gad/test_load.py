@@ -27,11 +27,22 @@ def daily(gad_devices_dss):
     return conv.load_data.set_index("device_name", drop=False), conv.schedules
 
 
-def _phase_powers(row) -> dict[str, tuple[float, float]]:
+def _phase_powers(row) -> dict[str, float]:
+    """Nonzero per-phase values as {"p_a": ..., "q_a": ...}."""
     return {
-        ph: (row[f"p_{ph}"], row[f"q_{ph}"])
+        f"{kind}_{ph}": float(row[f"{kind}_{ph}"])
         for ph in PHASE_COLUMNS
-        if row[f"p_{ph}"] or row[f"q_{ph}"]
+        for kind in "pq"
+        if row[f"{kind}_{ph}"]
+    }
+
+
+def _powers(**by_phase: tuple[float, float]) -> dict[str, float]:
+    """Expected `_phase_powers` from {phase: (p, q)}."""
+    return {
+        f"{kind}_{ph}": value
+        for ph, pq in by_phase.items()
+        for kind, value in zip("pq", pq)
     }
 
 
@@ -66,8 +77,8 @@ def test_buses_and_phases(loads):
 
 def test_two_loads_on_one_bus_stay_separate_with_own_shapes(loads):
     la1, la2 = loads.loc["load.la1"], loads.loc["load.la2"]
-    assert _phase_powers(la1) == pytest.approx({"a": (0.06, 0.02)})
-    assert _phase_powers(la2) == pytest.approx({"a": (0.04, 0.01)})
+    assert _phase_powers(la1) == pytest.approx(_powers(a=(0.06, 0.02)))
+    assert _phase_powers(la2) == pytest.approx(_powers(a=(0.04, 0.01)))
     assert la1["load_shape"] == "load_a_yearly"
     assert la2["load_shape"] == "load_b_yearly"
 
@@ -75,7 +86,7 @@ def test_two_loads_on_one_bus_stay_separate_with_own_shapes(loads):
 def test_fixed_status_and_defaults(loads):
     assert loads.loc["load.lfix", "status"] == "fixed"
     assert loads.loc["load.la1", "status"] == "variable"
-    assert _phase_powers(loads.loc["load.lfix"]) == pytest.approx({"b": (0.05, 0.015)})
+    assert _phase_powers(loads.loc["load.lfix"]) == pytest.approx(_powers(b=(0.05, 0.015)))
     assert loads.loc["load.la1", ["cvr_p", "cvr_q"]].tolist() == [0, 0]
     assert loads.loc["load.la1", "num_cust"] == 1
     assert loads.loc["load.la1", "load_class"] == "1"
@@ -84,7 +95,7 @@ def test_fixed_status_and_defaults(loads):
 def test_balanced_three_phase_load_with_cvr(loads):
     row = loads.loc["load.l3ph"]
     assert _phase_powers(row) == pytest.approx(
-        {ph: (0.05, 50 / 3 / 1000) for ph in "abc"}
+        _powers(**{ph: (0.05, 50 / 3 / 1000) for ph in "abc"})
     )
     assert (row["cvr_p"], row["cvr_q"]) == (0.8, 3)
 
@@ -256,8 +267,8 @@ def test_triplex_240v_splits_half_per_leg_and_120v_uses_one_leg():
     )
     l1, l2, l12 = loads.loc["load.l1"], loads.loc["load.l2"], loads.loc["load.l12"]
     assert (l1["phases"], l2["phases"], l12["phases"]) == ("s1", "s2", "s1s2")
-    assert _phase_powers(l1) == pytest.approx({"s1": (2000 / s_base, 500 / s_base)})
-    assert _phase_powers(l2) == pytest.approx({"s2": (1500 / s_base, 300 / s_base)})
+    assert _phase_powers(l1) == pytest.approx(_powers(s1=(2000 / s_base, 500 / s_base)))
+    assert _phase_powers(l2) == pytest.approx(_powers(s2=(1500 / s_base, 300 / s_base)))
     assert _phase_powers(l12) == pytest.approx(
-        {"s1": (1500 / s_base, 350 / s_base), "s2": (1500 / s_base, 350 / s_base)}
+        _powers(s1=(1500 / s_base, 350 / s_base), s2=(1500 / s_base, 350 / s_base))
     )
