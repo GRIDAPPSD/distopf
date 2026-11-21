@@ -15,7 +15,9 @@ REG3PH = "transformer.reg3ph"
 SINGLE_PHASE = ["transformer.rega", "transformer.regb", "transformer.regc"]
 
 highs_available = pyo.SolverFactory("appsi_highs").available(exception_flag=False)
-needs_highs = pytest.mark.skipif(not highs_available, reason="appsi_highs not available")
+needs_highs = pytest.mark.skipif(
+    not highs_available, reason="appsi_highs not available"
+)
 
 
 def build(case, control_regulators=False, **kwargs):
@@ -170,14 +172,24 @@ def test_single_phase_devices_take_different_taps(gad_case):
             )
 
 
+def alternating_taps(case) -> list[int]:
+    """Solve with phase a pulled up at even and down at odd steps; return rega's taps."""
+    model = build(case, control_regulators=True)
+    model.objective = pyo.Objective(
+        expr=sum((-1) ** t * model.v2[3, "a", t] for t in model.time_set)
+    )
+    pyo.SolverFactory("appsi_highs").solve(model)
+    return [selected_tap(model, "transformer.rega", t) for t in model.time_set]
+
+
 @needs_highs
 def test_tap_change_limit_binds(gad_case):
+    gad_case.reg_data = single_phase_regs()
+    free = alternating_taps(gad_case)
+    assert max(abs(b - a) for a, b in zip(free, free[1:])) > 1
     gad_case.reg_data = single_phase_regs(max_tap_change=1)
-    model = build(gad_case, control_regulators=True)
-    model.objective = spread_objective(model)
-    pyo.SolverFactory("appsi_highs").solve(model)
-    taps = [selected_tap(model, "transformer.rega", t) for t in model.time_set]
-    assert all(abs(b - a) <= 1 for a, b in zip(taps, taps[1:]))
+    limited = alternating_taps(gad_case)
+    assert all(abs(b - a) == 1 for a, b in zip(limited, limited[1:]))
 
 
 # --------------------------------------------------------------------------- #

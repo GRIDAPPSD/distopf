@@ -19,7 +19,8 @@ class LindistModelProtocol(Protocol):
     gen_phase_pair_set: pyo.Set
     cap_device_set: pyo.Set
     cap_device_phase_set: pyo.Set
-    reg_phase_set: pyo.Set
+    reg_device_set: pyo.Set  # Regulator device names
+    reg_phase_set: pyo.Set  # Regulated branch phases (fb, tb, ph)
     bat_phase_set: pyo.Set
     bat_set: pyo.Set
 
@@ -53,7 +54,7 @@ class LindistModelProtocol(Protocol):
     cap_q_nom: pyo.Param  # Nominal capacitor reactive power at 1.0 p.u. voltage
 
     # Regulator parameters
-    reg_ratio: pyo.Param  # Voltage regulator turn ratio
+    reg_ratio: pyo.Param  # Fixed turn ratio per regulator device
 
     # Voltage parameters
     v_swing: pyo.Param  # Swing bus voltage magnitude squared
@@ -83,7 +84,8 @@ class LindistModelProtocol(Protocol):
     # ==================== VARIABLES ====================
     # Voltage variables
     v2: pyo.Var  # Voltage magnitude squared
-    v2_reg: pyo.Var  # Regulator voltage magnitude squared
+    v2_reg: pyo.Var  # Regulator voltage magnitude squared [fb, tb, ph, t]
+    u_reg: pyo.Var  # Regulator tap selection binaries [device, tap, t]
 
     # Power flow variables
     p_flow: pyo.Var  # Active power flow
