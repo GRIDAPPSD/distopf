@@ -96,6 +96,29 @@ class TestLoads:
         case = to_fbs_case(gad_case, 2)
         assert load_at(case, "671", "b") == pytest.approx((0.1, 0.05 * 0.25))
 
+    def test_q_falls_back_to_the_p_multiplier_without_a_q_column(self, gad_case):
+        assert "shape_a.q" not in gad_case.schedules.columns
+        case = to_fbs_case(gad_case, 2)
+        # shape_b = 0.5 scales both p and q of load.l2 (phase a of 671).
+        assert load_at(case, "671", "a") == pytest.approx(
+            (0.1 + 0.05 * 0.5, 0.05 + 0.02 * 0.5)
+        )
+
+    def test_shape_names_with_dots_are_matched_exactly(self, gad_case):
+        gad_case.load_data["load_shape"] = gad_case.load_data["load_shape"].replace(
+            {"shape_a": "feeder.a", "shape_b": "feeder.b"}
+        )
+        gad_case.schedules = gad_case.schedules.rename(
+            columns={"shape_a": "feeder.a", "shape_b": "feeder.b"}
+        )
+        gad_case.schedules["feeder.a.q"] = [0.5, 0.5, 0.25, 0.5]
+        case = to_fbs_case(gad_case, 2)
+        # feeder.a.q is the Q multiplier of feeder.a; feeder.b has no .q column.
+        assert load_at(case, "671", "b") == pytest.approx((0.1, 0.05 * 0.25))
+        assert load_at(case, "671", "a") == pytest.approx(
+            (0.1 + 0.025, 0.05 * 0.25 + 0.01)
+        )
+
     def test_shape_names_are_matched_in_lowercase(self, gad_case):
         gad_case.load_data["load_shape"] = gad_case.load_data["load_shape"].str.upper()
         case = to_fbs_case(gad_case, 0)
