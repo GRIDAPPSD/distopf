@@ -6,6 +6,8 @@ l1 (671 abc, shape_a), l2 (671 a, shape_b, CVR) and l3 (645 bc, unequal phases).
 The system base is 1 MVA, so kW / 1000 is per unit.
 """
 
+# ruff: noqa: F811
+# (the gad_case fixture is imported from tests/gad_models/conftest.py)
 import copy
 
 import numpy as np
@@ -114,7 +116,12 @@ def test_single_phase_regulators_on_one_branch_have_own_taps(gad_case, tmp_path)
     gad_case.reg_data = device_table(
         "reg_data",
         [
-            {**reg.to_dict(), "device_name": f"transformer.reg{p}", "phases": p, "tap": k}
+            {
+                **reg.to_dict(),
+                "device_name": f"transformer.reg{p}",
+                "phases": p,
+                "tap": k,
+            }
             for p, k in zip("abc", (2, -4, 8))
         ],
     )
@@ -134,7 +141,7 @@ def test_single_phase_regulators_on_one_branch_have_own_taps(gad_case, tmp_path)
 
 def test_two_phase_balanced_devices_are_one_element(gad_case, tmp_path):
     gad_case.cap_data.loc[1, ["phases", "status"]] = ["bc", 1]
-    gad_case.gen_data.loc[0, "phases"] = "bc"
+    gad_case.gen_data.loc[0, ["bus_name", "phases"]] = ["645", "bc"]
     _compile(gad_case, tmp_path)
     assert _num_phases("capacitor.c1") == 2
     assert _num_phases("generator.g1") == 2
@@ -161,7 +168,14 @@ def test_readback_power_equals_gad_values_at_t(gad_case, t):
     loads = devices["load_data"]
     a, b = _at(case, "shape_a", t), _at(case, "shape_b", t)
     expected = {
-        "load.l1": dict(p_a=0.1 * a, p_b=0.1 * a, p_c=0.1 * a, q_a=0.05 * a, q_b=0.05 * a, q_c=0.05 * a),
+        "load.l1": dict(
+            p_a=0.1 * a,
+            p_b=0.1 * a,
+            p_c=0.1 * a,
+            q_a=0.05 * a,
+            q_b=0.05 * a,
+            q_c=0.05 * a,
+        ),
         "load.l2": dict(p_a=0.05 * b, q_a=0.02 * b),
         "load.l3": dict(p_b=0.17, p_c=0.1, q_b=0.125, q_c=0.06),
     }
@@ -223,7 +237,9 @@ def test_q_multiplier_column_scales_reactive_power_only(gad_case):
 
 def test_shape_name_is_matched_in_lower_case(gad_case):
     case = _without_cvr(gad_case)
-    case.load_data.loc[case.load_data["device_name"] == "load.l1", "load_shape"] = "Shape_A"
+    case.load_data.loc[case.load_data["device_name"] == "load.l1", "load_shape"] = (
+        "Shape_A"
+    )
     _, devices = run_opendss_gad(case, t=1)
     assert devices["load_data"].loc["load.l1", "p_a"] == pytest.approx(0.09, abs=TOL)
 
@@ -251,16 +267,20 @@ def test_setpoints_override_case_values(gad_case):
     case = _without_cvr(gad_case)
     setpoints = {
         "gen_data": pd.DataFrame(
-            {"p": [0.05], "q": [0.01]}, index=pd.Index(["generator.g1"], name="device_name")
+            {"p": [0.05], "q": [0.01]},
+            index=pd.Index(["generator.g1"], name="device_name"),
         ),
         "pv_data": pd.DataFrame(
-            {"p": [0.2], "q": [0.03]}, index=pd.Index(["pvsystem.pv1"], name="device_name")
+            {"p": [0.2], "q": [0.03]},
+            index=pd.Index(["pvsystem.pv1"], name="device_name"),
         ),
         "bat_data": pd.DataFrame(
-            {"p": [-0.1], "q": [0.02]}, index=pd.Index(["storage.b1"], name="device_name")
+            {"p": [-0.1], "q": [0.02]},
+            index=pd.Index(["storage.b1"], name="device_name"),
         ),
         "cap_data": pd.DataFrame(
-            {"u": [0, 1]}, index=pd.Index(["capacitor.c3", "capacitor.c1"], name="device_name")
+            {"u": [0, 1]},
+            index=pd.Index(["capacitor.c3", "capacitor.c1"], name="device_name"),
         ),
         "reg_data": pd.DataFrame(
             {"tap": [-8]}, index=pd.Index(["transformer.reg3ph"], name="device_name")
@@ -274,16 +294,24 @@ def test_setpoints_override_case_values(gad_case):
     ]:
         row = devices[table].loc[device]
         assert (row["p"], row["q"]) == pytest.approx((p, q), abs=TOL), device
-    assert devices["cap_data"]["u"].to_dict() == {"capacitor.c3": 0.0, "capacitor.c1": 1.0}
+    assert devices["cap_data"]["u"].to_dict() == {
+        "capacitor.c3": 0.0,
+        "capacitor.c1": 1.0,
+    }
     assert devices["reg_data"].loc["transformer.reg3ph", "tap"] == -8
 
 
 def test_devices_without_a_setpoint_keep_case_values(gad_case):
     setpoints = {
-        "cap_data": pd.DataFrame({"u": [1]}, index=pd.Index(["capacitor.c1"], name="device_name"))
+        "cap_data": pd.DataFrame(
+            {"u": [1]}, index=pd.Index(["capacitor.c1"], name="device_name")
+        )
     }
     _, devices = run_opendss_gad(gad_case, setpoints=setpoints, t=1)
-    assert devices["cap_data"]["u"].to_dict() == {"capacitor.c3": 1.0, "capacitor.c1": 1.0}
+    assert devices["cap_data"]["u"].to_dict() == {
+        "capacitor.c3": 1.0,
+        "capacitor.c1": 1.0,
+    }
     assert devices["gen_data"].loc["generator.g1", "p"] == pytest.approx(0.1, abs=TOL)
 
 
@@ -291,7 +319,10 @@ def test_setpoints_apply_to_unscheduled_values(gad_case):
     """A setpoint is the output at t: no schedule multiplier on top."""
     gad_case.pv_data.loc[0, "pv_shape"] = "pv"
     setpoints = {
-        "pv_data": pd.DataFrame({"p": [0.2], "q": [0.0]}, index=pd.Index(["pvsystem.pv1"], name="device_name"))
+        "pv_data": pd.DataFrame(
+            {"p": [0.2], "q": [0.0]},
+            index=pd.Index(["pvsystem.pv1"], name="device_name"),
+        )
     }
     _, devices = run_opendss_gad(gad_case, setpoints=setpoints, t=1)  # pv shape is 0.5
     assert devices["pv_data"].loc["pvsystem.pv1", "p"] == pytest.approx(0.2, abs=TOL)
@@ -299,14 +330,18 @@ def test_setpoints_apply_to_unscheduled_values(gad_case):
 
 def test_readback_frames_can_be_fed_back_as_setpoints(gad_case):
     _, devices = run_opendss_gad(gad_case, t=1)
-    again = {name: devices[name] for name in ("gen_data", "pv_data", "bat_data", "reg_data")}
+    again = {
+        name: devices[name] for name in ("gen_data", "pv_data", "bat_data", "reg_data")
+    }
     _, devices_again = run_opendss_gad(gad_case, setpoints=again, t=1)
     for name in again:
         pd.testing.assert_frame_equal(devices[name], devices_again[name])
 
 
 def test_unknown_setpoint_device_raises(gad_case, tmp_path):
-    setpoints = {"gen_data": pd.DataFrame({"p": [1.0]}, index=pd.Index(["generator.nope"]))}
+    setpoints = {
+        "gen_data": pd.DataFrame({"p": [1.0]}, index=pd.Index(["generator.nope"]))
+    }
     with pytest.raises(ValueError, match="generator.nope"):
         gad_case_to_dss(gad_case, tmp_path / "x.dss", setpoints=setpoints)
 
@@ -318,7 +353,9 @@ def test_unknown_setpoint_table_raises(gad_case, tmp_path):
 
 
 def test_setpoint_table_without_expected_columns_raises(gad_case, tmp_path):
-    setpoints = {"gen_data": pd.DataFrame({"P": [1.0]}, index=pd.Index(["generator.g1"]))}
+    setpoints = {
+        "gen_data": pd.DataFrame({"P": [1.0]}, index=pd.Index(["generator.g1"]))
+    }
     with pytest.raises(ValueError, match="gen_data"):
         gad_case_to_dss(gad_case, tmp_path / "x.dss", setpoints=setpoints)
 
@@ -329,8 +366,11 @@ def test_pv_name_colliding_with_generator_is_prefixed(gad_case, tmp_path):
     _compile(gad_case, tmp_path)
     assert {"generator.g1", "generator.pvsystem_g1"} <= _elements()
     _, devices = run_opendss_gad(gad_case)
-    assert devices["pv_data"].loc["pvsystem.g1", "element"] == "generator.pvsystem_g1"
-    assert devices["gen_data"].loc["generator.g1", "element"] == "generator.g1"
+    assert (
+        devices["pv_data"].loc["pvsystem.g1", "element"].lower()
+        == "generator.pvsystem_g1"
+    )
+    assert devices["gen_data"].loc["generator.g1", "element"].lower() == "generator.g1"
 
 
 def test_duplicate_element_name_raises(gad_case, tmp_path):
@@ -353,4 +393,11 @@ def test_run_opendss_gad_returns_network_result(gad_case):
     v = result.voltages.set_index("name").loc["650", ["a", "b", "c"]]
     assert np.all((v > 0.9) & (v < 1.1))
     assert len(result.active_power_flows) == len(gad_case.branch_data)
-    assert set(devices) == {"pv_data", "gen_data", "bat_data", "cap_data", "reg_data", "load_data"}
+    assert set(devices) == {
+        "pv_data",
+        "gen_data",
+        "bat_data",
+        "cap_data",
+        "reg_data",
+        "load_data",
+    }

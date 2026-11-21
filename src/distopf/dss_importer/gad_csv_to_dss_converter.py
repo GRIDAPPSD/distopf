@@ -1,61 +1,101 @@
 """
-DistOPF case -> OpenDSS converter.
+GAD case -> OpenDSS writer.
 
-Writes a single .dss file from a ``Case`` so results can be compared to FBS.
-Not validated against an original OpenDSS model.
+Writes a single .dss file from a ``GadCase`` at one time step, with one OpenDSS
+element per GAD device, so power flow solutions can be compared to FBS and
+OpenDSS read-back values can be compared to the GAD device values.
 
-Mapping
--------
-- swing bus        -> circuit Vsource (3-phase, voltage from ``v_a``)
-- lines/switches   -> Line with R/X matrices (ohms, length 1 km)
-- transformers     -> one single-phase Transformer per phase; winding-2 tap = reg ratio
+Network (same as ``csv_to_dss_converter``)
+------------------------------------------
+- swing bus        -> circuit Vsource (3-phase, voltage from ``v_a`` or the ``v_a`` schedule)
+- lines/switches   -> Line with R/X matrices (ohms, length 1 km) and line charging cmatrix
+- transformers     -> one single-phase Transformer per phase; regulated branches see below
 - center_tap_xfmr  -> single-phase 3-winding Transformer, secondary ``sec.1.0`` / ``sec.0.2``
 - triplex_line     -> 2-conductor Line on nodes 1 and 2 (s1, s2)
-- loads            -> one single-phase Load per bus phase (a, b, c, s1, s2, s1s2);
-                      constant PQ, or ``model=4`` (CVR) when ``cvr_p``/``cvr_q`` are nonzero
-- capacitors       -> one single-phase Capacitor per bus phase
-- generators       -> one single-phase constant-PQ Generator per bus phase (p/q setpoints)
-- mpssd ports      -> one single-phase constant-PQ Generator ``mpssd_<device>_<phase>`` per
-                      port of ``case.mpssd_data`` (p/q setpoints, positive is injection)
-- batteries        -> one multi-phase Storage per battery; fixed kW/kvar from the summed
-                      ``p_*``/``q_*`` or ``p``/``q`` (OpenDSS splits them equally over the
-                      phases); positive is discharging
-- line charging    -> Line cmatrix from ``b_*``; transformer shunt -> %noloadloss/%imag
-                      from ``g_sh_*``/``b_sh_*``; center-tap primary leg from ``-z_s1s2``
-- schedules        -> a single time step ``t`` is written (default ``case.start_step``):
-                      load and generator setpoints are scaled by the schedule multipliers
-                      exactly as FBS does, and the swing voltage uses the ``v_a`` column.
-                      Convert each time step separately.
-- opf_result       -> optional OPF result replayed like ``run_fbs_with_opf_setpoints``:
-                      generator, battery and OUT-bus load setpoints replace the case values
-                      (CVR off at OUT buses), regulator taps come from ``reg_taps``,
-                      capacitors are switched from ``u_caps`` (else inferred from
-                      ``capacitor_reactive_power``), and MPSSD ports use ``p_mpssd``/
-                      ``q_mpssd`` (on the result or its ``raw_result``).
+
+Devices (one OpenDSS element per device)
+----------------------------------------
+The element name is the part of ``device_name`` after the class prefix
+(``storage.b1`` -> ``Storage.b1``). Balanced devices are multi-phase elements on
+their phases, where OpenDSS also splits the total equally; ``kV`` is line-to-line
+for more than one phase. Each ``device_results`` frame has an ``element`` column with
+the written element name(s).
+
+========== ============================================ =======================
+table      OpenDSS element                              name
+========== ============================================ =======================
+gen_data   constant-PQ Generator                        ``<name>``
+pv_data    constant-PQ Generator                        ``<name>``; prefixed
+                                                        ``pvsystem_<name>`` if a
+                                                        generator has that name
+bat_data   Storage with fixed kW/kvar                   ``<name>``
+cap_data   Capacitor, ``states=[1]`` or ``[0]``         ``<name>``
+reg_data   Transformer with one winding-2 tap on all    ``<name>``
+           its phases (replaces the branch's
+           per-phase transformers for those phases)
+load_data  Load; equal per-phase P and Q -> one         ``<name>``, or
+           multi-phase Load, else one single-phase      ``<name>_<phase>``
+           Load per phase
+========== ============================================ =======================
+
+Two elements of one OpenDSS class may not have the same name (``ValueError``).
+
+Time step ``t`` (default ``gad_case.start_step``)
+-------------------------------------------------
+- A shape is a ``schedules`` column named like the lowercase shape name (the
+  P multiplier); ``<shape>.q`` is the Q multiplier if present. A blank shape, or a
+  load with ``status == "fixed"``, is not scaled. A named shape without a column
+  raises ``ValueError``. Loads: P and Q use the P multiplier unless ``<shape>.q``
+  exists. Generators and PV: only P is scaled; Q is scaled by ``<shape>.q`` if present.
+- Generator P is ``p * gen_shape(t)``; PV P is
+  ``min(pmpp * irradiance * pv_shape(t), pmpp_limit * pmpp)``.
+- A load with ``cvr_p`` or ``cvr_q`` nonzero is written with ``model=4``.
+- The swing voltage uses the ``v_a`` schedule column if present.
+
+Setpoints
+---------
+``setpoints`` maps table names ``gen_data``, ``pv_data``, ``bat_data`` (columns
+``p``, ``q``), ``cap_data`` (``u``, on when above 0.5) and ``reg_data`` (``tap``) to
+frames indexed by ``device_name``. They are the outputs at ``t`` and replace the
+case values with no schedule on top; devices and cells that are missing keep the
+case values.
 """
 
 import re
 import tempfile
+from dataclasses import dataclass
 from math import pi, sqrt
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
 
-from distopf.api import Case, create_case
-from distopf.fbs import _opf_frames, _at_period, _replay_times
+from distopf.gad_models.common.case import GadCase
+from distopf.gad_models.common.schema import DEVICE_TABLES
 from distopf.results import PowerFlowResult
 
 PHASE_NODE = {"a": 1, "b": 2, "c": 3, "s1": 1, "s2": 2}
-LOAD_PHASES = ("a", "b", "c", "s1", "s2", "s1s2")
+LOAD_PHASES = ("a", "b", "c", "s1", "s2")
 FREQUENCY_HZ = 60.0
+SETPOINT_COLUMNS = {
+    "gen_data": ("p", "q"),
+    "pv_data": ("p", "q"),
+    "bat_data": ("p", "q"),
+    "cap_data": ("u",),
+    "reg_data": ("tap",),
+}
 
 
 def _value(row: pd.Series, column: str) -> float:
     """Numeric column value; missing or NaN counts as 0."""
     value = row.get(column, 0.0)
     return 0.0 if pd.isna(value) else float(value)
+
+
+def _text(row: pd.Series, column: str) -> str:
+    value = row.get(column, "")
+    return "" if pd.isna(value) else str(value).strip()
 
 
 def _capacitance_nf(row: pd.Series):
@@ -80,15 +120,25 @@ def _split_phases(phases: str) -> list[str]:
     return re.findall(r"s1|s2|[abc]", str(phases).lower())
 
 
+def _nodes(phases: list[str]) -> str:
+    """Node suffix of a bus spec: ['a', 'c'] -> '1.3'."""
+    return ".".join(str(PHASE_NODE[p]) for p in phases)
+
+
 def _node(bus: str, phase: str) -> str:
     return f"{bus}.{PHASE_NODE[phase]}"
+
+
+def _kv(kv_ln: float, n_phases: int) -> float:
+    """Element ``kV``: line-to-neutral for one phase, line-to-line for more."""
+    return kv_ln * (sqrt(3) if n_phases > 1 else 1)
 
 
 def _matrix_str(entry, phases: list[str]) -> str:
     """Lower-triangular OpenDSS matrix string, e.g. '[1 | 0 2]'."""
     rows = []
-    for i, pi in enumerate(phases):
-        values = [f"{entry(pi, phases[j]):.12g}" for j in range(i + 1)]
+    for i, phase_i in enumerate(phases):
+        values = [f"{entry(phase_i, phases[j]):.12g}" for j in range(i + 1)]
         rows.append(" ".join(values))
     return "[" + " | ".join(rows) + "]"
 
@@ -96,7 +146,6 @@ def _matrix_str(entry, phases: list[str]) -> str:
 def _line(row: pd.Series, bus_name: dict) -> str:
     """Line for abc branches and triplex (s1, s2) branches; impedances are per-unit."""
     phases = _split_phases(row["phases"])
-    nodes = ".".join(str(PHASE_NODE[p]) for p in phases)
 
     def entry(prefix: str):
         def get(pi: str, pj: str) -> float:
@@ -109,32 +158,11 @@ def _line(row: pd.Series, bus_name: dict) -> str:
 
     return (
         f"New Line.{row['name']}_{int(row['fb'])}_{int(row['tb'])} phases={len(phases)} "
-        f"bus1={bus_name[row['fb']]}.{nodes} bus2={bus_name[row['tb']]}.{nodes} "
+        f"bus1={bus_name[row['fb']]}.{_nodes(phases)} bus2={bus_name[row['tb']]}.{_nodes(phases)} "
         f"length=1 units=km rmatrix={_matrix_str(entry('r'), phases)} "
         f"xmatrix={_matrix_str(entry('x'), phases)} "
         f"cmatrix={_matrix_str(_capacitance_nf(row), phases)}"
     )
-
-
-def _transformers(
-    row: pd.Series, bus_name: dict, bus_kv: dict, reg_ratio: dict
-) -> list[str]:
-    key = (row["fb"], row["tb"])
-    lines = []
-    for phase in "abc":
-        if phase not in row["phases"]:
-            continue
-        ratio = reg_ratio.get(key, {}).get(phase, 1.0)
-        lines.append(
-            f"New Transformer.{row['name']}_{int(row['fb'])}_{int(row['tb'])}_{phase} phases=1 windings=2 "
-            f"buses=[{_node(bus_name[row['fb']], phase)}.0, {_node(bus_name[row['tb']], phase)}.0] "
-            f"conns=[wye, wye] kVs=[{bus_kv[row['fb']]:.12g}, {bus_kv[row['tb']]:.12g}] "
-            f"kVAs=[{row['s_base'] / 1e3:.12g}, {row['s_base'] / 1e3:.12g}] "
-            f"%rs=[{row[f'r_{phase}{phase}'] * 50:.12g}, {row[f'r_{phase}{phase}'] * 50:.12g}] "
-            f"xhl={row[f'x_{phase}{phase}'] * 100:.12g} {_core_shunt(row, phase)} "
-            f"taps=[1, {ratio:.12g}]"
-        )
-    return lines
 
 
 def _center_tap_transformer(row: pd.Series, bus_name: dict, bus_kv: dict) -> str:
@@ -173,352 +201,428 @@ def _center_tap_transformer(row: pd.Series, bus_name: dict, bus_kv: dict) -> str
     )
 
 
-class _Multipliers:
-    """Schedule multipliers at one time step, following the FBS rules."""
+# ------------------------------------------------------------ transformers
+@dataclass
+class _Transformer:
+    """One OpenDSS Transformer on a transformer branch: its phases and winding-2 tap ratio."""
 
-    def __init__(self, case: Case, t: int):
-        sched = getattr(case, "schedules", None)
-        self.t = t
-        self.sched = sched if sched is not None else pd.DataFrame()
-        if len(self.sched) and t not in self.sched.index:
-            raise ValueError(f"schedules has no row for time step {t}")
-
-    def _value(self, column: str) -> Optional[float]:
-        if column not in self.sched.columns:
-            return None
-        value = pd.to_numeric(self.sched.loc[self.t, column], errors="coerce")
-        return 1.0 if pd.isna(value) else float(value)
-
-    def load(self, shape: str, phase: str, kind: str) -> float:
-        """Multiplier for load kind 'p' or 'q' on ``phase`` (a, b, c, s1, s2, s1s2)."""
-        if phase == "s1s2":
-            return (self.load(shape, "s1", kind) + self.load(shape, "s2", kind)) / 2
-        for column in (shape, f"{shape}.{phase}.{kind}", f"{shape}.{kind}"):
-            value = self._value(column)
-            if value is not None:
-                return value
-        return 1.0
-
-    def generator(self, shape: str) -> float:
-        for column in (shape, "PV"):
-            if column:
-                value = self._value(column)
-                if value is not None:
-                    return value
-        return 1.0
-
-    def swing_voltage(self, default: float) -> float:
-        value = self._value("v_a")
-        return default if value is None else value
+    element: str
+    phases: list[str]
+    ratio: float
 
 
-def _text(row: pd.Series, column: str) -> str:
-    value = row.get(column, "")
-    return "" if pd.isna(value) else str(value).strip()
-
-
-def _load_line(
-    name: str,
-    bus: str,
-    phase: str,
-    kv: float,
-    p_kw: float,
-    q_kvar: float,
-    cvr_p: float,
-    cvr_q: float,
-) -> str:
-    if phase == "s1s2":
-        nodes, kv = f"{bus}.1.2", 2 * kv
-    else:
-        nodes = _node(bus, phase)
-    model = (
-        f"model=4 cvrwatts={cvr_p:.12g} cvrvars={cvr_q:.12g}"
-        if cvr_p or cvr_q
-        else "model=1"
-    )
-    return (
-        f"New Load.{name}_{phase} phases=1 bus1={nodes} kV={kv:.12g} "
-        f"kW={p_kw:.12g} kvar={q_kvar:.12g} {model} vminpu=0.5 vmaxpu=1.5"
-    )
-
-
-def _generator_line(
-    name: str, bus: str, phase: str, kv: float, p_kw: float, q_kvar: float
-) -> str:
-    return (
-        f"New Generator.{name}_{phase} phases=1 bus1={_node(bus, phase)} "
-        f"kV={kv:.12g} kW={p_kw:.12g} kvar={q_kvar:.12g} model=1"
-    )
-
-
-def _battery_setpoints(
-    row: pd.Series, saved_p: pd.DataFrame, saved_q: pd.DataFrame
-) -> dict[str, tuple[float, float]]:
-    """Per-phase (p, q) of a battery row: ``p_*``/``q_*`` columns, else ``p``/``q`` split equally.
-
-    Saved OPF values (phase or ``p_<phase>``/``q_<phase>`` columns, by ``id``) replace them.
-    """
-    legs = _split_phases(row.get("phases", "abc"))
-    if any(f"{k}_{p}" in row.index for k in "pq" for p in PHASE_NODE):
-        case_values = {
-            p: (row.get(f"p_{p}", 0.0), row.get(f"q_{p}", 0.0)) for p in legs
-        }
-    else:
-        share = (row.get("p", 0.0) / len(legs), row.get("q", 0.0) / len(legs))
-        case_values = {p: share for p in legs}
-    return {
-        p: (
-            _saved(saved_p, row["id"], p, f"p_{p}", default=pq[0]),
-            _saved(saved_q, row["id"], p, f"q_{p}", default=pq[1]),
+def _same_for_phases(row: pd.Series, columns: list[str], element: str) -> float:
+    """The common value of per-phase ``columns``; unequal phases cannot be one element."""
+    values = [_value(row, c) for c in columns]
+    if max(values) - min(values) > 1e-9 * max(1.0, max(abs(v) for v in values)):
+        raise ValueError(
+            f"{element}: phase impedances differ ({columns}); "
+            "split the regulator into one single-phase device per phase"
         )
-        for p, pq in case_values.items()
+    return values[0]
+
+
+def _transformer_line(
+    element: str,
+    row: pd.Series,
+    transformer: _Transformer,
+    bus_name: dict,
+    bus_kv: dict,
+) -> str:
+    """Wye-wye Transformer over ``transformer.phases`` (one or more), same on every phase."""
+    phases = transformer.phases
+    n = len(phases)
+    r = _same_for_phases(row, [f"r_{p}{p}" for p in phases], element)
+    x = _same_for_phases(row, [f"x_{p}{p}" for p in phases], element)
+    shunt = {
+        k: _same_for_phases(row, [f"{k}_sh_{p}" for p in phases], element)
+        for k in ("g", "b")
     }
+    nodes = _nodes(phases) + ".0"
+    kva = n * row["s_base"] / 1e3
+    kv_from, kv_to = _kv(bus_kv[row["fb"]], n), _kv(bus_kv[row["tb"]], n)
+    return (
+        f"New Transformer.{element} phases={n} windings=2 "
+        f"buses=[{bus_name[row['fb']]}.{nodes}, {bus_name[row['tb']]}.{nodes}] "
+        f"conns=[wye, wye] kVs=[{kv_from:.12g}, {kv_to:.12g}] "
+        f"kVAs=[{kva:.12g}, {kva:.12g}] "
+        f"%rs=[{r * 50:.12g}, {r * 50:.12g}] xhl={x * 100:.12g} "
+        f"%noloadloss={shunt['g'] * 100:.12g} %imag={shunt['b'] * 100:.12g} "
+        f"taps=[1, {transformer.ratio:.12g}]"
+    )
 
 
-def _result_frames(opf_result: Any, t: int) -> dict[str, Optional[pd.DataFrame]]:
-    """OPF result frames for period ``t``."""
-    return {name: _at_period(f, t) for name, f in _opf_frames(opf_result).items()}
-
-
-def _indexed(frame: Optional[pd.DataFrame], key: str) -> pd.DataFrame:
-    """Rows of a result frame indexed by ``key`` (first row wins); empty without a frame."""
-    if frame is None or not len(frame):
-        return pd.DataFrame()
-    if key not in frame.columns:
-        raise ValueError(f"OPF result frame must contain a {key!r} column")
-    return frame.drop_duplicates(key, keep="first").set_index(key)
-
-
-def _saved(saved: pd.DataFrame, key: Any, *columns: str, default=None):
-    """First non-NaN value of ``columns`` in row ``key`` of ``saved``, else ``default``."""
-    if key not in saved.index:
-        return default
-    for column in columns:
-        if column in saved.columns:
-            value = pd.to_numeric(saved.at[key, column], errors="coerce")
-            if pd.notna(value):
-                return float(value)
-    return default
-
-
-def _bus_load(
-    row: pd.Series, phase: str, kind: str, mult: _Multipliers, saved: pd.DataFrame
-) -> float:
-    """Load ``kind`` ('p'/'q') in pu; saved OPF loads replace the load at OUT buses."""
-    shape = _text(row, "load_shape") or "default"
-    value = row.get(f"{kind}l_{phase}", 0.0) * mult.load(shape, phase, kind)
-    if row["bus_type"] != "OUT":
-        return value
-    if phase == "s1s2":
-        # Result s1/s2 loads already include half of the s1s2 load.
-        split = [_saved(saved, row["id"], s) for s in ("s1", "s2")]
-        return value if split == [None, None] else 0.0
-    return _saved(saved, row["id"], phase, default=value)
-
-
-def _capacitor_on(
-    cap_id: Any,
-    phase: str,
-    nominal: float,
-    v_min: float,
-    u_caps: pd.DataFrame,
-    q_caps: pd.DataFrame,
-    voltages: pd.DataFrame,
-) -> bool:
-    """Switch state from ``u_caps``, else on when q >= half of nominal * v^2 (FBS rule)."""
-    if len(u_caps):
-        state = _saved(u_caps, cap_id, phase)
-        return state is None or state > 0.5
-    q = _saved(q_caps, cap_id, phase)
-    if q is None:
-        return True
-    v = _saved(voltages, cap_id, phase, default=v_min)
-    return q / nominal > 0.5 * v**2
-
-
-def case_to_dss(
-    case: Case,
-    output_path: Union[str, Path],
-    t: Optional[int] = None,
-    opf_result: Any = None,
-) -> Path:
-    """Write ``case`` at time step ``t`` (default ``case.start_step``) to an OpenDSS file.
-
-    With ``opf_result`` the OPF setpoints and device states are written instead of the
-    case values, as in :func:`distopf.fbs.run_fbs_with_opf_setpoints`.
-    """
-    bus = case.bus_data
-    bus_name = dict(zip(bus["id"], bus["name"].astype(str)))
-    bus_kv = dict(zip(bus["id"], bus["v_ln_base"] / 1e3))
-    bus_s_base = dict(zip(bus["id"], bus["s_base"]))
-    swing = bus[bus["bus_type"] == "SWING"].iloc[0]
-    t = case.start_step if t is None else t
-    mult = _Multipliers(case, t)
-    frames = _result_frames(opf_result, t)
-    p_loads = _indexed(frames.get("active_power_loads"), "id")
-    q_loads = _indexed(frames.get("reactive_power_loads"), "id")
-    loads_given = bool(len(p_loads) or len(q_loads))
-
-    reg_taps = _indexed(frames.get("reg_taps"), "tb")
-    reg_ratio = {}
-    for _, r in case.reg_data.iterrows():
-        step = (r["ratio_max"] - r["ratio_min"]) / r["num_taps"] if len(reg_taps) else 0
-        ratios = {}
-        for p in "abc":
-            if f"ratio_{p}" not in r:
-                continue
-            tap = _saved(reg_taps, r["tb"], f"tap_{p}", p)
-            ratios[p] = r[f"ratio_{p}"] if tap is None else 1 + step * tap
-        reg_ratio[(r["fb"], r["tb"])] = ratios
-
-    out = [
-        "Clear",
-        f"New Circuit.distopf basekv={swing['v_ln_base'] * sqrt(3) / 1e3:.12g} "
-        f"pu={mult.swing_voltage(swing['v_a']):.12g} phases=3 bus1={bus_name[swing['id']]} "
-        "mvasc3=1e6 mvasc1=1e6",
+def _branch_transformers(
+    row: pd.Series, regulators: list[_Transformer]
+) -> list[_Transformer]:
+    """Transformers of a transformer branch: its regulators plus per-phase ones for the rest."""
+    covered = [p for reg in regulators for p in reg.phases]
+    if len(covered) != len(set(covered)):
+        raise ValueError(
+            f"regulators {[r.element for r in regulators]} overlap on branch {row['name']!r}"
+        )
+    base = f"{row['name']}_{int(row['fb'])}_{int(row['tb'])}"
+    rest = [
+        _Transformer(f"{base}_{p}", [p], 1.0)
+        for p in _split_phases(row["phases"])
+        if p not in covered
     ]
+    return [*regulators, *rest]
 
-    for _, row in case.branch_data.iterrows():
-        if row["type"] == "transformer":
-            out += _transformers(row, bus_name, bus_kv, reg_ratio)
-        elif row["type"] == "center_tap_xfmr":
-            out.append(_center_tap_transformer(row, bus_name, bus_kv))
+
+# ------------------------------------------------------------- schedules
+class _Schedule:
+    """Schedule columns at one time step, looked up by lowercase shape name."""
+
+    def __init__(self, schedules: pd.DataFrame, t: int):
+        self.t = t
+        if "time" in schedules.columns:
+            rows = schedules[schedules["time"] == t]
         else:
-            out.append(_line(row, bus_name))
+            rows = schedules.loc[schedules.index.intersection([t])]
+        if len(schedules) and not len(rows):
+            raise ValueError(f"schedules has no row for time step {t}")
+        values = rows.iloc[0] if len(rows) else pd.Series(dtype=float)
+        self.values = {
+            str(column).lower(): pd.to_numeric(value, errors="coerce")
+            for column, value in values.items()
+            if column != "time"
+        }
 
-    for _, row in bus.iterrows():
-        if row["bus_type"] == "SWING":
-            continue  # FBS ignores load at the source bus
-        cvr_off = loads_given and row["bus_type"] == "OUT"
-        for p in LOAD_PHASES:
-            pl = _bus_load(row, p, "p", mult, p_loads)
-            ql = _bus_load(row, p, "q", mult, q_loads)
-            if pl != 0 or ql != 0:
-                scale = row["s_base"] / 1e3
-                out.append(
-                    _load_line(
-                        row["name"],
-                        bus_name[row["id"]],
-                        p,
-                        row["v_ln_base"] / 1e3,
-                        pl * scale,
-                        ql * scale,
-                        0.0 if cvr_off else row.get("cvr_p", 0.0),
-                        0.0 if cvr_off else row.get("cvr_q", 0.0),
-                    )
-                )
+    def column(self, name: str) -> Optional[float]:
+        """Value of a column (case-insensitive), None when there is no such column."""
+        value = self.values.get(name.lower())
+        return None if value is None else (1.0 if pd.isna(value) else float(value))
 
-    u_caps = _indexed(frames.get("u_caps"), "id")
-    q_caps = _indexed(frames.get("capacitor_reactive_power"), "id")
-    voltages = _indexed(frames.get("voltages"), "id")
-    v_min = dict(zip(bus["id"], bus["v_min"])) if "v_min" in bus else {}
-    for _, row in case.cap_data.iterrows():
-        for p in "abc":
-            nominal = row[f"q_{p}"]
-            if nominal != 0 and _capacitor_on(
-                row["id"],
-                p,
-                nominal,
-                v_min.get(row["id"], 1.0),
-                u_caps,
-                q_caps,
-                voltages,
-            ):
-                out.append(
-                    f"New Capacitor.{row['name']}_{p} phases=1 bus1={_node(bus_name[row['id']], p)} "
-                    f"kV={bus_kv[row['id']]:.12g} kvar={nominal * bus_s_base[row['id']] / 1e3:.12g}"
-                )
+    def multipliers(self, shape: str) -> tuple[float, Optional[float]]:
+        """(P multiplier, Q multiplier or None) of a shape; (1, None) for a blank shape."""
+        if not shape:
+            return 1.0, None
+        p_mult = self.column(shape)
+        if p_mult is None:
+            raise ValueError(f"shape {shape!r} is not a column of schedules")
+        return p_mult, self.column(f"{shape}.q")
 
-    p_gens = _indexed(frames.get("active_power_generation"), "id")
-    q_gens = _indexed(frames.get("reactive_power_generation"), "id")
-    for _, row in case.gen_data.iterrows():
-        p_scale = mult.generator(_text(row, "gen_shape"))
-        scale = bus_s_base[row["id"]] / 1e3
-        for p in PHASE_NODE:
-            # Saved setpoints replace the scheduled values; no schedule on top.
-            p_pu = _saved(
-                p_gens, row["id"], p, default=row.get(f"p_{p}", 0.0) * p_scale
+
+# ------------------------------------------------------- elements and setpoints
+@dataclass
+class _Device:
+    """A GAD device and the OpenDSS elements written for it, ``(element, phases)`` each."""
+
+    table: str
+    device_name: str
+    elements: list[tuple[str, list[str]]]
+    bus_name: str
+    kva_base: float
+    step: float = 0.0  # regulators only: tap step in ratio per tap
+
+
+def _element_name(device_name: str) -> str:
+    """Part of ``device_name`` after the class prefix: 'pvsystem.pv1' -> 'pv1'."""
+    return device_name.split(".", 1)[-1]
+
+
+def _check_setpoints(gad_case: GadCase, setpoints: dict) -> None:
+    for table, frame in setpoints.items():
+        if table not in SETPOINT_COLUMNS:
+            raise ValueError(
+                f"setpoints table {table!r} is not supported; use {sorted(SETPOINT_COLUMNS)}"
             )
-            q_pu = _saved(q_gens, row["id"], p, default=row.get(f"q_{p}", 0.0))
-            if p_pu != 0 or q_pu != 0:
-                out.append(
-                    _generator_line(
-                        row["name"],
-                        bus_name[row["id"]],
-                        p,
-                        bus_kv[row["id"]],
-                        p_pu * scale,
-                        q_pu * scale,
-                    )
-                )
+        if not set(SETPOINT_COLUMNS[table]) & set(frame.columns):
+            raise ValueError(
+                f"setpoints[{table!r}] needs a column in {list(SETPOINT_COLUMNS[table])}"
+            )
+        unknown = set(frame.index) - set(getattr(gad_case, table)["device_name"])
+        if unknown:
+            raise ValueError(
+                f"setpoints[{table!r}] has unknown devices {sorted(unknown)}"
+            )
 
-    mpssd = getattr(case, "mpssd_data", None)
-    if mpssd is not None and len(mpssd):
-        bus_id = dict(zip(bus["name"].astype(str), bus["id"]))
-        p_mpssd = _indexed(frames.get("p_mpssd"), "device_name")
-        q_mpssd = _indexed(frames.get("q_mpssd"), "device_name")
-        for _, row in mpssd.iterrows():
-            device = _text(row, "device_name")
-            i = bus_id[_text(row, "bus_name")]
-            scale = bus_s_base[i] / 1e3
-            for p in _split_phases(row["phases"]):
-                p_pu = _saved(p_mpssd, device, p, default=_value(row, f"p_{p}"))
-                q_pu = _saved(q_mpssd, device, p, default=_value(row, f"q_{p}"))
-                out.append(
-                    _generator_line(
-                        f"mpssd_{device}",
-                        bus_name[i],
-                        p,
-                        bus_kv[i],
-                        p_pu * scale,
-                        q_pu * scale,
-                    )
-                )
 
-    p_bats = _indexed(frames.get("battery_active_power"), "id")
-    q_bats = _indexed(frames.get("battery_reactive_power"), "id")
-    if case.bat_data is not None:
-        for _, row in case.bat_data.iterrows():
-            scale = bus_s_base[row["id"]] / 1e3
-            setpoints = _battery_setpoints(row, p_bats, q_bats)
-            nodes = ".".join(str(PHASE_NODE[p]) for p in setpoints)
-            kv = bus_kv[row["id"]] * (sqrt(3) if len(setpoints) > 1 else 1)
-            p_total = sum(p for p, _ in setpoints.values())
-            q_total = sum(q for _, q in setpoints.values())
-            out.append(
-                f"New Storage.{row['name']} phases={len(setpoints)} "
-                f"bus1={bus_name[row['id']]}.{nodes} kV={kv:.12g} "
-                f"kVA={_value(row, 's_max') * scale:.12g} "
-                f"kWrated={_value(row, 's_max') * scale:.12g} "
+def _setpoint(
+    setpoints: dict, table: str, device_name: str, column: str, default: float
+) -> float:
+    """Setpoint of one device and column, ``default`` when not given or NaN."""
+    frame = setpoints.get(table)
+    if frame is None or column not in frame.columns or device_name not in frame.index:
+        return default
+    value = pd.to_numeric(frame.at[device_name, column], errors="coerce")
+    return default if pd.isna(value) else float(value)
+
+
+class _Writer:
+    """Builds the lines of the .dss file and records the elements written per device."""
+
+    def __init__(self, gad_case: GadCase, t: int, setpoints: dict):
+        self.case = gad_case
+        self.t = t
+        self.setpoints = setpoints
+        self.schedule = _Schedule(gad_case.schedules, t)
+        bus = gad_case.bus_data
+        self.bus = bus
+        self.bus_name = dict(zip(bus["id"], bus["name"].astype(str)))
+        self.bus_kv = dict(zip(bus["id"], bus["v_ln_base"] / 1e3))
+        by_name = bus.assign(name=bus["name"].astype(str)).set_index("name")
+        self.bus_row = by_name
+        self.lines: list[str] = []
+        self.devices: list[_Device] = []
+        self.regulators: dict[tuple, list[_Transformer]] = {}
+        self.used: set[tuple[str, str]] = set()
+
+    # -- bookkeeping
+    def claim(self, element_class: str, name: str) -> str:
+        key = (element_class, name.lower())
+        if key in self.used:
+            raise ValueError(f"two {element_class} elements are named {name!r}")
+        self.used.add(key)
+        return name
+
+    def add(self, table: str, row: pd.Series, elements: list[tuple[str, list[str]]]):
+        bus_name = _text(row, "bus_name")
+        kva_base = self.bus_row.loc[bus_name, "s_base"] / 1e3
+        self.devices.append(
+            _Device(table, row["device_name"], elements, bus_name, kva_base)
+        )
+
+    def bus_spec(self, row: pd.Series) -> tuple[str, list[str], float, float]:
+        """(bus1 with nodes, phases, kV, kVA base) of a device row."""
+        bus_name = _text(row, "bus_name")
+        phases = _split_phases(row["phases"])
+        bus = self.bus_row.loc[bus_name]
+        kv = _kv(bus["v_ln_base"] / 1e3, len(phases))
+        return f"{bus_name}.{_nodes(phases)}", phases, kv, bus["s_base"] / 1e3
+
+    # -- network
+    def write_network(self) -> None:
+        swing = self.bus[self.bus["bus_type"] == "SWING"].iloc[0]
+        v_swing = self.schedule.column("v_a")
+        self.lines += [
+            "Clear",
+            f"New Circuit.distopf basekv={swing['v_ln_base'] * sqrt(3) / 1e3:.12g} "
+            f"pu={swing['v_a'] if v_swing is None else v_swing:.12g} phases=3 "
+            f"bus1={self.bus_name[swing['id']]} mvasc3=1e6 mvasc1=1e6",
+        ]
+        self.regulators = self.regulator_transformers()
+        for _, row in self.case.branch_data.iterrows():
+            if row["type"] == "transformer":
+                key = (row["fb"], row["tb"])
+                for transformer in _branch_transformers(
+                    row, self.regulators.get(key, [])
+                ):
+                    self.claim("transformer", transformer.element)
+                    self.lines.append(
+                        _transformer_line(
+                            transformer.element,
+                            row,
+                            transformer,
+                            self.bus_name,
+                            self.bus_kv,
+                        )
+                    )
+            elif row["type"] == "center_tap_xfmr":
+                self.lines.append(
+                    _center_tap_transformer(row, self.bus_name, self.bus_kv)
+                )
+            else:
+                self.lines.append(_line(row, self.bus_name))
+
+    def regulator_transformers(self) -> dict[tuple, list[_Transformer]]:
+        """Regulator devices as Transformers, by the (fb, tb) ids of their branch."""
+        branch = self.case.branch_data
+        branch_key = {
+            (self.bus_name[r["fb"]], self.bus_name[r["tb"]]): (r["fb"], r["tb"])
+            for _, r in branch[branch["type"] == "transformer"].iterrows()
+        }
+        by_branch: dict[tuple, list[_Transformer]] = {}
+        for _, reg in self.case.reg_data.iterrows():
+            name = reg["device_name"]
+            key = branch_key.get((str(reg["from_name"]), str(reg["to_name"])))
+            if key is None:
+                raise ValueError(
+                    f"regulator {name}: no transformer branch from "
+                    f"{reg['from_name']!r} to {reg['to_name']!r}"
+                )
+            step = (reg["ratio_max"] - reg["ratio_min"]) / reg["num_taps"]
+            tap = _setpoint(self.setpoints, "reg_data", name, "tap", reg["tap"])
+            phases = _split_phases(reg["phases"])
+            element = _element_name(name)
+            by_branch.setdefault(key, []).append(
+                _Transformer(element, phases, 1 + step * tap)
+            )
+            self.devices.append(
+                _Device(
+                    "reg_data",
+                    name,
+                    [(f"Transformer.{element}", phases)],
+                    "",
+                    0.0,
+                    step,
+                )
+            )
+        return by_branch
+
+    # -- devices
+    def write_devices(self) -> None:
+        self.write_generators()
+        self.write_pv()
+        self.write_batteries()
+        self.write_capacitors()
+        self.write_loads()
+        # A tight tolerance makes constant-PQ elements deliver their setpoints to ~1e-9 pu.
+        self.lines += ["Set mode=snap tolerance=1e-9 maxiterations=100", "Solve"]
+        self.lines += [
+            f"SetkVBase bus={self.bus_name[i]} kvll={kv * sqrt(3):.12g}"
+            for i, kv in self.bus_kv.items()
+        ]
+
+    def write_injector(
+        self, table: str, row: pd.Series, name: str, p_pu: float, q_pu: float
+    ) -> None:
+        """Constant-PQ Generator for a gen or pv device with totals ``p_pu``, ``q_pu``."""
+        bus1, phases, kv, scale = self.bus_spec(row)
+        p_pu = _setpoint(self.setpoints, table, row["device_name"], "p", p_pu)
+        q_pu = _setpoint(self.setpoints, table, row["device_name"], "q", q_pu)
+        self.lines.append(
+            f"New Generator.{name} phases={len(phases)} bus1={bus1} kV={kv:.12g} "
+            f"kW={p_pu * scale:.12g} kvar={q_pu * scale:.12g} model=1"
+        )
+        self.add(table, row, [(f"Generator.{name}", phases)])
+
+    def shaped(self, row: pd.Series, shape_column: str) -> tuple[float, float]:
+        """(P multiplier, Q) of a gen or pv row: Q is scaled only by ``<shape>.q``."""
+        p_mult, q_mult = self.schedule.multipliers(_text(row, shape_column))
+        return p_mult, _value(row, "q") * (1.0 if q_mult is None else q_mult)
+
+    def write_generators(self) -> None:
+        for _, row in self.case.gen_data.iterrows():
+            p_mult, q = self.shaped(row, "gen_shape")
+            name = self.claim("generator", _element_name(row["device_name"]))
+            self.write_injector("gen_data", row, name, _value(row, "p") * p_mult, q)
+
+    def write_pv(self) -> None:
+        for _, row in self.case.pv_data.iterrows():
+            pmpp = _value(row, "pmpp")
+            p_mult, q = self.shaped(row, "pv_shape")
+            available = min(
+                pmpp * _value(row, "irradiance") * p_mult,
+                _value(row, "pmpp_limit") * pmpp,
+            )
+            name = _element_name(row["device_name"])
+            if ("generator", name.lower()) in self.used:
+                name = f"pvsystem_{name}"
+            self.write_injector(
+                "pv_data", row, self.claim("generator", name), available, q
+            )
+
+    def write_batteries(self) -> None:
+        for _, row in self.case.bat_data.iterrows():
+            bus1, phases, kv, scale = self.bus_spec(row)
+            name = self.claim("storage", _element_name(row["device_name"]))
+            p = _setpoint(
+                self.setpoints, "bat_data", row["device_name"], "p", _value(row, "p")
+            )
+            q = _setpoint(
+                self.setpoints, "bat_data", row["device_name"], "q", _value(row, "q")
+            )
+            rating = max(_value(row, "s_max"), np.hypot(p, q)) * scale
+            self.lines.append(
+                f"New Storage.{name} phases={len(phases)} bus1={bus1} kV={kv:.12g} "
+                f"kVA={rating:.12g} kWrated={rating:.12g} "
                 f"kWhrated={_value(row, 'energy_capacity') * scale:.12g} "
                 f"%stored={_value(row, 'start_soc') * 100:.12g} "
                 f"%reserve={_value(row, 'min_soc') * 100:.12g} "
                 f"%EffCharge={_value(row, 'charge_efficiency') * 100:.12g} "
                 f"%EffDischarge={_value(row, 'discharge_efficiency') * 100:.12g} "
-                f"%idlingkW=0 kW={p_total * scale:.12g} kvar={q_total * scale:.12g}"
+                f"%idlingkW=0 kW={p * scale:.12g} kvar={q * scale:.12g}"
             )
+            self.add("bat_data", row, [(f"Storage.{name}", phases)])
 
-    out += ["Set mode=snap", "Solve"]
-    out += [
-        f"SetkVBase bus={bus_name[i]} kvll={kv * sqrt(3):.12g}"
-        for i, kv in bus_kv.items()
-    ]
-    out.append("")
+    def write_capacitors(self) -> None:
+        for _, row in self.case.cap_data.iterrows():
+            bus1, phases, kv, scale = self.bus_spec(row)
+            name = self.claim("capacitor", _element_name(row["device_name"]))
+            status = _setpoint(
+                self.setpoints,
+                "cap_data",
+                row["device_name"],
+                "u",
+                _value(row, "status"),
+            )
+            self.lines.append(
+                f"New Capacitor.{name} phases={len(phases)} bus1={bus1} kV={kv:.12g} "
+                f"kvar={_value(row, 'q') * scale:.12g} numsteps=1 "
+                f"states=[{int(status > 0.5)}]"
+            )
+            self.add("cap_data", row, [(f"Capacitor.{name}", phases)])
+
+    def write_loads(self) -> None:
+        for _, row in self.case.load_data.iterrows():
+            phases = _split_phases(row["phases"])
+            bus_name = _text(row, "bus_name")
+            kv_ln = self.bus_row.loc[bus_name, "v_ln_base"] / 1e3
+            scale = self.bus_row.loc[bus_name, "s_base"] / 1e3
+            if _text(row, "status").lower() == "fixed":
+                p_mult, q_mult = 1.0, 1.0
+            else:
+                p_mult, q_mult = self.schedule.multipliers(_text(row, "load_shape"))
+                q_mult = p_mult if q_mult is None else q_mult
+            p = {ph: _value(row, f"p_{ph}") * p_mult for ph in phases}
+            q = {ph: _value(row, f"q_{ph}") * q_mult for ph in phases}
+            cvr_p, cvr_q = _value(row, "cvr_p"), _value(row, "cvr_q")
+            model = (
+                f"model=4 cvrwatts={cvr_p:.12g} cvrvars={cvr_q:.12g}"
+                if cvr_p or cvr_q
+                else "model=1"
+            )
+            equal = (
+                np.ptp(list(p.values())) < 1e-12 and np.ptp(list(q.values())) < 1e-12
+            )
+            # Equal phases are one multi-phase Load; unequal ones one single-phase Load each.
+            groups = [phases] if equal else [[ph] for ph in phases]
+            name = _element_name(row["device_name"])
+            elements = []
+            for group in groups:
+                element = name if len(groups) == 1 else f"{name}_{group[0]}"
+                self.claim("load", element)
+                self.lines.append(
+                    f"New Load.{element} phases={len(group)} "
+                    f"bus1={bus_name}.{_nodes(group)} kV={_kv(kv_ln, len(group)):.12g} "
+                    f"kW={sum(p[ph] for ph in group) * scale:.12g} "
+                    f"kvar={sum(q[ph] for ph in group) * scale:.12g} "
+                    f"{model} vminpu=0.5 vmaxpu=1.5"
+                )
+                elements.append((f"Load.{element}", group))
+            self.add("load_data", row, elements)
+
+
+def _build(gad_case: GadCase, t: Optional[int], setpoints: Optional[dict]):
+    """The script lines and written devices of ``gad_case`` at time step ``t``."""
+    setpoints = {} if setpoints is None else setpoints
+    _check_setpoints(gad_case, setpoints)
+    t = gad_case.start_step if t is None else t
+    writer = _Writer(gad_case, t, setpoints)
+    writer.write_network()
+    writer.write_devices()
+    return writer, t
+
+
+def gad_case_to_dss(
+    gad_case: GadCase,
+    output_path: Union[str, Path],
+    t: Optional[int] = None,
+    setpoints: Optional[dict[str, pd.DataFrame]] = None,
+) -> Path:
+    """Write ``gad_case`` at time step ``t`` (default ``start_step``) to an OpenDSS file.
+
+    ``setpoints`` replaces the device outputs, see the module docstring.
+    """
+    writer, _ = _build(gad_case, t, setpoints)
     output_path = Path(output_path)
-    output_path.write_text("\n".join(out))
+    output_path.write_text("\n".join([*writer.lines, ""]))
     return output_path
 
 
-def csv_to_dss(
-    csv_dir: Union[str, Path],
-    output_path: Union[str, Path],
-    t: Optional[int] = None,
-    opf_result: Any = None,
-) -> Path:
-    """Load a DistOPF CSV case directory and write it as an OpenDSS file."""
-    return case_to_dss(create_case(Path(csv_dir)), output_path, t, opf_result)
-
-
+# ---------------------------------------------------------------- read-back
 def _complex_pairs(flat) -> np.ndarray:
     """OpenDSS returns complex arrays as interleaved real, imaginary values."""
     values = np.asarray(flat, dtype=float)
@@ -538,7 +642,7 @@ def _element_terminal(element: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
 def _branch_values(
-    row: pd.Series, bus_v_base: dict
+    row: pd.Series, bus_v_base: dict, transformers: list[_Transformer]
 ) -> dict[str, tuple[complex, complex]]:
     """Per-unit (power, current) entering each phase of one branch, by phase name.
 
@@ -560,9 +664,7 @@ def _branch_values(
         return values
 
     if row["type"] == "transformer":
-        elements = [
-            (f"Transformer.{name}_{p}", [p]) for p in "abc" if p in row["phases"]
-        ]
+        elements = [(f"Transformer.{t.element}", t.phases) for t in transformers]
     else:
         elements = [(f"Line.{name}", _split_phases(row["phases"]))]
     i_base = s_base / bus_v_base[row["tb"]]
@@ -597,22 +699,28 @@ def _solved_bus_rows(bus: pd.DataFrame, t: int) -> tuple[list[dict], list[dict]]
     return magnitudes, angles
 
 
-def _solved_branch_rows(case: Case, t: int) -> dict[str, list[dict]]:
+def _solved_branch_rows(writer: _Writer, t: int) -> dict[str, list[dict]]:
     """Per-unit branch rows (P, Q, current magnitude, current angle) in the FBS layout."""
-    bus = case.bus_data
-    bus_v_base = dict(zip(bus["id"], bus["v_ln_base"]))
-    bus_name = dict(zip(bus["id"], bus["name"].astype(str)))
+    case = writer.case
+    bus_v_base = dict(zip(writer.bus["id"], writer.bus["v_ln_base"]))
     tables = {"p": [], "q": [], "i_mag": [], "i_ang": []}
     for _, row in case.branch_data.sort_values("tb", kind="stable").iterrows():
         lead = {
             "fb": row["fb"],
             "tb": row["tb"],
-            "from_name": bus_name[row["fb"]],
-            "to_name": bus_name[row["tb"]],
+            "from_name": writer.bus_name[row["fb"]],
+            "to_name": writer.bus_name[row["tb"]],
             "t": t,
         }
         out = {key: {**lead, **dict.fromkeys(PHASE_NODE, np.nan)} for key in tables}
-        for phase, (power, current) in _branch_values(row, bus_v_base).items():
+        transformers = (
+            _branch_transformers(row, writer.regulators.get((row["fb"], row["tb"]), []))
+            if row["type"] == "transformer"
+            else []
+        )
+        for phase, (power, current) in _branch_values(
+            row, bus_v_base, transformers
+        ).items():
             out["p"][phase] = power.real
             out["q"][phase] = power.imag
             out["i_mag"][phase] = abs(current)
@@ -632,206 +740,130 @@ def _kva_by_node(element: str) -> dict[int, complex]:
     return {n: p for n, p in zip(nodes, power[:n_conductors]) if n != 0}
 
 
-def _device_row(lead: dict, phases: list[str], values: dict[str, float]) -> dict:
-    """FBS-layout row: NaN for phases the device lacks, 0 for phases without a value."""
-    row = {**lead, **dict.fromkeys(PHASE_NODE, np.nan)}
-    row.update(dict.fromkeys(phases, 0.0))
-    row.update({phase: value + 0.0 for phase, value in values.items()})  # no -0.0
-    return row
+def _device_kva(device: _Device) -> complex:
+    """Power into all elements of a device (kW + j kvar)."""
+    return sum(sum(_kva_by_node(e).values()) for e, _ in device.elements)
 
 
-def _drop_empty_secondary(table: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
-    """Device tables list s1/s2 columns only when the network has secondary devices."""
-    if table is None:
-        return None
-    empty = [p for p in ("s1", "s2") if table[p].isna().all()]
-    return table.drop(columns=empty)
+def _load_rows(devices: list[_Device]) -> pd.DataFrame:
+    """Per-phase P and Q (pu, consumption positive) of every load device."""
+    rows = []
+    for device in devices:
+        row = {
+            "device_name": device.device_name,
+            "element": ",".join(e for e, _ in device.elements),
+        }
+        row.update({f"{k}_{ph}": 0.0 for k in "pq" for ph in LOAD_PHASES})
+        for element, phases in device.elements:
+            for node, kva in _kva_by_node(element).items():
+                phase = next(ph for ph in phases if PHASE_NODE[ph] == node)
+                row[f"p_{phase}"] += kva.real / device.kva_base
+                row[f"q_{phase}"] += kva.imag / device.kva_base
+        rows.append(row)
+    columns = ["device_name", "element"] + [
+        f"{k}_{ph}" for k in "pq" for ph in LOAD_PHASES
+    ]
+    return pd.DataFrame(rows, columns=columns).set_index("device_name")
 
 
-def _solved_device_rows(case: Case, t: int) -> dict[str, list[dict]]:
-    """Per-unit generator, load, capacitor and battery rows read from the solved circuit.
+def _device_frame(devices: list[_Device], values, columns: list[str]) -> pd.DataFrame:
+    """Frame indexed by device_name with the ``element`` column and ``values(device)`` columns."""
+    rows = [
+        {
+            "device_name": d.device_name,
+            "element": ",".join(e for e, _ in d.elements),
+            **dict(zip(columns, values(d))),
+        }
+        for d in devices
+    ]
+    return pd.DataFrame(rows, columns=["device_name", "element", *columns]).set_index(
+        "device_name"
+    )
 
-    Generation and capacitor/battery injections are positive when injecting power
-    (OpenDSS reports them as negative power into the element).
-    """
+
+def _injection(device: _Device) -> tuple[float, float]:
+    """Injected (P, Q) in pu: OpenDSS reports power into the element."""
+    kva = -_device_kva(device)
+    return kva.real / device.kva_base, kva.imag / device.kva_base
+
+
+def _capacitor_state(device: _Device) -> tuple[float, float]:
+    """Injected Q (pu) and the on/off state of a capacitor."""
     from opendssdirect import dss
 
-    bus = case.bus_data
-    existing = {name.lower() for name in dss.Circuit.AllElementNames()}
-    kva_base = dict(zip(bus["id"], bus["s_base"] / 1e3))
-    tables = {
-        key: [] for key in ("p_gen", "q_gen", "p_load", "q_load", "q_cap", "u_cap")
+    dss.Capacitors.Name(device.elements[0][0].split(".", 1)[1])
+    return _injection(device)[1], float(dss.Capacitors.States()[0])
+
+
+def _regulator_tap(device: _Device) -> tuple[int]:
+    """Tap position of a regulator from its winding-2 ratio."""
+    from opendssdirect import dss
+
+    dss.Transformers.Name(device.elements[0][0].split(".", 1)[1])
+    dss.Transformers.Wdg(2)
+    return (round((dss.Transformers.Tap() - 1) / device.step),)
+
+
+def _device_results(devices: list[_Device]) -> dict[str, pd.DataFrame]:
+    """Read-back frames of the solved circuit, one per device table."""
+    by_table = {
+        table: [d for d in devices if d.table == table] for table in DEVICE_TABLES
     }
-
-    def element_kva(element: str) -> complex:
-        return sum(_kva_by_node(element).values()) if element.lower() in existing else 0
-
-    for _, gen in case.gen_data.iterrows():
-        phases = _split_phases(gen["phases"])
-        power = {
-            p: -element_kva(f"Generator.{gen['name']}_{p}") / kva_base[gen["id"]]
-            for p in phases
-        }
-        lead = {"id": gen["id"], "name": gen["name"], "t": t}
-        tables["p_gen"].append(
-            _device_row(lead, phases, {p: v.real for p, v in power.items()})
-        )
-        tables["q_gen"].append(
-            _device_row(lead, phases, {p: v.imag for p, v in power.items()})
-        )
-
-    for _, cap in case.cap_data.iterrows():
-        phases = _split_phases(cap["phases"])
-        lead = {"id": cap["id"], "name": cap["name"], "t": t}
-        elements = {p: f"Capacitor.{cap['name']}_{p}" for p in phases}
-        q = {p: -element_kva(e).imag / kva_base[cap["id"]] for p, e in elements.items()}
-        on = {p: float(e.lower() in existing) for p, e in elements.items()}
-        tables["q_cap"].append(_device_row(lead, phases, q))
-        tables["u_cap"].append(_device_row(lead, phases, on))
-
-    for _, row in bus.iterrows():
-        phases = _split_phases(row["phases"])
-        power = dict.fromkeys(phases, 0j)
-        for phase in LOAD_PHASES:
-            element = f"Load.{row['name']}_{phase}"
-            if element.lower() not in existing:
-                continue
-            load = element_kva(element) / kva_base[row["id"]]
-            for target in ("s1", "s2") if phase == "s1s2" else (phase,):
-                power[target] = power.get(target, 0j) + load / (
-                    2 if phase == "s1s2" else 1
-                )
-        lead = {"id": row["id"], "name": row["name"], "t": t}
-        tables["p_load"].append(
-            _device_row(lead, phases, {p: v.real for p, v in power.items()})
-        )
-        tables["q_load"].append(
-            _device_row(lead, phases, {p: v.imag for p, v in power.items()})
-        )
-    return tables
+    results = {}
+    for table in ("pv_data", "gen_data", "bat_data"):
+        results[table] = _device_frame(by_table[table], _injection, ["p", "q"])
+    results["cap_data"] = _device_frame(
+        by_table["cap_data"], _capacitor_state, ["q", "u"]
+    )
+    results["reg_data"] = _device_frame(by_table["reg_data"], _regulator_tap, ["tap"])
+    results["load_data"] = _load_rows(by_table["load_data"])
+    return results
 
 
-def _solved_battery_rows(case: Case, t: int) -> dict[str, list[dict]]:
-    """Per-unit battery P and Q (positive discharging) read from the solved circuit."""
-    from opendssdirect import dss
+def run_opendss_gad(
+    gad_case: GadCase,
+    setpoints: Optional[dict[str, pd.DataFrame]] = None,
+    t: Optional[int] = None,
+) -> tuple[PowerFlowResult, dict[str, pd.DataFrame]]:
+    """Solve ``gad_case`` at time step ``t`` (default ``start_step``) in OpenDSS.
 
-    tables = {"p_bat": [], "q_bat": []}
-    if case.bat_data is None:
-        return tables
-    existing = {name.lower() for name in dss.Circuit.AllElementNames()}
-    kva_base = dict(zip(case.bus_data["id"], case.bus_data["s_base"] / 1e3))
-    node_phase = {1: "a", 2: "b", 3: "c"}
-    for _, bat in case.bat_data.iterrows():
-        phases = _split_phases(bat.get("phases", "abc"))
-        power = {}
-        if f"storage.{bat['name']}".lower() in existing:
-            kva = _kva_by_node(f"Storage.{bat['name']}")
-            power = {node_phase[n]: -v / kva_base[bat["id"]] for n, v in kva.items()}
-        lead = {"id": bat["id"], "name": bat["name"], "t": t}
-        tables["p_bat"].append(
-            _device_row(lead, phases, {p: v.real for p, v in power.items()})
-        )
-        tables["q_bat"].append(
-            _device_row(lead, phases, {p: v.imag for p, v in power.items()})
-        )
-    return tables
+    Returns the network result (bus voltage magnitudes and angles, branch P/Q and
+    currents, in the FBS layout, per-unit) and ``device_results``, a dict of frames
+    keyed by device table name and indexed by ``device_name``:
 
+    - ``gen_data``, ``pv_data``, ``bat_data``: ``p``, ``q`` total injection (pu)
+    - ``cap_data``: ``q`` injection (pu, at the solved voltage) and ``u`` on/off
+    - ``reg_data``: ``tap``
+    - ``load_data``: ``p_<phase>``, ``q_<phase>`` consumption (pu, as in ``load_data``)
 
-def _solved_regulator_rows(case: Case, t: int) -> dict[str, list[dict]]:
-    """Winding-2 tap ratios and tap positions of the regulators in the solved circuit."""
-    from opendssdirect import dss
-
-    tables = {"tap_ratios": [], "reg_taps": []}
-    if case.reg_data is None or not len(case.reg_data):
-        return tables
-    bus_name = dict(zip(case.bus_data["id"], case.bus_data["name"].astype(str)))
-    branch_name = case.branch_data.set_index(["fb", "tb"])["name"]
-    for _, reg in case.reg_data.iterrows():
-        step = (reg["ratio_max"] - reg["ratio_min"]) / reg["num_taps"]
-        lead = {
-            "fb": reg["fb"],
-            "tb": reg["tb"],
-            "from_name": bus_name[reg["fb"]],
-            "to_name": bus_name[reg["tb"]],
-            "t": t,
-        }
-        ratios = {}
-        for phase in _split_phases(reg["phases"]):
-            dss.Transformers.Name(
-                f"{branch_name[(reg['fb'], reg['tb'])]}_{int(reg['fb'])}_{int(reg['tb'])}_{phase}"
-            )
-            dss.Transformers.Wdg(2)
-            ratios[phase] = dss.Transformers.Tap()
-        tables["tap_ratios"].append(_device_row(lead, list(ratios), ratios))
-        taps = {p: round((r - 1) / step) for p, r in ratios.items()}
-        tables["reg_taps"].append(_device_row(lead, list(taps), taps))
-    return tables
-
-
-def run_opendss(case: Case, opf_result: Any = None) -> PowerFlowResult:
-    """Solve each time step of ``case`` (or each period of ``opf_result``) in OpenDSS.
-
-    Everything is read back from the solved circuit, in per-unit and the FBS result
-    layout: bus voltage magnitudes and angles, branch active/reactive power flows (from
-    side) and currents, generator, load, capacitor and battery power, capacitor on/off
-    states and regulator tap ratios and positions. MPSSD port setpoints are not
-    returned.
+    Every frame also has an ``element`` column with the OpenDSS element name(s).
+    ``gen_data``/``pv_data``/``bat_data``/``reg_data`` frames can be passed back as
+    ``setpoints``.
     """
     from opendssdirect import dss
 
-    frames = _opf_frames(opf_result)
-    times = _replay_times(case, [f for n, f in frames.items() if n != "voltages"])
-    rows: dict[str, list[dict]] = {}
-    converged = True
     with tempfile.TemporaryDirectory() as tmp:
-        for t in times:
-            path = case_to_dss(case, Path(tmp) / f"case_{t}.dss", t, opf_result)
-            dss.Text.Command("Clear")
-            dss.Text.Command(f"Redirect {path}")
-            converged = converged and bool(dss.Solution.Converged())
-            magnitudes, angles = _solved_bus_rows(case.bus_data, t)
-            step = {
-                "voltages": magnitudes,
-                "voltage_angles": angles,
-                **_solved_branch_rows(case, t),
-                **_solved_device_rows(case, t),
-                **_solved_battery_rows(case, t),
-                **_solved_regulator_rows(case, t),
-            }
-            for name, step_rows in step.items():
-                rows.setdefault(name, []).extend(step_rows)
-    tables = {
-        name: pd.DataFrame(table) if table else None for name, table in rows.items()
-    }
-    for name in tables.keys() - {
-        "voltages",
-        "voltage_angles",
-        "p",
-        "q",
-        "i_mag",
-        "i_ang",
-    }:
-        tables[name] = _drop_empty_secondary(tables[name])
-    return PowerFlowResult(
-        voltages=tables["voltages"],
-        voltage_angles=tables["voltage_angles"],
-        active_power_flows=tables["p"],
-        reactive_power_flows=tables["q"],
-        currents=tables["i_mag"],
-        current_angles=tables["i_ang"],
-        active_power_generation=tables["p_gen"],
-        reactive_power_generation=tables["q_gen"],
-        active_power_loads=tables["p_load"],
-        reactive_power_loads=tables["q_load"],
-        capacitor_reactive_power=tables["q_cap"],
-        u_caps=tables["u_cap"],
-        battery_active_power=tables.get("p_bat"),
-        battery_reactive_power=tables.get("q_bat"),
-        tap_ratios=tables.get("tap_ratios"),
-        reg_taps=tables.get("reg_taps"),
-        solver="opendss",
-        backend="opendss",
-        result_type="opendss",
-        converged=converged,
-        case=case,
+        writer, t = _build(gad_case, t, setpoints)
+        path = Path(tmp) / "gad.dss"
+        path.write_text("\n".join([*writer.lines, ""]))
+        dss.Text.Command("Clear")
+        dss.Text.Command(f"Redirect {path}")
+    magnitudes, angles = _solved_bus_rows(gad_case.bus_data, t)
+    branch = _solved_branch_rows(writer, t)
+    devices = _device_results(writer.devices)
+    return (
+        PowerFlowResult(
+            voltages=pd.DataFrame(magnitudes),
+            voltage_angles=pd.DataFrame(angles),
+            active_power_flows=pd.DataFrame(branch["p"]),
+            reactive_power_flows=pd.DataFrame(branch["q"]),
+            currents=pd.DataFrame(branch["i_mag"]),
+            current_angles=pd.DataFrame(branch["i_ang"]),
+            solver="opendss",
+            backend="opendss",
+            result_type="opendss",
+            converged=bool(dss.Solution.Converged()),
+            case=gad_case,
+        ),
+        devices,
     )
