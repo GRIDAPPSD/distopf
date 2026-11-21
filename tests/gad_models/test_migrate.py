@@ -35,7 +35,13 @@ def bus_names_by_id(case: opf.Case) -> dict:
 
 def gen_row(**values) -> dict:
     """One legacy generator row on bus id 2, three phases unless overridden."""
-    row = {"id": 2, "name": "g1", "phases": "abc", "control_variable": "P", "gen_shape": ""}
+    row = {
+        "id": 2,
+        "name": "g1",
+        "phases": "abc",
+        "control_variable": "P",
+        "gen_shape": "",
+    }
     for ph in "abc":
         row.update({f"p_{ph}": 0.01, f"q_{ph}": 0.0, f"s_{ph}_max": 0.012})
         row.update({f"q_{ph}_min": -0.01, f"q_{ph}_max": 0.01})
@@ -113,7 +119,9 @@ def test_generator_without_name_uses_the_bus_name():
     del row["name"]
     case = ieee13_with_gens(row)
     gad = to_gad_case(case)
-    assert gad.gen_data["device_name"].iloc[0] == f"generator.{bus_names_by_id(case)[2]}"
+    assert (
+        gad.gen_data["device_name"].iloc[0] == f"generator.{bus_names_by_id(case)[2]}"
+    )
 
 
 def test_generator_with_numeric_name_gets_a_plain_text_name():
@@ -188,7 +196,9 @@ def test_balanced_capacitor_becomes_one_device_with_total_q():
 
 def test_unbalanced_capacitor_splits_into_one_device_per_phase():
     case = legacy_case("ieee13")
-    case.cap_data.loc[case.cap_data["name"] == "675", ["q_a", "q_b", "q_c"]] = [0.1, 0.2, 0.3]
+    case.cap_data.loc[
+        case.cap_data["name"].astype(str) == "675", ["q_a", "q_b", "q_c"]
+    ] = [0.1, 0.2, 0.3]
     gad = to_gad_case(case)
     caps = gad.cap_data.set_index("device_name")
     assert list(caps.index) == [
@@ -220,7 +230,11 @@ def test_unequal_taps_split_into_one_device_per_phase():
     gad = to_gad_case(legacy_case("ieee13"))
     regs = gad.reg_data.set_index("device_name")
     rg60 = regs[regs["to_name"] == "rg60"]
-    assert list(rg60.index) == ["regulator.rg60.a", "regulator.rg60.b", "regulator.rg60.c"]
+    assert list(rg60.index) == [
+        "regulator.rg60.a",
+        "regulator.rg60.b",
+        "regulator.rg60.c",
+    ]
     assert list(rg60["phases"]) == ["a", "b", "c"]
     assert list(rg60["tap"]) == [9, 6, 9]
     assert list(rg60["fb"]) == [2, 2, 2]
@@ -265,7 +279,9 @@ def test_one_load_per_bus_with_nonzero_load_and_per_phase_values():
     case = legacy_case("ieee13")
     gad = to_gad_case(case)
     bus = case.bus_data.set_index(case.bus_data["name"].astype(str))
-    loaded = bus[(bus[["pl_a", "pl_b", "pl_c", "ql_a", "ql_b", "ql_c"]] != 0).any(axis=1)]
+    loaded = bus[
+        (bus[["pl_a", "pl_b", "pl_c", "ql_a", "ql_b", "ql_c"]] != 0).any(axis=1)
+    ]
     loads = gad.load_data.set_index("bus_name")
     assert sorted(loads.index) == sorted(loaded.index)
     row = loads.loc["634"]
@@ -281,8 +297,9 @@ def test_one_load_per_bus_with_nonzero_load_and_per_phase_values():
 def test_load_lists_only_phases_that_carry_load():
     gad = to_gad_case(legacy_case("ieee13"))
     loads = gad.load_data.set_index("bus_name")
-    assert loads.loc["645", "phases"] == "bc"
+    assert loads.loc["645", "phases"] == "b"
     assert loads.loc["645", "p_a"] == 0
+    assert loads.loc["645", "p_c"] == 0
 
 
 def test_load_carries_bus_cvr_and_shape():
@@ -308,7 +325,9 @@ def test_load_shape_with_suffixed_schedule_columns_is_kept():
     shapes = set(gad.load_data["load_shape"]) - {""}
     assert "com_kw_17950_pu" in shapes
     for shape in shapes:
-        assert any(c == shape or c.startswith(shape + ".") for c in case.schedules.columns)
+        assert any(
+            c == shape or c.startswith(shape + ".") for c in case.schedules.columns
+        )
 
 
 def test_load_s1s2_is_split_half_to_s1_and_half_to_s2():
@@ -333,7 +352,11 @@ def test_load_s1s2_is_split_half_to_s1_and_half_to_s2():
 def test_bus_data_drops_load_columns_and_keeps_the_rest():
     case = legacy_case("smartds_small_v2")
     gad = to_gad_case(case)
-    dropped = [c for c in case.bus_data.columns if c[:3] in ("pl_", "ql_") or c in ("cvr_p", "cvr_q", "load_shape")]
+    dropped = [
+        c
+        for c in case.bus_data.columns
+        if c[:3] in ("pl_", "ql_") or c in ("cvr_p", "cvr_q", "load_shape")
+    ]
     assert dropped
     assert not set(dropped) & set(gad.bus_data.columns)
     kept = [c for c in case.bus_data.columns if c not in dropped]
@@ -382,8 +405,12 @@ def test_branch_data_gains_from_and_to_names():
     assert "from_name" not in case.branch_data.columns
     gad = to_gad_case(case)
     names = bus_names_by_id(case)
-    assert list(gad.branch_data["from_name"]) == [names[i] for i in case.branch_data["fb"]]
-    assert list(gad.branch_data["to_name"]) == [names[i] for i in case.branch_data["tb"]]
+    assert list(gad.branch_data["from_name"]) == [
+        names[i] for i in case.branch_data["fb"]
+    ]
+    assert list(gad.branch_data["to_name"]) == [
+        names[i] for i in case.branch_data["tb"]
+    ]
     assert "from_name" not in case.branch_data.columns  # legacy case is not modified
 
 
@@ -395,7 +422,10 @@ def test_branch_data_with_names_is_unchanged():
 
 def test_legacy_case_is_not_modified():
     case = legacy_case("ieee123_30der")
-    before = {t: getattr(case, t).copy() for t in ("bus_data", "gen_data", "cap_data", "reg_data", "bat_data")}
+    before = {
+        t: getattr(case, t).copy()
+        for t in ("bus_data", "gen_data", "cap_data", "reg_data", "bat_data")
+    }
     to_gad_case(case)
     for table, frame in before.items():
         pd.testing.assert_frame_equal(getattr(case, table), frame)
@@ -434,7 +464,9 @@ def gad_injections(gad: GadCase, table: str) -> dict:
     for _, row in getattr(gad, table).iterrows():
         phases = parse_phases(row["phases"])
         for ph in phases:
-            totals[(row["bus_name"], ph)][0] += (row["p"] if table == "gen_data" else 0.0) / len(phases)
+            totals[(row["bus_name"], ph)][0] += (
+                row["p"] if table == "gen_data" else 0.0
+            ) / len(phases)
             totals[(row["bus_name"], ph)][1] += row["q"] / len(phases)
     return totals
 
@@ -499,7 +531,9 @@ class TestInvariants:
         for _, row in gad.load_data.iterrows():
             for ph in parse_phases(row["phases"]):
                 key = (row["bus_name"], ph)
-                assert key not in migrated or migrated[key] == (0.0, 0.0), "load phases overlap"
+                assert key not in migrated or migrated[key] == (0.0, 0.0), (
+                    "load phases overlap"
+                )
                 migrated[key] = (row[f"p_{ph}"], row[f"q_{ph}"])
         legacy = {k: v for k, v in legacy_loads(case).items() if v != (0.0, 0.0)}
         assert set(legacy) == {k for k, v in migrated.items() if v != (0.0, 0.0)}
@@ -528,7 +562,9 @@ class TestInvariants:
     def test_battery_totals_are_preserved(self, pair):
         case, gad = pair
         assert len(gad.bat_data) == len(case.bat_data)
-        assert gad.bat_data["s_max"].sum() == pytest.approx(case.bat_data["s_max"].sum(), abs=TOL)
+        assert gad.bat_data["s_max"].sum() == pytest.approx(
+            case.bat_data["s_max"].sum(), abs=TOL
+        )
 
     def test_output_columns_are_exactly_the_contract_columns(self, pair):
         _, gad = pair
@@ -546,7 +582,15 @@ class TestInvariants:
         _, gad = pair
         for table, (columns, _) in DEVICE_TABLES.items():
             frame = getattr(gad, table)
-            for col in ("device_name", "type", "phases", "control_variable", "controller", "load_shape", "gen_shape"):
+            for col in (
+                "device_name",
+                "type",
+                "phases",
+                "control_variable",
+                "controller",
+                "load_shape",
+                "gen_shape",
+            ):
                 if col in columns:
                     assert not frame[col].isna().any(), (table, col)
 
