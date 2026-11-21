@@ -292,6 +292,16 @@ def test_shape_names_may_contain_dots(gad_case):
     assert (row["p_a"], row["q_a"]) == pytest.approx((0.09, 0.025), abs=TOL)
 
 
+def test_pv_shape_is_matched_exactly_including_case(gad_case):
+    gad_case.schedules = gad_case.schedules.rename(columns={"pv": "PV"})
+    gad_case.pv_data.loc[0, "pv_shape"] = "PV"
+    _, devices = run_opendss_gad(gad_case, t=1)  # PV is 0.5 at t=1
+    assert devices["pv_data"].loc["pvsystem.pv1", "p"] == pytest.approx(0.15, abs=TOL)
+    gad_case.pv_data.loc[0, "pv_shape"] = "pv"
+    with pytest.raises(ValueError, match="'pv'"):
+        run_opendss_gad(gad_case, t=1)
+
+
 def test_missing_time_step_raises(gad_case, tmp_path):
     with pytest.raises(ValueError, match="time step 9"):
         gad_case_to_dss(gad_case, tmp_path / "x.dss", t=9)
