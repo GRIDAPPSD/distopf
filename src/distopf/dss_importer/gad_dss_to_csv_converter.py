@@ -1364,9 +1364,16 @@ class GadDSSToCSVConverter:
         return _LOAD_MODEL_CVR.get(model, (0, 0))
 
     def _shape_values(self, name: str, kind: str = "p") -> np.ndarray:
-        """First `schedule_steps` multipliers of a loadshape (kind "p" or "q")."""
+        """First `schedule_steps` multipliers of a loadshape (kind "p" or "q").
+
+        Works for any shape name (yearly, daily or duty). All non-constant
+        shapes of one converter share the schedule time axis, so they must have
+        the same interval; the first one read sets it.
+        """
         key = (name.lower(), kind)
         if key not in self._shape_cache:
+            if key[0] not in self.dss.LoadShape.AllNames():
+                raise ValueError(f"Loadshape {name!r} is not defined")
             self.dss.LoadShape.Name(key[0])
             values = np.array(self.dss.LoadShape.PMult())
             if kind == "q":
@@ -1376,13 +1383,15 @@ class GadDSSToCSVConverter:
             is_constant = len(values) == 1  # interval is irrelevant
             if is_constant:
                 values = np.repeat(values, self.schedule_steps)
-            interval = self.dss.LoadShape.SInterval()
-            step = self.dss.Solution.StepSize()
-            if interval != step and not is_constant:
-                raise ValueError(
-                    f"Loadshape {name!r} interval is {interval} s but the solution "
-                    f"step is {step} s; resampling is not supported"
-                )
+            else:
+                interval = self.dss.LoadShape.SInterval()
+                first_interval = getattr(self, "_shape_interval", interval)
+                if interval != first_interval:
+                    raise ValueError(
+                        f"Loadshape {name!r} interval is {interval} s but other "
+                        f"shapes use {first_interval} s; resampling is not supported"
+                    )
+                self._shape_interval = interval
             if len(values) < self.schedule_steps:
                 raise ValueError(
                     f"Loadshape {name!r} has {len(values)} points, "
