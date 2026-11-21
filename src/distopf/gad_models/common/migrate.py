@@ -40,15 +40,16 @@ def to_gad_case(case) -> GadCase:
     """Convert a legacy ``distopf.Case`` to a ``GadCase``. ``case`` is not modified."""
     bus_names = dict(zip(case.bus_data["id"], case.bus_data["name"].astype(str)))
     schedule_columns = list(case.schedules.columns)
+    load_data = _load_data(case.bus_data, schedule_columns)
     return GadCase(
         branch_data=_branch_data(case.branch_data, bus_names),
         bus_data=_bus_data(case.bus_data),
-        schedules=case.schedules.copy(),
+        schedules=_schedules(case.schedules, load_data),
         gen_data=_gen_data(case.gen_data, bus_names, schedule_columns),
         bat_data=_bat_data(case.bat_data, bus_names),
         cap_data=_cap_data(case.cap_data, bus_names),
         reg_data=_reg_data(case.reg_data, bus_names),
-        load_data=_load_data(case.bus_data, schedule_columns),
+        load_data=load_data,
         start_step=case.start_step,
         n_steps=case.n_steps,
         delta_t=case.delta_t,
@@ -337,12 +338,31 @@ def _load_shape(shape, schedule_columns: list[str]) -> str:
     """The bus shape if it scales anything in the schedules, else "" (multiplier 1).
 
     A blank shape means "default". Legacy loads also read ``<shape>.p`` and
-    ``<shape>.<phase>.p`` style columns, so a prefix match counts.
+    ``<shape>.<phase>.p`` style columns, so a prefix match counts
+    (``_schedules`` then renames ``<shape>.p`` to ``<shape>``).
     """
     shape = DEFAULT_LOAD_SHAPE if _blank(shape) else _text(shape)
     if any(c == shape or c.startswith(f"{shape}.") for c in schedule_columns):
         return shape
     return ""
+
+
+def _schedules(schedules: pd.DataFrame, load_data: pd.DataFrame) -> pd.DataFrame:
+    """Copy of the schedules where a load shape's ``<shape>.p`` column is named ``<shape>``.
+
+    GAD convention: ``<shape>`` is the P multiplier and ``<shape>.q`` the Q multiplier.
+    Only shapes used by ``load_data`` are renamed (other names may contain dots).
+    """
+    renames = {}
+    for shape in sorted(set(load_data["load_shape"]) - {""}):
+        if f"{shape}.p" not in schedules.columns:
+            continue
+        if shape in schedules.columns:
+            raise ValueError(
+                f"schedules has both {shape!r} and {shape + '.p'!r}; keep only one P column"
+            )
+        renames[f"{shape}.p"] = shape
+    return schedules.rename(columns=renames)
 
 
 def _load_data(bus_data: pd.DataFrame, schedule_columns: list[str]) -> pd.DataFrame:

@@ -631,7 +631,9 @@ def test_unreferenced_schedule_columns_are_not_renamed():
         assert column in gad.schedules.columns
     referenced = set(gad.load_data["load_shape"])
     unreferenced_p = [
-        c for c in case.schedules.columns if c.endswith(".p") and c[:-2] not in referenced
+        c
+        for c in case.schedules.columns
+        if c.endswith(".p") and c[:-2] not in referenced
     ]
     assert all(c in gad.schedules.columns for c in unreferenced_p)
 
