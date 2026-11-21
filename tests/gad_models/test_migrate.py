@@ -600,3 +600,60 @@ class TestInvariants:
         for table in ("gen_data", "cap_data", "bat_data", "load_data"):
             assert set(getattr(gad, table)["bus_name"]) <= buses, table
         assert set(gad.reg_data["from_name"]) | set(gad.reg_data["to_name"]) <= buses
+
+
+# ---------------------------------------------------------------------------
+# Schedule columns of load shapes: <shape> is P, <shape>.q is Q
+# ---------------------------------------------------------------------------
+
+
+def test_referenced_load_shape_p_column_is_renamed_to_the_shape_name():
+    case = legacy_case("smartds_small_v2")
+    gad = to_gad_case(case)
+    shapes = set(gad.load_data["load_shape"]) - {""}
+    assert "com_kw_17950_pu" in shapes
+    for shape in shapes:
+        assert shape in gad.schedules.columns
+        assert f"{shape}.p" not in gad.schedules.columns
+        assert f"{shape}.q" in gad.schedules.columns
+        pd.testing.assert_series_equal(
+            gad.schedules[shape], case.schedules[f"{shape}.p"], check_names=False
+        )
+        pd.testing.assert_series_equal(
+            gad.schedules[f"{shape}.q"], case.schedules[f"{shape}.q"]
+        )
+
+
+def test_unreferenced_schedule_columns_are_not_renamed():
+    case = legacy_case("smartds_small_v2")
+    gad = to_gad_case(case)
+    for column in ("sfo_37.7452_-122.4074_25_180", "82_gen"):
+        assert column in gad.schedules.columns
+    referenced = set(gad.load_data["load_shape"])
+    unreferenced_p = [
+        c for c in case.schedules.columns if c.endswith(".p") and c[:-2] not in referenced
+    ]
+    assert all(c in gad.schedules.columns for c in unreferenced_p)
+
+
+def test_schedules_keep_their_row_count_and_column_count():
+    case = legacy_case("smartds_small_v2")
+    gad = to_gad_case(case)
+    assert len(gad.schedules) == len(case.schedules)
+    assert len(gad.schedules.columns) == len(case.schedules.columns)
+    assert "time" in gad.schedules.columns
+    assert "p1ulv4196_load.q" in gad.schedules.columns
+
+
+def test_shape_with_both_plain_and_p_columns_raises():
+    case = legacy_case("smartds_small_v2")
+    case.schedules["com_kw_17950_pu"] = 1.0
+    with pytest.raises(ValueError, match="com_kw_17950_pu"):
+        to_gad_case(case)
+
+
+def test_legacy_schedules_are_not_modified_by_the_rename():
+    case = legacy_case("smartds_small_v2")
+    before = case.schedules.copy()
+    to_gad_case(case)
+    pd.testing.assert_frame_equal(case.schedules, before)
