@@ -8,7 +8,9 @@ single-step case without schedules:
   scaled. Devices are summed per bus-phase into ``pl_*``/``ql_*``. FBS uses the linear
   CVR model ``p = p0 (1 + cvr/2 (v^2 - 1))``, so the power-weighted CVR of the devices
   on a bus-phase is exact. It is written to the ``cvr_p_{ph}``/``cvr_q_{ph}`` columns.
-* generators and PV: total power split equally over the device phases, summed per bus.
+* generators and PV: P and Q follow the shape (Q uses ``<shape>.q`` if it exists, else
+  the P multiplier; the PV ``pmpp_limit`` caps P only). Totals are split equally over
+  the device phases and summed per bus.
 * batteries: same, taking the power from the case or the setpoints.
 * capacitors: ``q`` of the devices that are on, split equally over the phases.
 * regulators: one legacy row per ``(fb, tb)`` with a tap per phase.
@@ -107,7 +109,7 @@ def _schedule_value(schedules: pd.DataFrame, t: int, column: str) -> float:
 
 def _multiplier(schedules: pd.DataFrame, t: int, shape: str, kind: str = "p") -> float:
     """Value of ``shape`` at ``t``. Q uses ``<shape>.q`` when it exists. Blank shape: 1."""
-    shape = str(shape).strip().lower()
+    shape = str(shape).strip()
     if not shape:
         return 1.0
     column = (
@@ -200,19 +202,21 @@ def _pv_injections(gad_case: GadCase, t: int, setpoints: Setpoints) -> list[_Inj
     for row in gad_case.pv_data.to_dict("records"):
         device = row["device_name"]
         pmpp = float(row["pmpp"])
+        shape = row.get("pv_shape", "")
         available = (
             pmpp
             * _cell(row, "irradiance", 1.0)
-            * _multiplier(gad_case.schedules, t, row.get("pv_shape", ""))
+            * _multiplier(gad_case.schedules, t, shape)
         )
         p = min(available, _cell(row, "pmpp_limit", 1.0) * pmpp)
+        q = _cell(row, "q", 0.0) * _multiplier(gad_case.schedules, t, shape, "q")
         out.append(
             (
                 device,
                 str(row["bus_name"]),
                 _phases_of(device, row["phases"]),
                 _setpoint(setpoints, "pv_data", device, "p", p),
-                _setpoint(setpoints, "pv_data", device, "q", _cell(row, "q", 0.0)),
+                _setpoint(setpoints, "pv_data", device, "q", q),
             )
         )
     return out
@@ -224,16 +228,16 @@ def _gen_injections(
     out = []
     for row in gad_case.gen_data.to_dict("records"):
         device = row["device_name"]
-        p = float(row["p"]) * _multiplier(
-            gad_case.schedules, t, row.get("gen_shape", "")
-        )
+        shape = row.get("gen_shape", "")
+        p = float(row["p"]) * _multiplier(gad_case.schedules, t, shape)
+        q = _cell(row, "q", 0.0) * _multiplier(gad_case.schedules, t, shape, "q")
         out.append(
             (
                 device,
                 str(row["bus_name"]),
                 _phases_of(device, row["phases"]),
                 _setpoint(setpoints, "gen_data", device, "p", p),
-                _setpoint(setpoints, "gen_data", device, "q", _cell(row, "q", 0.0)),
+                _setpoint(setpoints, "gen_data", device, "q", q),
             )
         )
     return out
