@@ -1353,6 +1353,16 @@ class GadDSSToCSVConverter:
     def get_q_flows(self) -> pd.DataFrame:
         return self._split_flows(np.imag)
 
+    def _rated_to_base_ratio(
+        self, bus: str, rated_kv: float, is_delta: bool = False
+    ) -> float:
+        """Bus base / element's rated kV (line-to-line if multiphase or delta); 1.0 on secondaries."""
+        if bus in self.secondary_buses:
+            return 1.0
+        line_to_line = is_delta or self.dss.CktElement.NumPhases() > 1
+        rated_ln = rated_kv * 1000 / (3**0.5 if line_to_line else 1)
+        return float(self._nominal_voltage_bases[bus]) / rated_ln
+
     def _load_cvr(self) -> tuple[float, float]:
         """CVR exponents (p, q) of the active load, from its OpenDSS model."""
         model = self.dss.Loads.Model()

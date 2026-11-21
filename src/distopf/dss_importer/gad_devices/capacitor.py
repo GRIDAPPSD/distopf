@@ -34,20 +34,6 @@ def _controllers_by_capacitor(dss) -> dict[str, str]:
     return controllers
 
 
-def _rated_to_base_ratio(
-    conv: GadDSSToCSVConverter, bus: str, rated_kv: float, is_delta: bool
-) -> float:
-    """Bus base / the active element's rated kV (line-to-line if multiphase or delta).
-
-    Same rule as ``DSSToCSVConverter._rated_to_base_ratio``; 1.0 on secondaries.
-    """
-    if bus in conv.secondary_buses:
-        return 1.0
-    line_to_line = is_delta or conv.dss.CktElement.NumPhases() > 1
-    rated_ln = rated_kv * 1000 / (3**0.5 if line_to_line else 1)
-    return float(conv._nominal_voltage_bases[bus]) / rated_ln
-
-
 def _phases(conv: GadDSSToCSVConverter, bus: str, nodes: list[int]) -> str:
     """Phases of a capacitor: s1/s2 legs on a secondary bus, a/b/c elsewhere."""
     if bus in conv.secondary_buses:
@@ -93,7 +79,7 @@ def extract_capacitor(conv: GadDSSToCSVConverter) -> pd.DataFrame:
                 "kvar is split equally over both phases (approximate wye equivalent)",
                 stacklevel=2,
             )
-        ratio = _rated_to_base_ratio(conv, bus, dss.Capacitors.kV(), is_delta)
+        ratio = conv._rated_to_base_ratio(bus, dss.Capacitors.kV(), is_delta)
         rows.append(
             dict(
                 device_name=device_name,
