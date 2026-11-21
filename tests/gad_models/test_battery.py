@@ -182,17 +182,29 @@ def arbitrage(model):
 
 
 @needs_lp
-def test_rate_limits_bind(gad_case):
-    case = make_case(gad_case, p_charge_max=0.05, p_discharge_max=0.1)
-    model = build(case)
+def test_discharge_rate_limit_binds(gad_case):
+    """Plenty of stored energy: the discharge rate is the only limit."""
+    model = build(make_case(gad_case, p_discharge_max=0.1))
     solve(model, arbitrage(model))
-    assert model.p_charge[DEVICE, 0].value == pytest.approx(0.05, abs=1e-7)
-    assert model.p_discharge[DEVICE, 1].value == pytest.approx(0.1, abs=1e-7)
-    assert model.p_charge[DEVICE, 2].value == pytest.approx(0.05, abs=1e-7)
-    assert model.p_discharge[DEVICE, 3].value == pytest.approx(0.1, abs=1e-7)
+    for t in (1, 3):
+        assert model.p_discharge[DEVICE, t].value == pytest.approx(0.1, abs=1e-7)
+    for t in times(model):
+        assert model.p_discharge[DEVICE, t].value <= 0.1 + 1e-7
+
+
+@needs_lp
+def test_charge_rate_limit_binds(gad_case):
+    """An empty battery (start at min_soc) charges as fast as the rate limit allows."""
+    model = build(make_case(gad_case, start_soc=0.2, p_charge_max=0.05))
+    solve(model, arbitrage(model))
+    for t in (0, 2):
+        assert model.p_charge[DEVICE, t].value == pytest.approx(0.05, abs=1e-7)
     for t in times(model):
         assert model.p_charge[DEVICE, t].value <= 0.05 + 1e-7
-        assert model.p_discharge[DEVICE, t].value <= 0.1 + 1e-7
+    # The stored energy is sold at the next expensive step.
+    assert model.p_discharge[DEVICE, 1].value == pytest.approx(
+        0.05 * 0.95 * 0.93, abs=1e-7
+    )
 
 
 @needs_lp
@@ -310,3 +322,18 @@ def test_pq_control_respects_the_apparent_power_rating_on_totals(gad_case):
     p, q = model.p_bat[DEVICE, 0].value, model.q_bat[DEVICE, 0].value
     assert p**2 + q**2 == pytest.approx(0.3**2, abs=1e-5)
     assert p == pytest.approx(q, abs=1e-4)
+
+
+@needs_lp
+def test_discharge_flows_back_toward_the_substation(gad_case):
+    """No loads: the battery's discharge is the (reversed) flow on the substation branch."""
+    model = build(make_case(gad_case, control_variable="P"))
+    solve(model, model.p_bat[DEVICE, 1])
+    discharge = model.p_bat[DEVICE, 1].value
+    assert discharge == pytest.approx(0.3, abs=1e-7)
+    substation_flow = sum(
+        model.p_flow[key].value
+        for key in model.p_flow
+        if key[0] in model.swing_bus_set and key[-1] == 1  # leaving the swing bus, step 1
+    )
+    assert substation_flow == pytest.approx(-discharge, abs=1e-6)

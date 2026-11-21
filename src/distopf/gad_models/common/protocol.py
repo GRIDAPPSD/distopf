@@ -21,7 +21,6 @@ class LindistModelProtocol(Protocol):
     cap_device_phase_set: pyo.Set
     reg_device_set: pyo.Set  # Regulator device names
     reg_phase_set: pyo.Set  # Regulated branch phases (fb, tb, ph)
-    bat_phase_set: pyo.Set
     bat_set: pyo.Set
 
     # ==================== PARAMETERS ====================
@@ -62,9 +61,11 @@ class LindistModelProtocol(Protocol):
     v_max: pyo.Param  # Maximum voltage magnitude squared
 
     # Battery parameters
-    p_bat_nom: pyo.Param  # Nominal active power discharge from battery
+    p_bat_nom: pyo.Param  # Nominal active power discharge from battery (device total)
     q_bat_nom: pyo.Param  # Nominal reactive power discharge from battery
-    s_bat_rated: pyo.Param  # Maximum apparent power rating for battery
+    s_bat_rated: pyo.Param  # Maximum apparent power rating for battery (device total)
+    p_charge_max: pyo.Param  # Maximum charging power of a battery
+    p_discharge_max: pyo.Param  # Maximum discharging power of a battery
     q_bat_max: pyo.Param  # Maximum reactive power generation for battery
     q_bat_min: pyo.Param  # Minimum reactive power generation for battery
     bat_control_type: pyo.Param  # Battery control variable type
@@ -75,10 +76,6 @@ class LindistModelProtocol(Protocol):
     charge_efficiency: pyo.Param  # Battery charging efficiency
     discharge_efficiency: pyo.Param  # Battery discharging efficiency
     annual_cycle_limit: pyo.Param  # Limit to number of discharge cycles per year
-    battery_has_a_phase: pyo.Param  # Whether battery has phase A
-    battery_has_b_phase: pyo.Param  # Whether battery has phase B
-    battery_has_c_phase: pyo.Param  # Whether battery has phase C
-    battery_has_phase: pyo.Param  # Whether battery has specific phase
     battery_n_phases: pyo.Param  # Number of phases connected to battery
 
     # ==================== VARIABLES ====================
@@ -105,8 +102,8 @@ class LindistModelProtocol(Protocol):
     # Battery variables
     p_charge: pyo.Var  # Battery charging power
     p_discharge: pyo.Var  # Battery discharging power
-    p_bat: pyo.Var  # Net battery active power
-    q_bat: pyo.Var  # Battery reactive power
+    p_bat: pyo.Var  # Net battery active power, device total [device, t]
+    q_bat: pyo.Var  # Battery reactive power, device total [device, t]
     soc: pyo.Var  # State of charge
 
     # ==================== MAPPINGS & UTILITIES ====================
