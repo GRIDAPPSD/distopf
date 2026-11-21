@@ -23,6 +23,17 @@ def convert(extra_dss, tmp_path, base_dss, **kwargs):
 
 
 @pytest.fixture(scope="module")
+def gad_devices_dss(tmp_path_factory, gad_devices_dss):
+    """The shared model with an hourly solution step, which its 1-hour loadshapes need."""
+    path = tmp_path_factory.mktemp("hourly") / "hourly.dss"
+    path.write_text(
+        "\n".join([f"Redirect {gad_devices_dss.as_posix()}", "Set stepsize=1h", "Solve"]),
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.fixture(scope="module")
 def converter(gad_devices_dss):
     return GadDSSToCSVConverter(gad_devices_dss)
 
@@ -57,6 +68,7 @@ def test_totals_match_opendss(converter):
     [
         ("irradiance=0.8 pf=-0.95", -250 * 0.8 * np.tan(np.arccos(0.95))),
         ("irradiance=0.8 pf=0.95", 250 * 0.8 * np.tan(np.arccos(0.95))),
+        ("irradiance=1 pf=-0.95 kVA=95.69 Pmpp=100", -100 * np.tan(np.arccos(0.95))),
         ("irradiance=0.8 pf=1 kvar=40", 40.0),
         ("irradiance=0.8 pf=1 kvar=-40", -40.0),
     ],
@@ -75,6 +87,19 @@ def test_q_from_pf_and_kvar_matches_the_solved_element(
     conv.dss.PVsystems.Name("pvq")
     solved_q_kvar = -sum(conv.dss.CktElement.Powers()[1::2])  # Powers() is consumption
     assert row["q"] * S_BASE / 1e3 == pytest.approx(solved_q_kvar, rel=1e-3)
+
+
+def test_pf_gives_q_even_when_opendss_kvar_property_is_zero(tmp_path, gad_devices_dss):
+    """OpenDSS's kvar property follows the present irradiance (0 at night in yearly
+    mode), so q must come from pf and Pmpp, not from the kvar property."""
+    conv = convert(
+        "New PVSystem.pvn phases=3 bus1=n3 kV=4.16 kVA=300 Pmpp=250 "
+        "irradiance=1 pf=-0.95 yearly=pv_yearly\nSet mode=yearly",
+        tmp_path,
+        gad_devices_dss,
+    )
+    row = conv.pv_data.set_index("device_name").loc["pvsystem.pvn"]
+    assert row["q"] == pytest.approx(-250 * np.tan(np.arccos(0.95)) / 1e3, rel=1e-6)
 
 
 def test_q_limits_come_from_kvar_max(converter):
