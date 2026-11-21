@@ -49,19 +49,17 @@ def add_generator_limits(m: LindistModelProtocol) -> None:
 
 def add_generator_constant_p_constraints(m: LindistModelProtocol) -> None:
     m.gen_constant_p = pyo.Constraint(
-        m.gen_device_phase_set,
+        m.gen_device_set,
         m.time_set,
-        rule=lambda m, device, ph, t: m.p_gen[device, ph, t]
-        == m.gen_p_available[device, ph, t],
+        rule=lambda m, device, t: m.p_gen[device, t] == m.gen_p_available[device, t],
     )
 
 
 def add_generator_constant_q_constraints(m: LindistModelProtocol) -> None:
     m.gen_constant_q = pyo.Constraint(
-        m.gen_device_phase_set,
+        m.gen_device_set,
         m.time_set,
-        rule=lambda m, device, ph, t: m.q_gen[device, ph, t]
-        == m.gen_q_setpoint[device, ph, t],
+        rule=lambda m, device, t: m.q_gen[device, t] == m.gen_q_setpoint[device, t],
     )
 
 

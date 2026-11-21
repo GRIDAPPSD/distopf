@@ -65,3 +65,4 @@ New Load.ldelta bus1=n4.2.3 phases=1 conn=delta kV=4.16 model=1 kW=80 kvar=30 ye
 Set Voltagebases=[4.16]
 Calcv
 Solve
+Set stepsize=1h

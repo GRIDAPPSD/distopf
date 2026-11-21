@@ -23,17 +23,6 @@ def convert(extra_dss, tmp_path, base_dss, **kwargs):
 
 
 @pytest.fixture(scope="module")
-def gad_devices_dss(tmp_path_factory, gad_devices_dss):
-    """The shared model with an hourly solution step, which its 1-hour loadshapes need."""
-    path = tmp_path_factory.mktemp("hourly") / "hourly.dss"
-    path.write_text(
-        "\n".join([f"Redirect {gad_devices_dss.as_posix()}", "Set stepsize=1h", "Solve"]),
-        encoding="utf-8",
-    )
-    return path
-
-
-@pytest.fixture(scope="module")
 def converter(gad_devices_dss):
     return GadDSSToCSVConverter(gad_devices_dss)
 

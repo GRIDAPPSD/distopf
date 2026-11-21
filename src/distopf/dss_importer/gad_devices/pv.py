@@ -30,7 +30,8 @@ def _pv_reactive_power_kvar(conv: GadDSSToCSVConverter, available_kw: float) -> 
     absorbing vars when pf < 0, at the present irradiance. The ``kvar`` property
     cannot be read directly because OpenDSS recomputes it from the irradiance at
     the current time step (0 at night), so it is derived here from the nominal
-    available power. Otherwise ``kvar`` is the user's value.
+    available power (Pmpp * irradiance; %Pmpp caps P only). Otherwise ``kvar`` is
+    the user's value. The model scales q with the PV shape, as OpenDSS does.
     """
     pf = conv.dss.PVsystems.pf()
     if abs(pf) >= 1:
@@ -67,7 +68,7 @@ def extract_pv(conv: GadDSSToCSVConverter) -> pd.DataFrame:
                 pmpp_limit=pmpp_limit,
                 q=to_per_unit(
                     conv,
-                    _pv_reactive_power_kvar(conv, pmpp_kw * irradiance * pmpp_limit),
+                    _pv_reactive_power_kvar(conv, pmpp_kw * irradiance),
                 ),
                 q_min=-to_per_unit(conv, float(read_property(conv, element, "kvarMaxAbs"))),
                 q_max=to_per_unit(conv, float(read_property(conv, element, "kvarMax"))),
