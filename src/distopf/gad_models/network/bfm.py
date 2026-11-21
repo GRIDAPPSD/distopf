@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 import pyomo.environ as pyo  # type: ignore
 
-from distopf.api import Case
+from distopf.gad_models.common.case import GadCase
 from distopf.gad_models.common.data import parse_phases
 from distopf.gad_models.network import bfm_constraints
 
@@ -16,7 +16,7 @@ from distopf.gad_models.network import bfm_constraints
 PHASE_PAIR_LABELS = ("aa", "ab", "ac", "bb", "bc", "cc", "s1s1", "s1s2", "s2s2")
 
 
-def create_network_sets(model: pyo.ConcreteModel, case: Case) -> None:
+def create_network_sets(model: pyo.ConcreteModel, case: GadCase) -> None:
     """Create only topology, time, and bus/branch phase sets."""
 
     model.delta_t = pyo.Param(initialize=case.delta_t)
@@ -69,7 +69,7 @@ def create_network_sets(model: pyo.ConcreteModel, case: Case) -> None:
     )
 
 
-def create_network_rx_parameters(model: pyo.ConcreteModel, case: Case) -> None:
+def create_network_rx_parameters(model: pyo.ConcreteModel, case: GadCase) -> None:
     """Create impedance parameters shared by LinDistFlow and BranchFlow."""
     resistance = {}
     reactance = {}
@@ -87,7 +87,7 @@ def create_network_rx_parameters(model: pyo.ConcreteModel, case: Case) -> None:
     )
 
 
-def create_network_operating_parameters(model: pyo.ConcreteModel, case: Case) -> None:
+def create_network_operating_parameters(model: pyo.ConcreteModel, case: GadCase) -> None:
     """Create voltage, thermal, schedule, and market parameters shared by models."""
     swing = {}
     swing_mask = case.bus_data.bus_type.isin(["SWING", "SWING_FREE", "IN"])
@@ -169,7 +169,7 @@ def create_network_operating_parameters(model: pyo.ConcreteModel, case: Case) ->
         )
 
 
-def create_network_components(model: pyo.ConcreteModel, case: Case) -> None:
+def create_network_components(model: pyo.ConcreteModel, case: GadCase) -> None:
     """Create common network sets, parameters, and topology maps."""
     create_network_sets(model, case)
     create_network_rx_parameters(model, case)
@@ -211,7 +211,7 @@ def create_network_components(model: pyo.ConcreteModel, case: Case) -> None:
     }
 
 
-def create_branchflow_components(model: Any, case: Case) -> None:
+def create_branchflow_components(model: Any, case: GadCase) -> None:
     """Create current and angle state used only by nonlinear BranchFlow."""
     branch_phase_pairs: list[tuple[int, int, str]] = []
     branch_angle_phase_pairs: list[tuple[int, int, str]] = []

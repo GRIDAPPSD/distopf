@@ -66,7 +66,7 @@ module = "cimgraph.*"
 follow_untyped_imports = true
 
 [tool.ty.src]
-exclude = ["src/distopf/pyomo_models"]
+exclude = ["src/distopf/pyomo_models", "src/distopf/gad_models"]
 
 [tool.ty.rules]
 possibly-missing-attribute = "ignore"

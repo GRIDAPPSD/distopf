@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import pyomo.environ as pyo  # type: ignore
 from types import SimpleNamespace
-from distopf.api import Case
+from distopf.gad_models.common.case import GadCase
 from distopf.gad_models.devices.battery import BatteryProvider
 from distopf.gad_models.devices.capacitor import CapacitorProvider
 from distopf.gad_models.devices.generator import GeneratorProvider
 from distopf.gad_models.devices.line_charging import LineChargingProvider
 from distopf.gad_models.devices.load import LoadProvider
+from distopf.gad_models.devices.pv import PVProvider
 from distopf.gad_models.devices.regulator import RegulatorProvider
 from distopf.gad_models.devices.transformer_shunt import TransformerShuntProvider
 from distopf.gad_models.common.registry import DeviceRegistry
@@ -35,7 +36,7 @@ BUILDER_OPTIONS = frozenset(
 
 
 def create_model(
-    case: Case,
+    case: GadCase,
     core=None,
     devices=(),
     control_capacitors: bool = False,
@@ -79,7 +80,7 @@ def create_model(
 
 
 def create_lindist_model(
-    case: Case,
+    case: GadCase,
     control_capacitors: bool = False,
     control_regulators: bool = False,
     **kwargs,
@@ -88,6 +89,7 @@ def create_lindist_model(
     devices = [
         LoadProvider(),
         GeneratorProvider(),
+        PVProvider(),
         CapacitorProvider(),
         BatteryProvider(),
         RegulatorProvider(),
@@ -106,7 +108,7 @@ def create_lindist_model(
 
 
 def create_nl_branchflow_model(
-    case: Case,
+    case: GadCase,
     control_capacitors: bool = False,
     control_regulators: bool = False,
     **kwargs,
@@ -115,6 +117,7 @@ def create_nl_branchflow_model(
     devices = [
         LoadProvider(),
         GeneratorProvider(),
+        PVProvider(),
         CapacitorProvider(),
         BatteryProvider(),
         RegulatorProvider(),
