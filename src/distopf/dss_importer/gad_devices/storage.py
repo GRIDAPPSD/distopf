@@ -95,11 +95,13 @@ def extract_storage(conv: GadDSSToCSVConverter) -> pd.DataFrame:
     dispatch).
 
     `p` and `q` are the discharge power OpenDSS solved (the negative of
-    `CktElement.Powers`), positive when discharging. This is the state the
-    solved circuit is in, not the nominal `kW`/`State` setting: OpenDSS only
-    dispatches a Storage in the solution modes or controls that drive it, so an
-    element declared with `State=charging kW=150` can still solve idle, drawing
-    only its %IdlingkW losses (small negative `p`). `%IdlingkW` is not exported.
+    `CktElement.Powers`), positive when discharging. They describe the solved
+    circuit, not the nominal `kW`/`State` properties: in the bundled IEEE 9500
+    model the Storages are declared `state=charge kW=150`, yet the solved
+    output is about 0.3 kW (the properties read back as State=Discharging,
+    kW=150, but the default dispatch mode does not apply them in a snapshot
+    solve). Idling elements solve to their %IdlingkW losses (small negative
+    `p`). `%IdlingkW` is not exported (it is not in the contract).
     """
     # Collect the names first: reading properties changes the active element.
     names = list(conv.dss.Storages.AllNames())
