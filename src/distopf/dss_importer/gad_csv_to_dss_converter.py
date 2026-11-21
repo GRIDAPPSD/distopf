@@ -42,8 +42,8 @@ Two elements of one OpenDSS class may not have the same name (``ValueError``).
 
 Time step ``t`` (default ``gad_case.start_step``)
 -------------------------------------------------
-- A shape is a ``schedules`` column named like the lowercase shape name (the
-  P multiplier); ``<shape>.q`` is the Q multiplier if that column exists, otherwise
+- A shape is the ``schedules`` column with exactly the shape's name (no case
+  folding; dots and capitals are fine, e.g. ``PV``) and holds the P multiplier; ``<shape>.q`` is the Q multiplier if that column exists, otherwise
   the P multiplier also scales Q. A blank shape, or a load with
   ``status == "fixed"``, is not scaled. A named shape without a column raises
   ``ValueError``. This holds for loads, generators and PV.
@@ -272,7 +272,7 @@ def _branch_transformers(
 
 # ------------------------------------------------------------- schedules
 class _Schedule:
-    """Schedule columns at one time step, looked up by lowercase shape name."""
+    """Schedule columns at one time step, looked up by the exact shape name."""
 
     def __init__(self, schedules: pd.DataFrame, t: int):
         self.t = t
@@ -284,14 +284,14 @@ class _Schedule:
             raise ValueError(f"schedules has no row for time step {t}")
         values = rows.iloc[0] if len(rows) else pd.Series(dtype=float)
         self.values = {
-            str(column).lower(): pd.to_numeric(value, errors="coerce")
+            str(column): pd.to_numeric(value, errors="coerce")
             for column, value in values.items()
             if column != "time"
         }
 
     def column(self, name: str) -> Optional[float]:
-        """Value of a column (case-insensitive), None when there is no such column."""
-        value = self.values.get(name.lower())
+        """Value of a column (exact name), None when there is no such column."""
+        value = self.values.get(name)
         return None if value is None else (1.0 if pd.isna(value) else float(value))
 
     def multipliers(self, shape: str) -> tuple[float, float]:

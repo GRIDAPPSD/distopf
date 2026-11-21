@@ -235,13 +235,18 @@ def test_q_multiplier_column_scales_reactive_power_only(gad_case):
     assert row["q_a"] == pytest.approx(0.05 * 0.5, abs=TOL)
 
 
-def test_shape_name_is_matched_in_lower_case(gad_case):
+def test_shape_name_is_matched_exactly_including_case(gad_case):
     case = _without_cvr(gad_case)
-    case.load_data.loc[case.load_data["device_name"] == "load.l1", "load_shape"] = (
-        "Shape_A"
-    )
+    case.schedules = case.schedules.rename(columns={"shape_a": "Shape.A"})
+    case.schedules["Shape.A.q"] = [1.0, 0.5, 1.0, 1.0]
+    load = case.load_data["device_name"] == "load.l1"
+    case.load_data.loc[load, "load_shape"] = "Shape.A"
     _, devices = run_opendss_gad(case, t=1)
-    assert devices["load_data"].loc["load.l1", "p_a"] == pytest.approx(0.09, abs=TOL)
+    row = devices["load_data"].loc["load.l1"]
+    assert (row["p_a"], row["q_a"]) == pytest.approx((0.09, 0.025), abs=TOL)
+    case.load_data.loc[load, "load_shape"] = "shape.a"  # different case: no such column
+    with pytest.raises(ValueError, match="shape.a"):
+        run_opendss_gad(case, t=1)
 
 
 def test_generator_shape_scales_p_and_q_by_the_p_multiplier(gad_case):
