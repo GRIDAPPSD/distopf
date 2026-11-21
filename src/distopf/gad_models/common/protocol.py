@@ -50,7 +50,8 @@ class LindistModelProtocol(Protocol):
     gen_balanced: pyo.Param
 
     # Capacitor parameters
-    cap_q_nom: pyo.Param  # Nominal capacitor reactive power at 1.0 p.u. voltage
+    cap_q_nom: pyo.Param  # Total capacitor reactive power at 1.0 p.u. voltage, by device
+    cap_status: pyo.Param  # Initial (and, without control, fixed) capacitor state 0/1
 
     # Regulator parameters
     reg_ratio: pyo.Param  # Fixed turn ratio per regulator device
@@ -97,7 +98,9 @@ class LindistModelProtocol(Protocol):
     q_load: pyo.Var  # [load device, phase, t] reactive power load
 
     # Capacitor variables
-    q_cap: pyo.Var  # Capacitor reactive power
+    q_cap: pyo.Var  # Capacitor reactive power, by (device, phase, t)
+    u_cap: pyo.Var  # Capacitor switch state, one binary per (device, t)
+    z_cap: pyo.Var  # u_cap * v2, by (device, phase, t)
 
     # Battery variables
     p_charge: pyo.Var  # Battery charging power
@@ -116,6 +119,7 @@ class LindistModelProtocol(Protocol):
     gen_devices_by_bus_phase: Dict[Tuple[int, str], List[str]]
     cap_bus_by_device: Dict[str, int]
     cap_devices_by_bus_phase: Dict[Tuple[int, str], List[str]]
+    cap_phases_by_device: Dict[str, List[str]]
     bat_bus_by_device: Dict[str, int]
     bat_devices_by_bus_phase: Dict[Tuple[int, str], List[str]]
     bat_phases_by_device: Dict[str, List[str]]

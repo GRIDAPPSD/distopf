@@ -73,10 +73,14 @@ def test_reactive_injection_sums_devices_on_bus_phase(gad_case):
     bus = _bus_id(model, "675")
     expr_a = provider.reactive_power_injection(model, bus, "a", 0)
     expr_b = provider.reactive_power_injection(model, bus, "b", 0)
-    names_a = {v.name for v in pyo.expr.identify_variables(expr_a)}
-    names_b = {v.name for v in pyo.expr.identify_variables(expr_b)}
-    assert names_a == {"q_cap[capacitor.c3,a,0]", "q_cap[capacitor.c1,a,0]"}
-    assert names_b == {"q_cap[capacitor.c3,b,0]"}
+    vars_a = {id(v) for v in pyo.expr.identify_variables(expr_a)}
+    vars_b = {id(v) for v in pyo.expr.identify_variables(expr_b)}
+    q_cap = model.q_cap
+    assert vars_a == {
+        id(q_cap["capacitor.c3", "a", 0]),
+        id(q_cap["capacitor.c1", "a", 0]),
+    }
+    assert vars_b == {id(q_cap["capacitor.c3", "b", 0])}
     assert provider.active_power_injection(model, bus, "a", 0) == 0
 
 
