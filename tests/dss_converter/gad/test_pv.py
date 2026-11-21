@@ -89,6 +89,20 @@ def test_q_from_pf_and_kvar_matches_the_solved_element(
     assert row["q"] * S_BASE / 1e3 == pytest.approx(solved_q_kvar, rel=1e-3)
 
 
+def test_pf_q_is_taken_at_nominal_power_not_at_the_pmpp_limit(tmp_path, gad_devices_dss):
+    """Q is fixed at the nominal available P (pmpp * irradiance); %Pmpp caps P only."""
+    conv = convert(
+        "New PVSystem.pvl phases=3 bus1=n3 kV=4.16 kVA=300 Pmpp=250 irradiance=0.8 "
+        "pf=-0.9 %Pmpp=50",
+        tmp_path,
+        gad_devices_dss,
+    )
+    row = conv.pv_data.set_index("device_name").loc["pvsystem.pvl"]
+    assert row["pmpp_limit"] == pytest.approx(0.5)
+    expected = -250 * 0.8 * np.tan(np.arccos(0.9)) * 1e3 / S_BASE
+    assert row["q"] == pytest.approx(expected, rel=1e-6)
+
+
 def test_pf_gives_q_even_when_opendss_kvar_property_is_zero(tmp_path, gad_devices_dss):
     """OpenDSS's kvar property follows the present irradiance (0 at night in yearly
     mode), so q must come from pf and Pmpp, not from the kvar property."""

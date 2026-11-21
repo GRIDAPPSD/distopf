@@ -150,6 +150,31 @@ def test_blank_irradiance_and_limit_default_to_one(gad_case):
     )
 
 
+def test_fixed_q_uses_the_q_shape_column_when_present(gad_case):
+    gad_case.schedules["pv.q"] = [0.1, 0.2, 0.3, 0.4]
+    model = build(with_pv(gad_case, q=0.05))
+    assert [model.pv_q_setpoint[DEVICE, t] for t in range(4)] == pytest.approx(
+        [0.05 * m for m in (0.1, 0.2, 0.3, 0.4)]
+    )
+    assert model.pv_p_available[DEVICE, 2] == pytest.approx(0.3)
+
+
+def test_pmpp_limit_caps_p_but_not_q(gad_case):
+    model = build(with_pv(gad_case, irradiance=1.5, pmpp_limit=0.5, q=0.05))
+    assert model.pv_p_available[DEVICE, 2] == pytest.approx(0.15)
+    assert model.pv_q_setpoint[DEVICE, 2] == pytest.approx(0.05)
+
+
+def test_blank_shape_gives_constant_q(gad_case):
+    model = build(with_pv(gad_case, pv_shape="", q=0.05))
+    assert [model.pv_q_setpoint[DEVICE, t] for t in range(4)] == pytest.approx([0.05] * 4)
+
+
+def test_shape_names_are_not_case_folded(gad_case):
+    with pytest.raises(ValueError, match="PV"):
+        build(with_pv(gad_case, pv_shape="PV"))
+
+
 def test_unknown_shape_raises(gad_case):
     with pytest.raises(ValueError, match="no_such_shape"):
         build(with_pv(gad_case, pv_shape="no_such_shape"))
@@ -166,7 +191,8 @@ def test_mode_none_fixes_p_and_q(gad_case):
     model = build(relax_voltage_limits(case))
     solve_max(model, total_p_and_q(model))
     assert p_values(model) == pytest.approx([0.3 * m for m in PV_SHAPE])
-    assert q_values(model) == pytest.approx([0.05] * 4)
+    # Q is proportional to P at fixed power factor: Q(t) = q * shape(t)
+    assert q_values(model) == pytest.approx([0.05 * m for m in PV_SHAPE])
 
 
 @needs_highs
@@ -175,7 +201,7 @@ def test_mode_p_curtails_p_and_fixes_q(gad_case):
     model = build(case)
     solve_max(model, total_p_and_q(model))
     assert p_values(model) == pytest.approx([0.3 * m for m in PV_SHAPE])
-    assert q_values(model) == pytest.approx([0.05] * 4)
+    assert q_values(model) == pytest.approx([0.05 * m for m in PV_SHAPE])
     model = build(case)
     solve_max(model, -sum(model.p_pv[DEVICE, t] for t in model.time_set))
     assert p_values(model) == pytest.approx([0.0] * 4, abs=1e-9)

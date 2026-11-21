@@ -143,7 +143,8 @@ def test_mode_p_fixes_q_and_bounds_p_by_available_power(gad_case):
     solve_max(model, total_p_and_q(model))
     expected_p = [0.1 * m for m in (0.8, 0.9, 1.0, 0.9)]
     assert p_values(model) == pytest.approx(expected_p)
-    assert q_values(model) == pytest.approx([0.02] * 4)
+    # fixed Q follows the shape too: Q(t) = q * shape(t)
+    assert q_values(model) == pytest.approx([0.02 * m for m in (0.8, 0.9, 1.0, 0.9)])
     # P may be curtailed down to zero
     model2 = build(relax_voltage_limits(with_generator(gad_case, control_variable="P")))
     solve_max(model2, -sum(model2.p_gen[DEVICE, t] for t in model2.time_set))
@@ -235,6 +236,35 @@ def test_gen_shape_scales_available_power(gad_case):
     model = build(case)
     expected = [0.1 * m for m in (1.0, 0.7, 0.5, 0.7)]
     assert [model.gen_p_available[DEVICE, t] for t in range(4)] == pytest.approx(expected)
+
+
+def test_fixed_q_uses_the_q_shape_column_when_present(gad_case):
+    gad_case.schedules["shape_b.q"] = [0.1, 0.2, 0.3, 0.4]
+    case = with_generator(gad_case, gen_shape="shape_b", q=0.02)
+    model = build(case)
+    assert [model.gen_q_setpoint[DEVICE, t] for t in range(4)] == pytest.approx(
+        [0.02 * m for m in (0.1, 0.2, 0.3, 0.4)]
+    )
+    # P still follows the plain shape column
+    assert model.gen_p_available[DEVICE, 1] == pytest.approx(0.1 * 0.7)
+
+
+def test_fixed_q_follows_the_p_shape_without_a_q_column(gad_case):
+    case = with_generator(gad_case, gen_shape="shape_b", q=0.02)
+    model = build(case)
+    assert [model.gen_q_setpoint[DEVICE, t] for t in range(4)] == pytest.approx(
+        [0.02 * m for m in (1.0, 0.7, 0.5, 0.7)]
+    )
+
+
+def test_blank_shape_gives_constant_p_and_q(gad_case):
+    model = build(with_generator(gad_case, gen_shape="", q=0.02))
+    assert [model.gen_q_setpoint[DEVICE, t] for t in range(4)] == pytest.approx([0.02] * 4)
+
+
+def test_shape_names_are_not_case_folded(gad_case):
+    with pytest.raises(ValueError, match="SHAPE_A"):
+        build(with_generator(gad_case, gen_shape="SHAPE_A"))
 
 
 def test_unknown_shape_raises(gad_case):
