@@ -244,11 +244,47 @@ def test_shape_name_is_matched_in_lower_case(gad_case):
     assert devices["load_data"].loc["load.l1", "p_a"] == pytest.approx(0.09, abs=TOL)
 
 
-def test_generator_shape_scales_p(gad_case):
-    gad_case.gen_data.loc[0, "gen_shape"] = "shape_b"
+def test_generator_shape_scales_p_and_q_by_the_p_multiplier(gad_case):
+    gad_case.gen_data.loc[0, ["gen_shape", "q"]] = ["shape_b", 0.04]
+    _, devices = run_opendss_gad(gad_case, t=2)  # shape_b is 0.5 at t=2
+    gen = devices["gen_data"].loc["generator.g1"]
+    assert (gen["p"], gen["q"]) == pytest.approx((0.05, 0.02), abs=TOL)
+
+
+def test_generator_q_uses_the_q_multiplier_column_when_present(gad_case):
+    gad_case.gen_data.loc[0, ["gen_shape", "q"]] = ["shape_b", 0.04]
+    gad_case.schedules["shape_b.q"] = [1.0, 1.0, 0.25, 1.0]
     _, devices = run_opendss_gad(gad_case, t=2)
     gen = devices["gen_data"].loc["generator.g1"]
-    assert gen["p"] == pytest.approx(0.1 * 0.5, abs=TOL)
+    assert (gen["p"], gen["q"]) == pytest.approx((0.05, 0.01), abs=TOL)
+
+
+def test_pv_q_follows_the_shape_multiplier(gad_case):
+    gad_case.pv_data.loc[0, "q"] = 0.06
+    _, devices = run_opendss_gad(gad_case, t=1)  # pv shape is 0.5 at t=1
+    assert devices["pv_data"].loc["pvsystem.pv1", "q"] == pytest.approx(0.03, abs=TOL)
+
+
+def test_load_q_falls_back_to_the_p_multiplier(gad_case):
+    case = _without_cvr(gad_case)
+    _, devices = run_opendss_gad(
+        case, t=1
+    )  # shape_a is 0.9 at t=1, no shape_a.q column
+    assert devices["load_data"].loc["load.l1", "q_a"] == pytest.approx(
+        0.05 * 0.9, abs=TOL
+    )
+
+
+def test_shape_names_may_contain_dots(gad_case):
+    case = _without_cvr(gad_case)
+    case.schedules = case.schedules.rename(columns={"shape_a": "feeder.a"})
+    case.schedules["feeder.a.q"] = [1.0, 0.5, 1.0, 1.0]
+    case.load_data.loc[case.load_data["device_name"] == "load.l1", "load_shape"] = (
+        "feeder.a"
+    )
+    _, devices = run_opendss_gad(case, t=1)
+    row = devices["load_data"].loc["load.l1"]
+    assert (row["p_a"], row["q_a"]) == pytest.approx((0.09, 0.025), abs=TOL)
 
 
 def test_missing_time_step_raises(gad_case, tmp_path):

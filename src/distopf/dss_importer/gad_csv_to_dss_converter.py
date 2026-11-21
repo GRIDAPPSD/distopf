@@ -43,10 +43,10 @@ Two elements of one OpenDSS class may not have the same name (``ValueError``).
 Time step ``t`` (default ``gad_case.start_step``)
 -------------------------------------------------
 - A shape is a ``schedules`` column named like the lowercase shape name (the
-  P multiplier); ``<shape>.q`` is the Q multiplier if present. A blank shape, or a
-  load with ``status == "fixed"``, is not scaled. A named shape without a column
-  raises ``ValueError``. Loads: P and Q use the P multiplier unless ``<shape>.q``
-  exists. Generators and PV: only P is scaled; Q is scaled by ``<shape>.q`` if present.
+  P multiplier); ``<shape>.q`` is the Q multiplier if that column exists, otherwise
+  the P multiplier also scales Q. A blank shape, or a load with
+  ``status == "fixed"``, is not scaled. A named shape without a column raises
+  ``ValueError``. This holds for loads, generators and PV.
 - Generator P is ``p * gen_shape(t)``; PV P is
   ``min(pmpp * irradiance * pv_shape(t), pmpp_limit * pmpp)``.
 - A load with ``cvr_p`` or ``cvr_q`` nonzero is written with ``model=4``.
@@ -294,14 +294,15 @@ class _Schedule:
         value = self.values.get(name.lower())
         return None if value is None else (1.0 if pd.isna(value) else float(value))
 
-    def multipliers(self, shape: str) -> tuple[float, Optional[float]]:
-        """(P multiplier, Q multiplier or None) of a shape; (1, None) for a blank shape."""
+    def multipliers(self, shape: str) -> tuple[float, float]:
+        """(P, Q) multipliers of a shape: Q is ``<shape>.q`` if present, else the P one."""
         if not shape:
-            return 1.0, None
+            return 1.0, 1.0
         p_mult = self.column(shape)
         if p_mult is None:
             raise ValueError(f"shape {shape!r} is not a column of schedules")
-        return p_mult, self.column(f"{shape}.q")
+        q_mult = self.column(f"{shape}.q")
+        return p_mult, p_mult if q_mult is None else q_mult
 
 
 # ------------------------------------------------------- elements and setpoints
@@ -489,9 +490,9 @@ class _Writer:
         self.add(table, row, [(f"Generator.{name}", phases)])
 
     def shaped(self, row: pd.Series, shape_column: str) -> tuple[float, float]:
-        """(P multiplier, Q) of a gen or pv row: Q is scaled only by ``<shape>.q``."""
+        """(P multiplier, scaled Q) of a gen or pv row."""
         p_mult, q_mult = self.schedule.multipliers(_text(row, shape_column))
-        return p_mult, _value(row, "q") * (1.0 if q_mult is None else q_mult)
+        return p_mult, _value(row, "q") * q_mult
 
     def write_generators(self) -> None:
         for _, row in self.case.gen_data.iterrows():
@@ -565,7 +566,6 @@ class _Writer:
                 p_mult, q_mult = 1.0, 1.0
             else:
                 p_mult, q_mult = self.schedule.multipliers(_text(row, "load_shape"))
-                q_mult = p_mult if q_mult is None else q_mult
             p = {ph: _value(row, f"p_{ph}") * p_mult for ph in phases}
             q = {ph: _value(row, f"q_{ph}") * q_mult for ph in phases}
             cvr_p, cvr_q = _value(row, "cvr_p"), _value(row, "cvr_q")
