@@ -53,6 +53,21 @@ def _column(df: pd.DataFrame, name: str) -> np.ndarray:
     return np.zeros(len(df))
 
 
+def _cvr_by_phase(bus: pd.DataFrame, kind: str, bus_level: np.ndarray) -> np.ndarray:
+    """(n_bus, 6) CVR factors per load slot (a, b, c, s1, s2, s1s2).
+
+    Every slot starts at the bus-level ``cvr_{kind}``. A ``cvr_{kind}_{phase}`` column
+    (phase in a, b, c, s1, s2) overrides it for that phase where it is not NaN.
+    """
+    out = np.repeat(bus_level[:, None], len(_LOAD_SLOTS), axis=1)
+    for slot, phase in enumerate(_PHASES):
+        name = f"cvr_{kind}_{phase}"
+        if name in bus.columns:
+            override = bus[name].to_numpy(float)
+            out[:, slot] = np.where(np.isnan(override), bus_level, override)
+    return out
+
+
 def _complex(real: np.ndarray, imag: np.ndarray) -> np.ndarray:
     out = np.empty(len(real), dtype=complex)
     out.real = real
@@ -199,6 +214,9 @@ class FBS:
 
         self._cvr_p = _column(bus, "cvr_p")[bus_pos]
         self._cvr_q = _column(bus, "cvr_q")[bus_pos]
+        # Per load slot; differs from the bus-level value only with cvr_{p,q}_{phase} columns.
+        self._cvr_p_slots = _cvr_by_phase(bus, "p", _column(bus, "cvr_p"))[bus_pos]
+        self._cvr_q_slots = _cvr_by_phase(bus, "q", _column(bus, "cvr_q"))[bus_pos]
 
         v_nom = np.column_stack([_column(bus, f"v_{p}") for p in "abc"])[bus_pos]
         v_init = np.zeros((n, 5), dtype=complex)
@@ -534,6 +552,8 @@ class FBS:
             out = self._out_nodes()
             self._cvr_p[out] = 0.0
             self._cvr_q[out] = 0.0
+            self._cvr_p_slots[out] = 0.0
+            self._cvr_q_slots[out] = 0.0
 
     def apply_device_states(
         self,
@@ -807,8 +827,8 @@ class FBS:
         cn = self._cn
         with np.errstate(divide="ignore", invalid="ignore"):
             dv2 = av2 - 1.0
-            p = st.pl + self._cvr_p[:, None] * st.pl / 2 * dv2
-            q = st.ql + self._cvr_q[:, None] * st.ql / 2 * dv2
+            p = st.pl + self._cvr_p_slots[:, :5] * st.pl / 2 * dv2
+            q = st.ql + self._cvr_q_slots[:, :5] * st.ql / 2 * dv2
             s = p + 1j * q
             inj = -np.where(cn & nz & (np.abs(s) > _EPS), np.conj(s / v), 0)
             inj -= 1j * self._shunt_b * v * cn
@@ -839,8 +859,8 @@ class FBS:
                 a3, a4 = av2[si, 3], av2[si, 4]
                 v2 = np.stack([a3, a4, (a3 + a4) / 2], axis=1)
                 pn, qn = st.sec_load.real, st.sec_load.imag
-                p = pn + self._cvr_p[si, None] * pn / 2 * (v2 - 1)
-                q = qn + self._cvr_q[si, None] * qn / 2 * (v2 - 1)
+                p = pn + self._cvr_p_slots[si, 3:6] * pn / 2 * (v2 - 1)
+                q = qn + self._cvr_q_slots[si, 3:6] * qn / 2 * (v2 - 1)
                 ok = (np.abs(v_load) > _EPS).all(axis=1)
                 i_load = np.where(ok[:, None], np.conj((p + 1j * q) / v_load), 0)
                 inj[si, 3] += -(i_load[:, 0] + i_load[:, 2])

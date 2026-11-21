@@ -79,7 +79,9 @@ class TestLoads:
     def test_buses_without_loads_have_zero_load(self, gad_case):
         case = to_fbs_case(gad_case, 0)
         others = case.bus_data[~case.bus_data["name"].isin(["671", "645"])]
-        assert (others[["pl_a", "pl_b", "pl_c", "ql_a", "ql_b", "ql_c"]] == 0).all().all()
+        assert (
+            (others[["pl_a", "pl_b", "pl_c", "ql_a", "ql_b", "ql_c"]] == 0).all().all()
+        )
 
     def test_fixed_status_ignores_the_shape(self, gad_case):
         gad_case.load_data.loc[
@@ -102,9 +104,7 @@ class TestLoads:
     def test_cvr_is_the_power_weighted_average_per_bus_phase(self, gad_case):
         # t=0: l1 contributes .08 (cvr 0), l2 contributes .05 (cvr_p 1) on phase a.
         case = to_fbs_case(gad_case, 0)
-        assert cvr_at(case, "671", "a") == pytest.approx(
-            (0.05 / 0.13, 2 * 0.02 / 0.06)
-        )
+        assert cvr_at(case, "671", "a") == pytest.approx((0.05 / 0.13, 2 * 0.02 / 0.06))
         assert cvr_at(case, "671", "b") == pytest.approx((0.0, 0.0))
         # t=2: l2 is scaled by shape_b = 0.5.
         case = to_fbs_case(gad_case, 2)
@@ -198,7 +198,9 @@ class TestCapacitorsAndRegulators:
         assert cap_at(case, "675") == pytest.approx([0.2, 0.2, 0.2])
 
     def test_switched_on_cap_adds_its_phase(self, gad_case):
-        gad_case.cap_data.loc[gad_case.cap_data["device_name"] == "capacitor.c1", "status"] = 1
+        gad_case.cap_data.loc[
+            gad_case.cap_data["device_name"] == "capacitor.c1", "status"
+        ] = 1
         case = to_fbs_case(gad_case, 0)
         assert cap_at(case, "675") == pytest.approx([0.25, 0.2, 0.2])
 
@@ -240,9 +242,7 @@ class TestCapacitorsAndRegulators:
 class TestSetpoints:
     def test_setpoints_override_case_values_by_device_name(self, gad_case):
         setpoints = {
-            "pv_data": pd.DataFrame(
-                {"p": [0.15], "q": [0.03]}, index=["pvsystem.pv1"]
-            ),
+            "pv_data": pd.DataFrame({"p": [0.15], "q": [0.03]}, index=["pvsystem.pv1"]),
             "gen_data": pd.DataFrame(
                 {"p": [0.07], "q": [0.01]}, index=["generator.g1"]
             ),
@@ -260,14 +260,18 @@ class TestSetpoints:
         assert taps(case) == [5, 5, 5]
 
     def test_devices_missing_from_the_setpoints_keep_case_values(self, gad_case):
-        setpoints = {"gen_data": pd.DataFrame({"p": [0.07], "q": [0.0]}, index=["generator.g1"])}
+        setpoints = {
+            "gen_data": pd.DataFrame({"p": [0.07], "q": [0.0]}, index=["generator.g1"])
+        }
         case = to_fbs_case(gad_case, 2, setpoints)
         assert gen_at(case, "675")["a"] == pytest.approx((0.1, 0.0))  # pv from the case
         assert cap_at(case, "675") == pytest.approx([0.2, 0.2, 0.2])
         assert taps(case) == [0, 0, 0]
 
     def test_setpoint_replaces_the_pv_shape(self, gad_case):
-        setpoints = {"pv_data": pd.DataFrame({"p": [0.3], "q": [0.0]}, index=["pvsystem.pv1"])}
+        setpoints = {
+            "pv_data": pd.DataFrame({"p": [0.3], "q": [0.0]}, index=["pvsystem.pv1"])
+        }
         case = to_fbs_case(gad_case, 0, setpoints)  # shape is 0 at t=0
         assert gen_at(case, "675")["a"] == pytest.approx((0.1, 0.0))
 
@@ -281,9 +285,24 @@ class TestSetpoints:
 class TestWholeCase:
     def test_input_is_not_modified(self, gad_case):
         before = copy.deepcopy(gad_case)
-        to_fbs_case(gad_case, 2, {"pv_data": pd.DataFrame({"p": [0.1], "q": [0.0]}, index=["pvsystem.pv1"])})
-        for table in ("bus_data", "branch_data", "load_data", "pv_data", "gen_data", "cap_data", "reg_data", "schedules"):
-            pd.testing.assert_frame_equal(getattr(gad_case, table), getattr(before, table))
+        to_fbs_case(
+            gad_case,
+            2,
+            {"pv_data": pd.DataFrame({"p": [0.1], "q": [0.0]}, index=["pvsystem.pv1"])},
+        )
+        for table in (
+            "bus_data",
+            "branch_data",
+            "load_data",
+            "pv_data",
+            "gen_data",
+            "cap_data",
+            "reg_data",
+            "schedules",
+        ):
+            pd.testing.assert_frame_equal(
+                getattr(gad_case, table), getattr(before, table)
+            )
 
     def test_result_is_a_single_step_legacy_case_without_schedules(self, gad_case):
         case = to_fbs_case(gad_case, 2)
@@ -291,13 +310,16 @@ class TestWholeCase:
         assert case.start_step == 0
         assert "device_name" not in case.gen_data.columns
         assert "device_name" not in case.cap_data.columns
-        assert "load_shape" not in case.bus_data.columns or (
-            case.bus_data["load_shape"].replace("default", "") == ""
-        ).all()
+        assert (
+            "load_shape" not in case.bus_data.columns
+            or (case.bus_data["load_shape"].replace("default", "") == "").all()
+        )
         assert set(case.schedules.columns) <= {"time", "M"}
 
     def test_fbs_converges_at_several_steps_with_setpoints(self, gad_case):
-        setpoints = {"reg_data": pd.DataFrame({"tap": [4]}, index=["transformer.reg3ph"])}
+        setpoints = {
+            "reg_data": pd.DataFrame({"tap": [4]}, index=["transformer.reg3ph"])
+        }
         for t in (0, 2):
             for sp in (None, setpoints):
                 fbs = FBS(to_fbs_case(gad_case, t, sp))
@@ -305,7 +327,9 @@ class TestWholeCase:
                 assert fbs.converged
 
     def test_tap_setpoint_raises_downstream_voltage(self, gad_case):
-        base = fbs_solve(to_fbs_case(gad_case, 0)).voltages.set_index("id")[["a", "b", "c"]]
+        base = fbs_solve(to_fbs_case(gad_case, 0)).voltages.set_index("id")[
+            ["a", "b", "c"]
+        ]
         raised = fbs_solve(
             to_fbs_case(
                 gad_case,
@@ -322,7 +346,9 @@ class TestWholeCase:
         swing = case.bus_data[case.bus_data["bus_type"] == "SWING"].iloc[0]
         assert swing["v_a"] == pytest.approx(1.02)
         assert swing["v_b"] == pytest.approx(
-            gad_case.bus_data.loc[gad_case.bus_data["bus_type"] == "SWING", "v_b"].iloc[0]
+            gad_case.bus_data.loc[gad_case.bus_data["bus_type"] == "SWING", "v_b"].iloc[
+                0
+            ]
         )
 
     def test_per_phase_cvr_changes_the_fbs_result(self, gad_case):
@@ -330,7 +356,11 @@ class TestWholeCase:
         with_cvr = fbs_solve(case).voltages.set_index("id")[["a", "b", "c"]]
         no_cvr = case.copy()
         no_cvr.bus_data = no_cvr.bus_data.drop(
-            columns=[c for c in no_cvr.bus_data.columns if c.startswith("cvr_p_") or c.startswith("cvr_q_")]
+            columns=[
+                c
+                for c in no_cvr.bus_data.columns
+                if c.startswith("cvr_p_") or c.startswith("cvr_q_")
+            ]
         )
         without = fbs_solve(no_cvr).voltages.set_index("id")[["a", "b", "c"]]
         assert not np.array_equal(with_cvr.to_numpy(), without.to_numpy())
