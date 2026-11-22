@@ -1738,6 +1738,7 @@ def create_case_from_dss(
             dss_parser.gen_data,
             dss_parser.cap_data,
             dss_parser.reg_data,
+            bat_data=dss_parser.bat_data,
             schedules=dss_parser.schedules,
             start_step=start_step,
             n_steps=n_steps,
