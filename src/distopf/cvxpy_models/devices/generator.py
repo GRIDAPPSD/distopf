@@ -202,11 +202,18 @@ def add_gen_constant_q_constraints(m: CvxModel) -> None:
 
 
 def add_gen_balanced_constraints(m: CvxModel) -> None:
-    """Equal P and Q on consecutive phases of generators flagged `balanced`."""
+    """Equal P and Q on consecutive phases of generators flagged `balanced`.
 
-    def make_rule(var_name: str):
+    A quantity already fixed per phase by the control mode (P in NONE/Q, Q in
+    NONE/P) is not balanced again: the extra equalities would be redundant or
+    inconsistent. Control mode is per device, so checking `left` is enough.
+    """
+
+    def make_rule(var_name: str, fixed_modes):
         def rule(m, device, left, right, time):
             if not m.gen_balanced[device]:
+                return SKIP
+            if m.gen_control[device, left] in fixed_modes:
                 return SKIP
             var = getattr(m, var_name)
             return var[device, left, time] == var[device, right, time]
@@ -214,8 +221,8 @@ def add_gen_balanced_constraints(m: CvxModel) -> None:
         return rule
 
     indices = (m.gen_phase_pair_set, m.time_set)
-    add_constraint(m, "gen_balanced_p", indices, make_rule("p_gen"))
-    add_constraint(m, "gen_balanced_q", indices, make_rule("q_gen"))
+    add_constraint(m, "gen_balanced_p", indices, make_rule("p_gen", _P_FIXED))
+    add_constraint(m, "gen_balanced_q", indices, make_rule("q_gen", _Q_FIXED))
 
 
 def add_gen_limits(m: CvxModel) -> None:
