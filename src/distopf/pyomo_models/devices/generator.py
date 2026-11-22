@@ -541,11 +541,18 @@ def add_gen_constant_q_constraints(m: Any) -> None:
 
 
 def add_gen_balanced_constraints(m: Any) -> None:
-    """Equal P and Q on consecutive phases of generators flagged `balanced`."""
+    """Equal P and Q on consecutive phases of generators flagged `balanced`.
 
-    def make_rule(var_name: str):
+    A quantity already fixed per phase by the control mode (P in NONE/Q, Q in
+    NONE/P) is not balanced again: the extra equalities would be redundant or
+    inconsistent. Control mode is per device, so checking `left` is enough.
+    """
+
+    def make_rule(var_name: str, fixed_modes):
         def rule(m, device, left, right, time):
             if not pyo.value(m.gen_balanced[device]):
+                return pyo.Constraint.Skip
+            if m.gen_control[device, left] in fixed_modes:
                 return pyo.Constraint.Skip
             var = getattr(m, var_name)
             return var[device, left, time] == var[device, right, time]
@@ -553,10 +560,10 @@ def add_gen_balanced_constraints(m: Any) -> None:
         return rule
 
     m.gen_balanced_p = pyo.Constraint(
-        m.gen_phase_pair_set, m.time_set, rule=make_rule("p_gen")
+        m.gen_phase_pair_set, m.time_set, rule=make_rule("p_gen", _P_FIXED)
     )
     m.gen_balanced_q = pyo.Constraint(
-        m.gen_phase_pair_set, m.time_set, rule=make_rule("q_gen")
+        m.gen_phase_pair_set, m.time_set, rule=make_rule("q_gen", _Q_FIXED)
     )
 
 

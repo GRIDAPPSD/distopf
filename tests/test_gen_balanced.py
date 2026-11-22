@@ -78,6 +78,49 @@ def test_pyomo_balanced_constraints_only_for_flagged_devices():
     assert pairs == {(device, "a", "b"), (device, "b", "c")}
 
 
+def count_constraints(model, name: str) -> int:
+    constraint = getattr(model, name)
+    return len(constraint.rows) if hasattr(constraint, "rows") else len(constraint)
+
+
+@pytest.mark.parametrize(
+    "create",
+    [
+        pyomo_models.create_lindist_model,
+        scalar.create_lindist_model,
+        perf.create_lindist_model,
+    ],
+    ids=["pyomo", "scalar", "performance"],
+)
+@pytest.mark.parametrize(
+    "mode, balanced_name, fixed_name",
+    [("P", "gen_balanced_p", "gen_balanced_q"), ("Q", "gen_balanced_q", "gen_balanced_p")],
+)
+def test_balance_skips_quantity_fixed_by_control_mode(
+    create, mode, balanced_name, fixed_name
+):
+    """Balancing a P/Q already fixed per phase would be redundant or infeasible."""
+    case = make_case(balanced=True)
+    case.modify(control_variable=mode)
+    model = create(case)
+    assert count_constraints(model, balanced_name) == 2
+    assert count_constraints(model, fixed_name) == 0
+
+
+def test_balanced_q_mode_with_unequal_fixed_p_is_feasible():
+    """P is fixed per phase in Q mode, so unequal p_a/p_b must not conflict."""
+    case = make_case(balanced=True)
+    case.modify(control_variable="Q")
+    model = perf.create_lindist_model(case)
+    perf.set_objective(model, pobj.generation_curtailment_objective_rule)
+    perf.solve(model, solver="CLARABEL")
+    device = first_device(model)
+    for phase, value in P_AVAILABLE.items():
+        assert float(model.at("p_gen", (device, phase), 0)) == pytest.approx(
+            value, abs=1e-6
+        )
+
+
 def test_invalid_balanced_value_is_rejected():
     case = make_case(balanced=False)
     case.gen_data["balanced"] = case.gen_data["balanced"].astype(object)

@@ -200,16 +200,30 @@ def add_gen_constant_q_constraints(m: CvxModel) -> None:
 
 
 def add_gen_balanced_constraints(m: CvxModel) -> None:
-    """Equal P and Q on consecutive phases of generators flagged `balanced`."""
-    pairs = [pair for pair in m.gen_phase_pair_set if m.gen_balanced[pair[0]]]
-    if not pairs:
-        add_constraint(m, "gen_balanced_p", [], [])
-        add_constraint(m, "gen_balanced_q", [], [])
-        return
-    left = m.gen_device_phase_set.indices((d, l) for d, l, _ in pairs)
-    right = m.gen_device_phase_set.indices((d, r) for d, _, r in pairs)
-    add_constraint(m, "gen_balanced_p", m.p_gen[left, :] == m.p_gen[right, :], pairs)
-    add_constraint(m, "gen_balanced_q", m.q_gen[left, :] == m.q_gen[right, :], pairs)
+    """Equal P and Q on consecutive phases of generators flagged `balanced`.
+
+    A quantity already fixed per phase by the control mode (P in NONE/Q, Q in
+    NONE/P) is not balanced again: the extra equalities would be redundant or
+    inconsistent. Control mode is per device, so checking `left` is enough.
+    """
+
+    def balance(name: str, var: Any, fixed_modes) -> None:
+        pairs = [
+            (device, left, right)
+            for device, left, right in m.gen_phase_pair_set
+            if m.gen_balanced[device]
+            and m.gen_control[m.gen_device_phase_set.pos[(device, left)]]
+            not in fixed_modes
+        ]
+        if not pairs:
+            add_constraint(m, name, [], [])
+            return
+        left_rows = m.gen_device_phase_set.indices((d, l) for d, l, _ in pairs)
+        right_rows = m.gen_device_phase_set.indices((d, r) for d, _, r in pairs)
+        add_constraint(m, name, var[left_rows, :] == var[right_rows, :], pairs)
+
+    balance("gen_balanced_p", m.p_gen, _P_FIXED)
+    balance("gen_balanced_q", m.q_gen, _Q_FIXED)
 
 
 def add_gen_limits(m: CvxModel) -> None:
