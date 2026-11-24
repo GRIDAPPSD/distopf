@@ -3,7 +3,9 @@
 import pyomo.environ as pyo
 import pytest
 
-from distopf.gad_models.common.factory import create_model
+from distopf.gad_models.common.factory import create_lindist_model, create_model
+from distopf.gad_models.common.power_flow_result import to_power_flow_result
+from distopf.gad_models.common.results import PyoResult, get_values_tidy_3ph
 from distopf.gad_models.devices.load import LoadProvider
 from distopf.gad_models.network.bfm import BFMProvider
 
@@ -48,6 +50,33 @@ def test_load_variables_are_indexed_by_device_phase_time(gad_case):
     assert set(model.load_device_phase_set) == ports
     assert set(model.p_load.keys()) == {(d, ph, t) for d, ph in ports for t in TIMES}
     assert set(model.q_load.keys()) == set(model.p_load.keys())
+
+
+def test_result_extraction_preserves_devices_and_aggregates_loads(gad_case, tmp_path):
+    model = create_lindist_model(gad_case)
+    for variable in (model.p_gen, model.q_gen, model.p_pv, model.q_pv):
+        for item in variable.values():
+            item.set_value(0)
+    model.p_load["load.l1", "a", 0].set_value(0.1)
+    model.p_load["load.l2", "a", 0].set_value(0.2)
+    model.q_load["load.l2", "a", 0].set_value(0.03)
+    model.p_pv["pvsystem.pv1", 0].set_value(0.3)
+
+    raw = PyoResult(model, results=None)
+    tidy = get_values_tidy_3ph(model.p_load)
+    assert set(tidy["device_name"]) == {"load.l1", "load.l2", "load.l3"}
+    assert raw.p_pv.loc[raw.p_pv["t"] == 0, "value"].iloc[0] == pytest.approx(0.3)
+    assert raw.p_pv["name"].iloc[0] == "675"
+    assert len(raw.p_load[raw.p_load["name"] == "671"]) == 8
+
+    result = to_power_flow_result(raw, gad_case)
+    load = result.active_power_loads
+    reactive = result.reactive_power_loads
+    assert "device_name" not in load.columns
+    assert load.loc[(load["name"] == "671") & (load["t"] == 0), "a"].iloc[0] == pytest.approx(0.3)
+    assert reactive.loc[(reactive["name"] == "671") & (reactive["t"] == 0), "a"].iloc[0] == pytest.approx(0.03)
+    result.save(tmp_path)
+    assert (tmp_path / "input" / "load_data.csv").exists()
 
 
 def test_nominal_power_is_phase_value_times_own_shape(gad_case):

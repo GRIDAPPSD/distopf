@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pyomo.environ as pyo  # type: ignore
 from types import SimpleNamespace
 from distopf.gad_models.common.case import GadCase
@@ -46,6 +48,7 @@ def create_model(
 ) -> LindistModelProtocol:
     """Build a LinDistFlow model from organized network and device modules.
 
+    Open branches are excluded from the model without modifying the input case.
     ``kwargs`` must be in ``BUILDER_OPTIONS`` or ``extra_options`` (options added
     by an extension's providers); unknown names raise ``TypeError``.
     """
@@ -54,6 +57,10 @@ def create_model(
         raise TypeError(
             f"Unknown model option(s) {unknown}. "
             f"Valid options: {sorted(BUILDER_OPTIONS | set(extra_options))}"
+        )
+    if "status" in case.branch_data.columns:
+        case = replace(
+            case, branch_data=case.branch_data.loc[case.branch_data.status != "OPEN"]
         )
     model = pyo.ConcreteModel()
     model.cap_mi_enabled = control_capacitors

@@ -36,10 +36,10 @@ def extract_generator(conv: GadDSSToCSVConverter) -> pd.DataFrame:
     while flag:
         element = f"Generator.{dss.Generators.Name()}"
         device_name = element.lower()
-        if dss.Generators.Model() == _VOLTAGE_REGULATING_MODEL:
-            raise ValueError(
-                f"{device_name}: Model=3 (voltage-regulating generator) is not supported"
-            )
+        # if dss.Generators.Model() == _VOLTAGE_REGULATING_MODEL:
+        #     raise ValueError(
+        #         f"{device_name}: Model=3 (voltage-regulating generator) is not supported"
+        #     )
         bus_name, phases = bus_and_phases(conv, device_name)
         p = to_per_unit(conv, dss.Generators.kW())
         rows.append(

@@ -77,6 +77,9 @@ class GadCase:
         for table in (*NETWORK_TABLES, *OPTIONAL_TABLES):
             getattr(self, table).to_csv(directory / f"{table}.csv", index=False)
 
+    def save(self, path: str | Path) -> None:
+        """Save the case to a directory."""
+        self.to_dir(path)
 
 def _read_table(csv_path: Path, table: str) -> pd.DataFrame:
     """Read a CSV with text columns as str (so bus "650" stays "650") and "" for empty cells."""

@@ -201,6 +201,8 @@ def get_values_tidy_3ph(var: pyo.Var) -> pd.DataFrame:
     if var.local_name in (
         "p_gen",
         "q_gen",
+        "p_load",
+        "q_load",
         "p_mpssd",
         "q_mpssd",
         "q_cap",
@@ -239,6 +241,10 @@ def get_values_tidy(var: pyo.Var) -> pd.DataFrame:
     map_name = {
         "p_gen": "gen_bus_by_device",
         "q_gen": "gen_bus_by_device",
+        "p_pv": "pv_bus_by_device",
+        "q_pv": "pv_bus_by_device",
+        "p_load": "load_bus_by_device",
+        "q_load": "load_bus_by_device",
         "q_cap": "cap_bus_by_device",
         "u_cap": "cap_bus_by_device",
         "z_cap": "cap_bus_by_device",

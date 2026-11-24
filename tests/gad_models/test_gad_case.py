@@ -4,6 +4,10 @@ import pandas as pd
 import pytest
 
 from distopf.gad_models.common.case import GadCase
+from distopf.gad_models.common.factory import (
+    create_lindist_model,
+    create_nl_branchflow_model,
+)
 from distopf.gad_models.common.schema import DEVICE_TABLES, text_columns
 
 DEVICE_TABLE_NAMES = list(DEVICE_TABLES)
@@ -140,3 +144,35 @@ def test_from_dir_takes_time_settings(tmp_path):
 def test_from_dir_requires_network_tables(tmp_path):
     with pytest.raises(FileNotFoundError, match="branch_data"):
         GadCase.from_dir(tmp_path)
+
+
+@pytest.mark.parametrize("factory", [create_lindist_model, create_nl_branchflow_model])
+def test_open_switch_is_excluded_from_model(factory):
+    case = GadCase(
+        bus_data=pd.DataFrame(
+            [
+                {"id": 1, "name": "source", "bus_type": "SWING", "phases": "ac"},
+                {"id": 2, "name": "a", "bus_type": "PQ", "phases": "a"},
+                {"id": 3, "name": "c", "bus_type": "PQ", "phases": "c"},
+            ]
+        ),
+        branch_data=pd.DataFrame(
+            [
+                {"fb": 1, "tb": 2, "phases": "a", "status": "CLOSED"},
+                {"fb": 1, "tb": 3, "phases": "c", "status": ""},
+                {
+                    "fb": 2,
+                    "tb": 3,
+                    "phases": "c",
+                    "status": "OPEN",
+                    "g_sh_a": 1.0,
+                },
+            ]
+        ),
+    )
+    model = factory(case)
+    assert set(model.branch_set) == {(1, 2), (1, 3)}
+    assert (2, 3, "c") not in model.branch_phase_set
+    assert (2, 3) not in model.to_bus_map[2]
+    assert not model.transformer_shunt
+    assert len(case.branch_data) == 3
