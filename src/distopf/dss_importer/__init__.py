@@ -47,5 +47,6 @@ distopf.create_case : High-level case creation (auto-detects format)
 """
 
 from .dss_to_csv_converter import DSSToCSVConverter, load_dss_model
+from .gad_dss_to_csv_converter import GadDSSToCSVConverter
 
-__all__ = ["DSSToCSVConverter", "load_dss_model"]
+__all__ = ["DSSToCSVConverter", "GadDSSToCSVConverter", "load_dss_model"]

@@ -1,0 +1,68 @@
+! Small OpenDSS model with every GAD device type, used by the GAD converter tests.
+! 3-phase 4.16 kV feeder: src -(3-ph reg)- n1 -(3 x 1-ph regs)- n2 -- n3 -- n4
+!   n3: 2 PVSystems, 3-ph capacitor + CapControl, 2 loads on phase a (different
+!       shapes), 1 fixed load on phase b
+!   n4: Generator (phase a), Storage, off single-phase capacitor, 3-ph load,
+!       1-element delta load (phases b-c)
+! Loadshapes have 96 hourly points; every device has yearly, daily and duty shapes.
+
+Clear
+
+New Circuit.gad_devices basekv=4.16 pu=1.0 phases=3 bus1=src MVAsc3=20000 MVASC1=21000
+
+New Loadshape.pv_yearly npts=96 interval=1 mult=[0 0 0 0 0 0 0 0.259 0.5 0.707 0.866 0.966 1 0.966 0.866 0.707 0.5 0.259 0 0 0 0 0 0 0 0 0 0 0 0 0 0.259 0.5 0.707 0.866 0.966 1 0.966 0.866 0.707 0.5 0.259 0 0 0 0 0 0 0 0 0 0 0 0 0 0.259 0.5 0.707 0.866 0.966 1 0.966 0.866 0.707 0.5 0.259 0 0 0 0 0 0 0 0 0 0 0 0 0 0.259 0.5 0.707 0.866 0.966 1 0.966 0.866 0.707 0.5 0.259 0 0 0 0 0 0]
+New Loadshape.pv_daily npts=96 interval=1 mult=[0 0 0 0 0 0 0 0 0.233 0.45 0.636 0.779 0.869 0.9 0.869 0.779 0.636 0.45 0.233 0 0 0 0 0 0 0 0 0 0 0 0 0 0.233 0.45 0.636 0.779 0.869 0.9 0.869 0.779 0.636 0.45 0.233 0 0 0 0 0 0 0 0 0 0 0 0 0 0.233 0.45 0.636 0.779 0.869 0.9 0.869 0.779 0.636 0.45 0.233 0 0 0 0 0 0 0 0 0 0 0 0 0 0.233 0.45 0.636 0.779 0.869 0.9 0.869 0.779 0.636 0.45 0.233 0 0 0 0 0]
+New Loadshape.pv_duty npts=96 interval=1 mult=[0 0 0 0 0 0 0 0 0 0.207 0.4 0.566 0.693 0.773 0.8 0.773 0.693 0.566 0.4 0.207 0 0 0 0 0 0 0 0 0 0 0 0 0 0.207 0.4 0.566 0.693 0.773 0.8 0.773 0.693 0.566 0.4 0.207 0 0 0 0 0 0 0 0 0 0 0 0 0 0.207 0.4 0.566 0.693 0.773 0.8 0.773 0.693 0.566 0.4 0.207 0 0 0 0 0 0 0 0 0 0 0 0 0 0.207 0.4 0.566 0.693 0.773 0.8 0.773 0.693 0.566 0.4 0.207 0 0 0 0]
+New Loadshape.load_a_yearly npts=96 interval=1 mult=[0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96 0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96 0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96 0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96 0.912]
+New Loadshape.load_a_daily npts=96 interval=1 mult=[0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96 0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96 0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96 0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96]
+New Loadshape.load_a_duty npts=96 interval=1 mult=[0.96 0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96 0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96 0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99 0.96 0.912 0.85 0.778 0.7 0.622 0.55 0.488 0.44 0.41 0.4 0.41 0.44 0.488 0.55 0.622 0.7 0.778 0.85 0.912 0.96 0.99 1 0.99]
+New Loadshape.load_b_yearly npts=96 interval=1 mult=[0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864 0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864 0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864 0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864 0.891]
+New Loadshape.load_b_daily npts=96 interval=1 mult=[0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864 0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864 0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864 0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864]
+New Loadshape.load_b_duty npts=96 interval=1 mult=[0.864 0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864 0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864 0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821 0.864 0.891 0.9 0.891 0.864 0.821 0.765 0.7 0.63 0.56 0.495 0.439 0.396 0.369 0.36 0.369 0.396 0.439 0.495 0.56 0.63 0.7 0.765 0.821]
+New Loadshape.gen_yearly npts=96 interval=1 mult=[0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792 0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792 0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792 0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792 0.8]
+New Loadshape.gen_daily npts=96 interval=1 mult=[0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792 0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792 0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792 0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792]
+New Loadshape.gen_duty npts=96 interval=1 mult=[0.792 0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792 0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792 0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768 0.792 0.8 0.792 0.768 0.73 0.68 0.622 0.56 0.498 0.44 0.39 0.352 0.328 0.32 0.328 0.352 0.39 0.44 0.498 0.56 0.622 0.68 0.73 0.768]
+
+! 3-phase regulator (one device, one tap)
+New Transformer.reg3ph phases=3 windings=2 xhl=0.01 %loadloss=0.01 buses=[src n1] conns=[wye wye] kvs=[4.16 4.16] kvas=[5000 5000] maxtap=1.1 mintap=0.9 numtaps=32
+New RegControl.reg3ph transformer=reg3ph winding=2 vreg=120 band=2 ptratio=20 ctprim=300 maxtapchange=4
+
+! Three single-phase regulators on one branch (three devices, independent taps)
+New Transformer.reg1a phases=1 windings=2 xhl=0.01 %loadloss=0.01 buses=[n1.1 n2.1] kvs=[2.4 2.4] kvas=[1666 1666] maxtap=1.1 mintap=0.9 numtaps=32
+New RegControl.reg1a transformer=reg1a winding=2 vreg=121 band=2 ptratio=20 ctprim=300
+New Transformer.reg1b phases=1 windings=2 xhl=0.01 %loadloss=0.01 buses=[n1.2 n2.2] kvs=[2.4 2.4] kvas=[1666 1666] maxtap=1.1 mintap=0.9 numtaps=32
+New RegControl.reg1b transformer=reg1b winding=2 vreg=121 band=2 ptratio=20 ctprim=300
+New Transformer.reg1c phases=1 windings=2 xhl=0.01 %loadloss=0.01 buses=[n1.3 n2.3] kvs=[2.4 2.4] kvas=[1666 1666] maxtap=1.1 mintap=0.9 numtaps=32
+New RegControl.reg1c transformer=reg1c winding=2 vreg=121 band=2 ptratio=20 ctprim=300
+
+! Lines
+New Linecode.mtx3 nphases=3 BaseFreq=60 units=mi
+~ rmatrix=[0.3465 | 0.1560 0.3375 | 0.1580 0.1535 0.3414]
+~ xmatrix=[1.0179 | 0.5017 1.0478 | 0.4236 0.3849 1.0348]
+New Line.n2n3 phases=3 bus1=n2 bus2=n3 linecode=mtx3 length=1000 units=ft
+New Line.n3n4 phases=3 bus1=n3 bus2=n4 linecode=mtx3 length=800 units=ft
+
+! PV: two PVSystems on one bus
+New PVSystem.pv1 phases=3 bus1=n3 kV=4.16 kVA=300 Pmpp=250 irradiance=1 pf=1 yearly=pv_yearly daily=pv_daily duty=pv_duty
+New PVSystem.pv2 phases=3 bus1=n3 kV=4.16 kVA=150 Pmpp=120 irradiance=0.9 pf=0.95 yearly=pv_yearly daily=pv_daily duty=pv_duty
+
+! Generator (single phase) and storage
+New Generator.g1 phases=1 bus1=n4.1 kV=2.4 kW=100 kvar=20 kVA=120 model=1 yearly=gen_yearly daily=gen_daily duty=gen_duty
+New Storage.b1 phases=3 bus1=n4 kV=4.16 kWrated=300 kWhrated=1200 kVA=330 %stored=50 %reserve=20 %EffCharge=95 %EffDischarge=93 kW=0 pf=1
+
+! Capacitors: 3-phase with a CapControl, single-phase switched off
+New Capacitor.cap3 bus1=n3 phases=3 kvar=300 kV=4.16
+New CapControl.cap3 element=Line.n2n3 terminal=1 capacitor=cap3 type=voltage ONsetting=118 OFFsetting=125 ptratio=20 delay=30
+New Capacitor.cap1off bus1=n4.1 phases=1 kvar=50 kV=2.4 states=[0]
+
+! Loads: two on one bus with different shapes, one fixed, one 3-phase CVR, one 1-element delta
+New Load.la1 bus1=n3.1 phases=1 kV=2.4 model=1 kW=60 kvar=20 yearly=load_a_yearly daily=load_a_daily duty=load_a_duty
+New Load.la2 bus1=n3.1 phases=1 kV=2.4 model=1 kW=40 kvar=10 yearly=load_b_yearly daily=load_b_daily duty=load_b_duty
+New Load.lfix bus1=n3.2 phases=1 kV=2.4 model=1 kW=50 kvar=15 status=fixed yearly=load_a_yearly daily=load_a_daily duty=load_a_duty
+New Load.l3ph bus1=n4 phases=3 kV=4.16 model=4 cvrwatts=0.8 cvrvars=3 kW=150 kvar=50 yearly=load_a_yearly daily=load_a_daily duty=load_a_duty
+New Load.ldelta bus1=n4.2.3 phases=1 conn=delta kV=4.16 model=1 kW=80 kvar=30 yearly=load_b_yearly daily=load_b_daily duty=load_b_duty
+
+Set Voltagebases=[4.16]
+Calcv
+Solve
+Set stepsize=1h

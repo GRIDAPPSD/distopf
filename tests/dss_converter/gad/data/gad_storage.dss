@@ -1,0 +1,46 @@
+! Storage elements on a primary feeder and on triplex (center-tap) secondaries, for the GAD storage tests.
+!   pribus (12.47 kV, abc): bat_3ph (rate limits, kvar limits, discharging), bat_a + bat_b2 on phase b (two on one bus),
+!                           bat_delta (1-element delta, phases b-c)
+!   loadbus (240 V):        bat_240 across s1-s2
+!   house2 / house3 (120 V): bat_s1 on s1, bat_s2 on s2
+Clear
+
+New Circuit.gad_storage basekv=12.47 pu=1.0 phases=3 bus1=sourcebus
+~ MVAsc3=20000 MVAsc1=21000
+
+New Linecode.pri_3ph nphases=3 basefreq=60
+~ rmatrix=[0.3  | 0.05  0.3  | 0.05  0.05  0.3]
+~ xmatrix=[0.6  | 0.1   0.6  | 0.1   0.1   0.6]
+~ units=mi
+New Line.trunk bus1=sourcebus.1.2.3 bus2=pribus.1.2.3 linecode=pri_3ph length=0.1 units=mi
+New Load.pri_load bus1=pribus.1.2.3 phases=3 kv=12.47 kw=300 kvar=100 model=1
+
+New Transformer.xfm1 phases=1 windings=3 xhl=2.04 xht=2.04 xlt=1.36
+~ wdg=1 bus=pribus.1.0      conn=wye kv=7.2  kva=25 %r=0.6
+~ wdg=2 bus=secbus.1.0      conn=wye kv=0.12 kva=25 %r=1.2
+~ wdg=3 bus=secbus.0.2      conn=wye kv=0.12 kva=25 %r=1.2
+New Linecode.tpx nphases=2 basefreq=60
+~ rmatrix=[0.77  | 0.15  0.77]
+~ xmatrix=[0.38  | 0.22  0.38]
+~ units=kft
+New Line.drop1 bus1=secbus.1.2 bus2=loadbus.1.2 linecode=tpx length=0.05 units=kft
+New Line.drop2 bus1=secbus.1.2 bus2=house2.1.2 linecode=tpx length=0.08 units=kft
+New Line.drop3 bus1=secbus.1.2 bus2=house3.1.2 linecode=tpx length=0.06 units=kft
+New Load.h1 bus1=loadbus.1.2 phases=1 kv=0.24 kw=3 kvar=0.5 model=1
+
+! Primary side: discharging 3-phase storage with every rate property set
+New Storage.bat_3ph phases=3 bus1=pribus kv=12.47 kWrated=300 kWhrated=1200 kVA=330 %stored=60 %reserve=15 %EffCharge=95 %EffDischarge=93 %Charge=50 %Discharge=80 kvarMax=120 kvarMaxAbs=90 State=discharging
+! Two single-phase storages on one bus stay two devices
+New Storage.bat_b1 phases=1 bus1=pribus.2 kv=7.2 kWrated=40 kWhrated=100 kVA=45 %stored=50 %reserve=10 %EffCharge=90 %EffDischarge=90
+New Storage.bat_b2 phases=1 bus1=pribus.2 kv=7.2 kWrated=20 kWhrated=50 kVA=25 %stored=70 %reserve=20 %EffCharge=92 %EffDischarge=91
+! 1-element delta storage: converted with an equal split and a warning
+New Storage.bat_delta phases=1 bus1=pribus.2.3 conn=delta kv=12.47 kWrated=60 kWhrated=150 kVA=66 %stored=50 %reserve=10
+
+! Secondary side: 240 V across s1-s2, 120 V on s1, 120 V on s2
+New Storage.bat_240 phases=1 bus1=loadbus.1.2 kv=0.24 kWrated=5 kWhrated=13 kVA=5.5 %stored=50 %reserve=20
+New Storage.bat_s1 phases=1 bus1=house2.1.0 kv=0.12 kWrated=3 kWhrated=7 kVA=3.3 %stored=40 %reserve=10
+New Storage.bat_s2 phases=1 bus1=house3.2.0 kv=0.12 kWrated=2 kWhrated=5 kVA=2.2 %stored=30 %reserve=10
+
+Set voltagebases=[12.47, 0.24]
+Calcvoltagebases
+Solve
